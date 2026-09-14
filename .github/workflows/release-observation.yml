@@ -1,0 +1,145 @@
+name: Release benchmark observation
+
+on:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: Name of the validated pi-agent-ide release artifact
+        required: true
+        type: string
+      harness_version:
+        description: Exact pi-agent-ide version in the artifact
+        required: true
+        type: string
+      model:
+        description: Exact Pi model id
+        required: true
+        type: string
+      thinking:
+        description: Pi reasoning level
+        required: true
+        type: string
+      concurrency:
+        description: Number of benchmark trials to run at once
+        required: false
+        default: 10
+        type: number
+      pi_version:
+        description: Exact Pi Coding Agent npm version
+        required: true
+        type: string
+      dataset_repository:
+        description: Hugging Face dataset owner and name
+        required: false
+        default: alexshpunt/explicit-edit-benchmark
+        type: string
+    secrets:
+      pi_auth_json:
+        description: Contents of the Pi auth.json used for model access
+        required: true
+      hf_token:
+        description: Hugging Face token with write access to the dataset
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    name: Run and accept release observation
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout benchmark
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: alexshpunt/explicit-edit-benchmark
+          ref: main
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install benchmark dependencies
+        run: npm ci
+
+      - name: Install benchmark runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap python3-pip
+          python3 -m pip install --user --upgrade huggingface_hub
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Download validated release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ runner.temp }}/release-artifact
+
+      - name: Install exact Pi and Pi Agent IDE candidate
+        id: install
+        env:
+          HARNESS_VERSION: ${{ inputs.harness_version }}
+          PI_VERSION: ${{ inputs.pi_version }}
+        run: |
+          set -euo pipefail
+          tarball="$(find "$RUNNER_TEMP/release-artifact" -maxdepth 1 -type f -name 'pi-agent-ide-*.tgz' -print -quit)"
+          test -n "$tarball"
+          install_root="$RUNNER_TEMP/pi-release-benchmark"
+          mkdir --parents "$install_root"
+          npm install --prefix "$install_root" \
+            "@earendil-works/pi-coding-agent@$PI_VERSION" \
+            "$tarball"
+          actual="$(node -p "require('$install_root/node_modules/pi-agent-ide/package.json').version")"
+          test "$actual" = "$HARNESS_VERSION"
+          echo "command=$install_root/node_modules/.bin/pi" >> "$GITHUB_OUTPUT"
+          echo "ide_package=$install_root/node_modules/pi-agent-ide" >> "$GITHUB_OUTPUT"
+          echo "runtime=$install_root" >> "$GITHUB_OUTPUT"
+
+      - name: Write private credentials
+        env:
+          PI_AUTH_JSON: ${{ secrets.pi_auth_json }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$PI_AUTH_JSON" > "$RUNNER_TEMP/pi-auth.json"
+          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' "$RUNNER_TEMP/pi-auth.json"
+
+      - name: Run, submit, and accept observation
+        env:
+          HF_TOKEN: ${{ secrets.hf_token }}
+          DATASET_REPOSITORY: ${{ inputs.dataset_repository }}
+          HARNESS_VERSION: ${{ inputs.harness_version }}
+          MODEL: ${{ inputs.model }}
+          THINKING: ${{ inputs.thinking }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          PI_COMMAND: ${{ steps.install.outputs.command }}
+          IDE_PACKAGE: ${{ steps.install.outputs.ide_package }}
+          PI_RUNTIME: ${{ steps.install.outputs.runtime }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/benchmark-submit.log"
+          npm run benchmark:submit -- \
+            --harness pi-agent-ide \
+            --model "$MODEL" \
+            --thinking "$THINKING" \
+            --concurrency "$CONCURRENCY" \
+            --command "$PI_COMMAND" \
+            --auth-file "$RUNNER_TEMP/pi-auth.json" \
+            --ide-package "$IDE_PACKAGE" \
+            --harness-version "$HARNESS_VERSION" \
+            --runtime "$PI_RUNTIME" | tee "$output"
+          candidate_url="$(grep -Eo 'https://huggingface.co/datasets/[^ ]+/discussions/[0-9]+' "$output" | tail -1)"
+          test -n "$candidate_url"
+          candidate_ref="${candidate_url##*/}"
+          npm run benchmark -- accept \
+            --repository "$DATASET_REPOSITORY" \
+            --candidate "$candidate_ref"
+          echo "Accepted benchmark observation from $candidate_url"
+
+      - name: Remove credentials
+        if: always()
+        run: rm --force "$RUNNER_TEMP/pi-auth.json"

@@ -75,6 +75,19 @@ If a bb run stops early, read the driver lines the harness printed to stderr. `C
 
 Keep credentials out of this file when you can. Point the adapter at an existing isolated credential store, or pass local environment values through the adapter. Never submit the config, credentials, or harness state as benchmark data.
 
+## Release-candidate automation
+
+`.github/workflows/release-observation.yml` is a reusable workflow for release pipelines. It downloads the caller's validated `pi-agent-ide` artifact, installs the exact requested Pi version, runs the `pi-agent-ide` harness, submits the observation, and accepts it into the Hugging Face Dataset. Acceptance rebuilds the Dataset views and badge in the same parent-checked commit.
+
+The caller must pass the artifact name, Pi Agent IDE version, Pi version, model, reasoning level, and concurrency. The workflow verifies that the package inside the artifact has the requested harness version.
+
+The repository owner must add only these secrets to the calling repository:
+
+- `PI_AUTH_JSON`: the complete Pi `auth.json` used to access the selected model;
+- `HF_TOKEN`: a Hugging Face token with permission to open and accept pull requests in the target Dataset.
+
+The reusable workflow needs no npm token, GitHub personal access token, provider file, or separate badge secret. GitHub supplies artifact access within the calling workflow, npm installs public packages, and Dataset acceptance rebuilds the badge.
+
 ## Running it
 
 The [README](../README.md) has the command and its flags, and [Share a result](contributing-results.md) explains what happens while it runs. Provider routes and custom configs are extra flags on the same command.
