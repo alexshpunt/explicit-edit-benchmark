@@ -160,6 +160,37 @@ await test("a Pi extension arm disables discovered resources and publishes exact
   assert.ok(recoveryAdapter(adapter, true).args.includes("--continue"));
 });
 
+await test("a scoped npm package produces public-safe configuration labels", async () => {
+  const root = await tempDirectory("pi-extension-scoped-label");
+  const packageDirectory = path.join(root, "node_modules", "@scope", "extension");
+  await mkdir(packageDirectory, { recursive: true });
+  await writeFile(path.join(packageDirectory, "index.ts"), "export default () => {};\n");
+  await writeFile(
+    path.join(packageDirectory, "package.json"),
+    JSON.stringify({ name: "@scope/extension", version: "1.2.3" }),
+  );
+  const adapter = createPiExtensionAdapter({
+    id: "scope-extension",
+    arm: {
+      package: "@scope/extension",
+      version: "1.2.3",
+      entries: ["index.ts"],
+      tools: ["edit"],
+      rules: [],
+    },
+    command: "/usr/bin/pi",
+    piVersion: PI_EXTENSION_VERSION,
+    packageDirectory,
+    model: "openai-codex/gpt-5.6-luna",
+    thinking: "low",
+  });
+
+  assert.deepEqual(adapter.configurationLabels, [
+    "extension/scope/extension",
+    "harness/scope-extension",
+  ]);
+});
+
 await test("preparing one arm writes a private runnable config for that arm only", async () => {
   const root = await tempDirectory("pi-extension-runtime");
   const modules = path.join(root, "node_modules");

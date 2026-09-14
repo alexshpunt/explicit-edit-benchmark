@@ -311,6 +311,10 @@ export function resolvePiExtensionPackage(packageDirectory, arm) {
   return { entries, runtime: dependencyRoot(root) };
 }
 
+function packageLabel(packageName) {
+  return packageName.replace(/^@/u, "");
+}
+
 /** Build one clean Pi adapter around an exact installed extension package. */
 export function createPiExtensionAdapter({
   id,
@@ -372,7 +376,7 @@ export function createPiExtensionAdapter({
     harnessFamily: id,
     harnessVersion: arm.version,
     adapterVersion: "1",
-    configurationLabels: [`harness/${id}`, `extension/${arm.package}`].sort(),
+    configurationLabels: [`harness/${id}`, `extension/${packageLabel(arm.package)}`].sort(),
     configurationId: `${id}/npm`,
     configuration: {
       tools: arm.tools,
