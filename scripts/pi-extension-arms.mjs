@@ -84,7 +84,7 @@ export const PI_EXTENSION_ARMS = {
     entries: ["extensions/index.ts"],
     tools: ["apply_patch"],
     rules: ["Codex patch grammar", "native Codex transport replacement"],
-    unsupported: "requires Pi >=0.84 <0.85, but the comparison fixes Pi at 0.85.1",
+    legacyPeerDeps: true,
   },
   "pi-better-edit": {
     package: "pi-better-edit",
@@ -125,7 +125,7 @@ export const PI_EXTENSION_ARMS = {
     tools: ["read", "edit", "write"],
     rules: ["snapshot verification", "process-local served state"],
     env: { PI_LEAN_EDIT_METRICS_PATH: "/state/pi/pi-lean-edit/metrics.json" },
-    unsupported: "requires Pi ^0.84.2, but the comparison fixes Pi at 0.85.1",
+    legacyPeerDeps: true,
   },
   "pi-better-read-edit": {
     package: "@pi-kaush/pi-better-read-edit",
@@ -231,7 +231,7 @@ export const PI_EXTENSION_ARMS = {
     entries: ["index.ts"],
     tools: ["hledit"],
     rules: ["external hledit CLI", "atomic batch edits"],
-    unsupported: "requires Pi ^0.79.9, but the comparison fixes Pi at 0.85.1",
+    legacyPeerDeps: true,
   },
   "pi-wayfinder": {
     package: "@deevus/pi-wayfinder",
@@ -282,11 +282,18 @@ export const PI_EXTENSION_ARMS = {
 export function extensionInstallation(id) {
   const arm = PI_EXTENSION_ARMS[id];
   if (!arm) throw Error(`Unknown Pi extension arm: ${id}`);
-  if (arm.unsupported) throw Error(`${id} is unsupported: ${arm.unsupported}`);
+
   return [
     `@earendil-works/pi-coding-agent@${PI_EXTENSION_VERSION}`,
     `${arm.package}@${arm.version}`,
   ];
+}
+
+/** npm resolver flags needed when a published peer range lags the fixed Pi release. */
+export function extensionInstallFlags(id) {
+  const arm = PI_EXTENSION_ARMS[id];
+  if (!arm) throw Error(`Unknown Pi extension arm: ${id}`);
+  return arm.legacyPeerDeps ? ["--legacy-peer-deps"] : [];
 }
 
 /** Resolve only the exact files declared by one pinned catalog arm. */
@@ -392,7 +399,7 @@ export function createPiExtensionAdapter({
 export async function preparePiExtensionConfig({ id, runtimeRoot, authFile, output }) {
   const arm = PI_EXTENSION_ARMS[id];
   if (!arm) throw Error(`Unknown Pi extension arm: ${id}`);
-  if (arm.unsupported) throw Error(`${id} is unsupported: ${arm.unsupported}`);
+
   const modules = path.join(path.resolve(runtimeRoot), "node_modules");
   const piManifest = path.join(modules, "@earendil-works", "pi-coding-agent", "package.json");
   if (!existsSync(piManifest)) throw Error(`Pi runtime package is missing: ${piManifest}`);

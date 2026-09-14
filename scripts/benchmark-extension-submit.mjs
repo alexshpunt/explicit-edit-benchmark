@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   PI_EXTENSION_ARMS,
   extensionInstallation,
+  extensionInstallFlags,
   preparePiExtensionConfig,
 } from "./pi-extension-arms.mjs";
 
@@ -74,6 +75,7 @@ async function main(args) {
       "--no-audit",
       "--no-fund",
       "--save=false",
+      ...extensionInstallFlags(options.extension),
       ...extensionInstallation(options.extension),
     ]);
     await preparePiExtensionConfig({

@@ -6,6 +6,7 @@ import {
   PI_EXTENSION_ARMS,
   PI_EXTENSION_VERSION,
   extensionInstallation,
+  extensionInstallFlags,
   preparePiExtensionConfig,
   createPiExtensionAdapter,
   resolvePiExtensionPackage,
@@ -58,8 +59,9 @@ await test("an arm installs exact Pi and extension releases", () => {
     "pi-semantic-edit@0.4.0",
   ]);
   assert.throws(() => extensionInstallation("unknown-extension"), /Unknown Pi extension arm/u);
+  assert.deepEqual(extensionInstallFlags("pi-semantic-edit"), []);
   for (const id of ["pi-openai-codex-compat", "pi-lean-edit", "pi-hledit"])
-    assert.throws(() => extensionInstallation(id), /unsupported.*Pi/u, id);
+    assert.deepEqual(extensionInstallFlags(id), ["--legacy-peer-deps"], id);
 });
 
 await test("an installed extension must match the catalog name, version, and entries", async () => {
