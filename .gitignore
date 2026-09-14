@@ -10,3 +10,5 @@ results/
 __pycache__/
 .vscode/
 .playwright-mcp/
+.linear-project
+.agents/tmp/

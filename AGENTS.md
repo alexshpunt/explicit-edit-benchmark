@@ -15,6 +15,12 @@ When the user asks for something, load the skill that matches it and follow that
 
 For anything deeper, read the document the README's "Where to read more" points at.
 
+This repository is public. Start every change on its own branch and merge it into `main` through a
+pull request. Never work directly on `main`.
+
+Treat every local file as potentially private until you have checked it. Do not commit credentials,
+account details, machine paths, private configuration, raw run output, or Linear project bindings.
+
 Do nothing on your own initiative: no run, no commit, no publication until the user asks for it. A
 full observation spends real money, so confirm the scope before starting one, and prefer one task
 before the whole set.
