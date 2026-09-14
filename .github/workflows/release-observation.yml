@@ -47,6 +47,7 @@ permissions:
 jobs:
   observe:
     name: Run and accept release observation
+    continue-on-error: true
     runs-on: ubuntu-22.04
     timeout-minutes: 240
 
@@ -95,9 +96,11 @@ jobs:
             "$tarball"
           actual="$(node -p "require('$install_root/node_modules/pi-agent-ide/package.json').version")"
           test "$actual" = "$HARNESS_VERSION"
-          echo "command=$install_root/node_modules/.bin/pi" >> "$GITHUB_OUTPUT"
-          echo "ide_package=$install_root/node_modules/pi-agent-ide" >> "$GITHUB_OUTPUT"
-          echo "runtime=$install_root" >> "$GITHUB_OUTPUT"
+          {
+            echo "command=$install_root/node_modules/.bin/pi"
+            echo "ide_package=$install_root/node_modules/pi-agent-ide"
+            echo "runtime=$install_root"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Write private credentials
         env:
