@@ -231,3 +231,43 @@ A finished queue does not mean every task passed. Read `summary.json` before you
 `bench:prepare` writes a trusted local adapter JSON into the system temp folder for these runs, and a trial keeps its sandbox state there too. The adapter file is executable local configuration, not a public submission.
 
 `npm run check` runs formatting, linting, types, and the deterministic sandbox without any paid model calls. It does not replace a real smoke run.
+
+## Pi extension arms
+
+`benchmark:extension:submit` compares published Pi editing extensions without using the extensions, skills, prompts, themes, or context files from your normal Pi setup. Every arm uses Pi `0.85.1`, `openai-codex/gpt-5.6-luna`, low reasoning, and the exact npm release below. The generated config is private and temporary.
+
+| Arm                               | npm release                                  | Status                              |
+| --------------------------------- | -------------------------------------------- | ----------------------------------- |
+| `pi-hashline-edit-pro`            | `pi-hashline-edit-pro@4.2.11`                | Ready                               |
+| `pi-codex-conversion`             | `@howaboua/pi-codex-conversion@3.0.34`       | Ready                               |
+| `pi-lector`                       | `@danypops/pi-lector@0.17.2`                 | Needs its Lector daemon             |
+| `personal-pi-extensions-opencode` | `@trim21/personal-pi-extensions@0.1.556`     | Ready; file tools module only       |
+| `pi-openai-codex-compat`          | `pi-openai-codex-compat@0.0.9`               | Unsupported: requires Pi below 0.85 |
+| `pi-better-edit`                  | `pi-better-edit@1.7.0`                       | Ready                               |
+| `d3ara1n-pi-hashline-edit`        | `@d3ara1n/pi-hashline-edit@0.5.0`            | Ready                               |
+| `pi-semantic-edit`                | `pi-semantic-edit@0.4.0`                     | Ready                               |
+| `pi-hashline-edit`                | `pi-hashline-edit@0.8.3`                     | Ready                               |
+| `pi-lean-edit`                    | `pi-lean-edit@0.3.6`                         | Unsupported: requires Pi 0.84       |
+| `pi-better-read-edit`             | `@pi-kaush/pi-better-read-edit@0.2.2`        | Ready                               |
+| `pi-codex-minimal-tools`          | `@vanillagreen/pi-codex-minimal-tools@2.0.1` | Ready; strict patch mode            |
+| `pi-codex-edit`                   | `@maxiaochao/pi-codex-edit@0.1.5`            | Ready                               |
+| `pi-apply-patch`                  | `pi-apply-patch@0.1.1`                       | Ready                               |
+| `pi-codex-tools`                  | `pi-codex-tools@0.2.4`                       | Ready                               |
+| `pi-hash-edit`                    | `@leo-alvarenga/pi-hash-edit@0.2.1`          | Ready                               |
+| `pi-str-replace-editor`           | `@kennyfrc/pi-str-replace-editor@0.1.1`      | Ready; forced on                    |
+| `pi-mono-multi-edit`              | `pi-mono-multi-edit@2.0.0`                   | Ready                               |
+| `pi-edit-safe`                    | `@tian.zuo/pi-edit-safe@0.1.1`               | Ready                               |
+| `jerryan-pi-hashline-edit`        | `@jerryan/pi-hashline-edit@0.11.5`           | Ready; core, insert, and undo only  |
+| `pi-hledit`                       | `pi-hledit@1.1.7`                            | Unsupported: requires Pi 0.79       |
+| `pi-wayfinder`                    | `@deevus/pi-wayfinder@0.3.2`                 | Ready; replacement mode             |
+| `anchor-edit`                     | `anchor-edit@0.0.3`                          | Ready                               |
+| `pi-hash-anchored-edit`           | `pi-hash-anchored-edit@0.1.4`                | Ready                               |
+| `pi-hashline-context-edit`        | `pi-hashline-context-edit@0.11.0`            | Ready                               |
+
+Use the arm name from the first column:
+
+```sh
+npm run benchmark:extension:submit -- --extension pi-semantic-edit --auth-file ~/.pi/agent/auth.json
+```
+
+The command fails before the paid smoke when the selected release cannot install beside the shared Pi version. It never forces npm past an incompatible peer range. Some packages expose more than one editing or navigation tool; the published configuration records the complete active model-facing tool list instead of pretending that a narrower package entry exists.

@@ -95,6 +95,16 @@ Then the command does the rest:
 
 Every run sees the same 226 tasks. A run is grouped with others only when the rules match: how many recovery attempts it allows, how long one attempt may take, the task set, and the verifier. How many trials ran at once is recorded too, but it does not separate groups, because it is scheduling rather than a rule; it shows up in timings, and under contention sometimes in failures. If a harness needs longer, raise `--timeout-seconds`, and the result is compared with runs that used the same timeout.
 
+### Compare Pi editing extensions
+
+The repository also pins 25 published editing extensions to one clean Pi `0.85.1` setup. Each supported arm runs on `openai-codex/gpt-5.6-luna` at low reasoning and records the exact npm version and active tool surface. Run one arm with:
+
+```sh
+npm run benchmark:extension:submit -- --extension pi-semantic-edit --auth-file ~/.pi/agent/auth.json
+```
+
+The command installs Pi and the extension into a temporary directory, disables discovered Pi resources, runs the smoke and full observation, and opens a Dataset pull request. See [Pi extension arms](docs/running.md#pi-extension-arms) for the pinned catalog and compatibility notes.
+
 Some agents need a provider route or a credential file. That is one more flag on the same command:
 
 ```sh

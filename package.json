@@ -6,6 +6,7 @@
   "scripts": {
     "benchmark": "node --import tsx scripts/benchmark.mjs",
     "benchmark:submit": "node --import tsx scripts/benchmark-submit.mjs",
+    "benchmark:extension:submit": "node --import tsx scripts/benchmark-extension-submit.mjs",
     "bench:list": "node --import tsx scripts/list-tasks.mjs",
     "bench:prepare": "node scripts/prepare-benchmark.mjs",
     "bench:run": "node --import tsx scripts/run-harness-batch.mjs",
