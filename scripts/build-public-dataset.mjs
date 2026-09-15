@@ -154,6 +154,48 @@ function badgeColor(score) {
   return "red";
 }
 
+/** Keep only the highest accepted semantic version of each harness family. */
+export function latestHarnessRows(rows) {
+  const families = Map.groupBy(rows, (row) => row.harnessFamily);
+  return Object.fromEntries(
+    [...families].map(([family, members]) => {
+      const latest = members
+        .map((row) => row.harnessVersion)
+        .filter(Boolean)
+        .reduce(
+          (current, version) =>
+            current == null || compareVersions(current, version) < 0 ? version : current,
+          null,
+        );
+      return [family, members.filter((row) => row.harnessVersion === latest)];
+    }),
+  );
+}
+
+function latestHarnessGroups(rows) {
+  return Object.fromEntries(
+    Object.entries(latestHarnessRows(rows)).map(([family, members]) => [
+      family,
+      aggregateGroupScore(members),
+    ]),
+  );
+}
+
+function compareVersions(left, right) {
+  const values = (version) =>
+    version.split(/[.-]/u).map((part) => (/^\d+$/u.test(part) ? Number(part) : part));
+  const a = values(left);
+  const b = values(right);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    if (a[index] === b[index]) continue;
+    if (a[index] == null) return 1;
+    if (b[index] == null) return -1;
+    if (typeof a[index] === "number" && typeof b[index] === "number") return a[index] - b[index];
+    return String(a[index]).localeCompare(String(b[index]), undefined, { numeric: true });
+  }
+  return 0;
+}
+
 /** Build one README badge per accepted harness family, in the shields.io endpoint format. */
 async function writeHarnessBadges(outputDirectory, groups) {
   const files = {};
@@ -478,7 +520,7 @@ export async function buildPublicDatasetFromStore(outputDirectory, storeDirector
     bytes: Buffer.byteLength(viewsContent),
     sha256: createHash("sha256").update(viewsContent).digest("hex"),
   };
-  const badges = await writeHarnessBadges(outputDirectory, views.groups.harnessFamily);
+  const badges = await writeHarnessBadges(outputDirectory, latestHarnessGroups(leaderboardRows));
   if (badges) index.badges = badges;
   const leaderboardContent = JSON.stringify(leaderboard, null, 2) + "\n";
   await writeFile(path.join(outputDirectory, "leaderboard.json"), leaderboardContent);
@@ -490,8 +532,6 @@ export async function buildPublicDatasetFromStore(outputDirectory, storeDirector
   const summary = {
     schemaVersion: 1,
     ...summarizeTrials(allTrials),
-    models: Object.keys(views.groups.modelFamily).length,
-    setups: leaderboardRows.length,
     efficiency: summarizeEfficiency(allTrials, allRounds),
   };
   const summaryContent = JSON.stringify(summary, null, 2) + "\n";
