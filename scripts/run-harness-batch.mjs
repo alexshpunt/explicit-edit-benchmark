@@ -2,6 +2,7 @@
 import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { verifierSha256 as hashVerifier } from "./verifier-identity.mjs";
 import os from "node:os";
 import path from "node:path";
 import { explicitEditTasks } from "../src/suites/explicit-edit/fixtures.ts";
@@ -151,9 +152,9 @@ const schedule = tasks.flatMap((t, i) =>
   })),
 );
 /** Correctness lives in one module. Its hash is what makes "the same rules" checkable. */
-const verifierSha256 = createHash("sha256")
-  .update(await readFile(new URL("../src/suites/explicit-edit/files.ts", import.meta.url)))
-  .digest("hex");
+const verifierSha256 = hashVerifier(
+  await readFile(new URL("../src/suites/explicit-edit/files.ts", import.meta.url)),
+);
 await json(path.join(root, "manifest.json"), {
   contract: explicitEditContract,
   focusedSelectionSha256: selectionText
