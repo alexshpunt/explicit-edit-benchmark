@@ -210,6 +210,13 @@ A TypeScript config is a trusted module you build from `defineHarness` and `defi
 
 Use this path when your agent is not in the ready adapter list. [Benchmark automation and public data](benchmark-automation.md) describes the adapter contract, and [examples/bb](../examples/bb/benchmark.config.mjs) shows a harness that needs more than a command.
 
+The bb example runs with `--concurrency 1`. It normally starts one server per trial; set
+`BB_SERVER_URL` to reuse an already running server while retaining a separate daemon, machine,
+sandbox, and thread for every trial. A clean Pi route may use `BB_AGENT_MODELS` to seed a private
+`models.json` instead of mounting the user's Pi home. Keep that file private. Set `BB_NODE_RUNTIME`
+when Node is installed outside `/usr`, and use `BB_TRANSPORT` to publish the exact provider wire
+route.
+
 ## Development commands
 
 The lower-level commands are still there for adapter work and maintainer debugging:

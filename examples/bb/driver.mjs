@@ -55,6 +55,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let serverUrl = configuredServerUrl;
 let daemonPort;
 let environment = { ...process.env };
+let machineId;
 let threadId;
 let lastSequence = 0;
 
@@ -122,23 +123,27 @@ async function waitFor(label, check, timeoutMs) {
   }
 }
 
+const machines = () => bbJson(["machine", "list"]);
 const connectedMachine = () =>
-  bbJson(["machine", "list"]).find((entry) => entry.status === "connected");
+  machineId
+    ? machines().find((entry) => entry.id === machineId && entry.status === "connected")
+    : null;
 
-/** Start the server and the daemon once per trial, and remember where they are. */
+/** Start or reuse the server, then enroll one daemon that belongs to this sandbox trial. */
 async function startInfrastructure() {
+  if (machineId && connectedMachine()) return;
+
   if (!serverUrl) {
     const [serverPort, freshDaemonPort] = await freePorts(2);
     serverUrl = `http://127.0.0.1:${serverPort}`;
     daemonPort = freshDaemonPort;
+    note(`bb: starting server on ${serverUrl}, daemon on ${daemonPort}`);
     environment = {
       ...environment,
       BB_DATA_DIR: dataDirectory,
       BB_SERVER_URL: serverUrl,
-      // The CLI finds the local daemon by this port, so a custom port has to reach both sides.
       BB_HOST_DAEMON_PORT: String(daemonPort),
     };
-    note(`bb: starting server on ${serverUrl}, daemon on ${daemonPort}`);
     startService("bb-server.js", [
       "--data-dir",
       dataDirectory,
@@ -148,19 +153,37 @@ async function startInfrastructure() {
     // `status` answers without a server, so probe with a command that cannot.
     await waitFor(
       `the bb server (its log is ${path.join(dataDirectory, "logs", "server-stdio.log")})`,
-      () => bbJson(["machine", "list"]),
+      () => machines(),
       180_000,
     );
+  } else {
+    [daemonPort] = await freePorts(1);
+    environment = {
+      ...environment,
+      BB_DATA_DIR: dataDirectory,
+      BB_SERVER_URL: serverUrl,
+      BB_HOST_DAEMON_PORT: String(daemonPort),
+    };
+    await waitFor(`the shared bb server at ${serverUrl}`, () => machines(), 180_000);
+    note(`bb: reusing server ${serverUrl}, daemon on ${daemonPort}`);
   }
-  if (connectedMachine()) return;
-  note("bb: enrolling this machine");
+
+  const existingMachineIds = new Set(machines().map((entry) => entry.id));
+  note("bb: enrolling this trial's machine");
   startService("bb-host-daemon.js", [
     "join",
     "--server-url",
     serverUrl,
-    ...(daemonPort ? ["--host-daemon-port", String(daemonPort)] : []),
+    "--host-daemon-port",
+    String(daemonPort),
   ]);
-  await waitFor("a connected machine", connectedMachine, 180_000);
+  const machine = await waitFor(
+    "this trial's connected machine",
+    () =>
+      machines().find((entry) => entry.status === "connected" && !existingMachineIds.has(entry.id)),
+    180_000,
+  );
+  machineId = machine.id;
 }
 
 /**
@@ -219,7 +242,7 @@ async function runTurn(prompt) {
           "--root",
           workspace,
           "--machine",
-          connectedMachine().id,
+          machineId,
         ]).id,
     );
     note(`bb: spawning a ${provider} thread on ${model}`);

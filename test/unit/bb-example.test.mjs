@@ -120,22 +120,40 @@ await test("the parser reads the JSONL file the benchmark hands to inspectOutput
 
 await test("the bb example publishes a complete identity with separate versions", async () => {
   process.env.BB_APP = "/opt/bb/node_modules/bb-app";
-  process.env.BB_PROVIDER = "codex";
+  process.env.BB_PROVIDER = "pi";
   process.env.BB_VERSION = "0.43.1";
-  process.env.BB_AGENT_VERSION = "0.153.4";
-  process.env.BB_AGENT_AUTH = "/etc/bb-example/auth.json";
-  process.env.BB_MODEL = "gpt-5.6-luna";
+  process.env.BB_AGENT_VERSION = "0.85.1";
+  delete process.env.BB_AGENT_AUTH;
+  process.env.BB_AGENT_MODELS = "/etc/bb-example/models.json";
+  process.env.BB_NODE_RUNTIME = "/opt/node";
+  process.env.BB_SERVER_URL = "http://127.0.0.1:3000";
+  process.env.BB_MODEL = "agent-proxy/gpt-5.6-luna";
+  process.env.BB_MODEL_PROVIDER = "agent-proxy";
+  process.env.BB_TRANSPORT = "agent-proxy-responses";
   const config = (await import("../../examples/bb/benchmark.config.mjs")).default;
   const profiles = await resolveBenchmarkProfiles(config);
   assert.deepEqual(Object.keys(profiles), ["gpt-bb"]);
   const profile = Object.values(profiles)[0];
   assert.equal(profile.harnessFamily, "bb");
   assert.equal(profile.harnessVersion, "0.43.1");
-  assert.equal(profile.agentFamily, "codex-cli");
-  assert.equal(profile.agentVersion, "0.153.4");
+  assert.equal(profile.agentFamily, "pi");
+  assert.equal(profile.agentVersion, "0.85.1");
   assert.equal(profile.harnessId, "bb");
   assert.equal(profile.ready, false);
-  assert.deepEqual(profile.readOnly, ["/opt/bb/node_modules"]);
+  assert.equal(profile.adapterVersion, "shared-server-1");
+  assert.equal(profile.configurationId, "bb/pi/agent-proxy/shared-server");
+  assert.deepEqual(profile.configurationLabels, [
+    "harness/bb",
+    "provider/pi",
+    "route/agent-proxy",
+    "server/shared",
+  ]);
+  assert.deepEqual(profile.configuration.runtimeFlags, [
+    "thinking=low",
+    "environment-provider=project-checkout",
+    "server=shared",
+  ]);
+  assert.deepEqual(profile.readOnly, ["/opt/bb/node_modules", "/opt/node"]);
   assert.deepEqual(profile.args, ["/state/bb/driver.mjs"]);
   assert.deepEqual(profile.driver, {
     command: process.execPath,
@@ -147,7 +165,12 @@ await test("the bb example publishes a complete identity with separate versions"
     profile.seedFiles["bb/driver.mjs"],
     fileURLToPath(new URL("../../examples/bb/driver.mjs", import.meta.url)),
   );
-  assert.equal(profile.seedFiles["home/.codex/auth.json"], "/etc/bb-example/auth.json");
+  assert.equal(profile.seedFiles["home/.pi/agent/auth.json"], undefined);
+  assert.equal(profile.seedFiles["home/.pi/agent/models.json"], "/etc/bb-example/models.json");
+  assert.equal(profile.provider, "agent-proxy");
+  assert.equal(profile.transport, "agent-proxy-responses");
+  assert.equal(profile.env.BB_SERVER_URL, "http://127.0.0.1:3000");
+  assert.equal(profile.env.PATH, "/opt/node/bin:/usr/local/bin:/usr/bin:/bin");
   // Recovery has to continue the same bb thread, because bb cannot restart on a killed state.
   assert.equal(typeof profile.continueSession, "function");
   // The persistent driver continues the thread, so recovery keeps the same adapter.

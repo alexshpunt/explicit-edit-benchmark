@@ -19,10 +19,13 @@ import { inspectTimelineFile } from "./timeline.mjs";
  *   BB_AGENT_AUTH=$HOME/.codex/auth.json BB_VERSION=0.43.1 BB_AGENT_VERSION=0.153.4 \
  *   npm run benchmark -- check --config examples/bb/benchmark.config.mjs
  *
- * Run bb one trial at a time: `--concurrency 1`. Every trial starts its own bb server, its own
- * machine daemon, and its own agent, which is a few processes and a lot of memory. Run several
- * at once and they compete for the machine, which slows every trial down and produces failures
- * that have nothing to do with the task. One trial at a time is also less time overall.
+ * Set BB_AGENT_MODELS instead of BB_AGENT_AUTH when Pi uses a self-contained private models.json.
+ * If Node is installed outside /usr, set BB_NODE_RUNTIME to the directory containing its bin/.
+ *
+ * Run bb one trial at a time: `--concurrency 1`. By default every trial starts its own bb server,
+ * machine daemon, and agent. A sequential run can reuse an externally started server by setting
+ * BB_SERVER_URL; every trial still gets its own daemon, machine, sandbox, and thread. Several
+ * concurrent trials compete for the machine and produce failures unrelated to the task.
  *
  * A bb trial also needs more time than the default, because the server has to come up before the
  * agent starts: `--concurrency 1 --timeout-seconds 900`. Against bb 0.43.1 a smoke task passed in
@@ -38,7 +41,11 @@ import { inspectTimelineFile } from "./timeline.mjs";
  */
 
 const bbApp = process.env.BB_APP;
+const nodeRuntime = process.env.BB_NODE_RUNTIME;
 const provider = process.env.BB_PROVIDER ?? "pi";
+const serverUrl = process.env.BB_SERVER_URL;
+const modelsFile = process.env.BB_AGENT_MODELS;
+const transport = process.env.BB_TRANSPORT;
 const harnessVersion = process.env.BB_VERSION;
 const agentVersion = process.env.BB_AGENT_VERSION;
 const agentFamilyOverride = process.env.BB_AGENT_FAMILY;
@@ -68,8 +75,12 @@ if (!harnessVersion) throw Error("BB_VERSION must be the bb version from `bb upd
 if (!agentVersion) throw Error("BB_AGENT_VERSION must be the provider CLI version bb reports");
 if (!agentFamily)
   throw Error(`Set BB_AGENT_FAMILY for bb provider ${provider}, or extend PROVIDER_AGENT`);
-if (!authFile || !authDestination)
-  throw Error(`Set BB_AGENT_AUTH for bb provider ${provider}, or extend PROVIDER_AUTH`);
+if (modelsFile && provider !== "pi")
+  throw Error("BB_AGENT_MODELS is only supported by the bb Pi provider");
+if ((!authFile || !authDestination) && !modelsFile)
+  throw Error(
+    `Set BB_AGENT_AUTH for bb provider ${provider}, or BB_AGENT_MODELS for a self-contained model catalog`,
+  );
 
 const bb = defineHarness({
   createAdapter({ model }) {
@@ -91,24 +102,35 @@ const bb = defineHarness({
       modelFamily: model.family,
       modelVersion: model.version,
       provider: model.provider ?? null,
+      transport: transport ?? null,
       harnessFamily: "bb",
-      adapterVersion: "1",
-      configurationLabels: [`harness/bb`, `provider/${provider}`],
-      configurationId: `bb/${provider}`,
+      adapterVersion: serverUrl ? "shared-server-1" : "1",
+      configurationLabels: [
+        `harness/bb`,
+        `provider/${provider}`,
+        ...(model.provider ? [`route/${model.provider}`] : []),
+        `server/${serverUrl ? "shared" : "per-trial"}`,
+      ],
+      configurationId: `bb/${provider}/${model.provider ?? "direct"}/${serverUrl ? "shared-server" : "per-trial"}`,
       configuration: {
         tools: [`bb@${harnessVersion}`],
         extensions: [],
         rules: [],
-        runtimeFlags: [`thinking=${model.thinking}`, "environment-provider=project-checkout"],
-        environment: ["BB_APP", "BB_MODEL", "BB_PROVIDER"],
+        runtimeFlags: [
+          `thinking=${model.thinking}`,
+          "environment-provider=project-checkout",
+          `server=${serverUrl ? "shared" : "per-trial"}`,
+        ],
+        environment: ["BB_APP", "BB_MODEL", "BB_PROVIDER", ...(serverUrl ? ["BB_SERVER_URL"] : [])],
       },
       model: selectedModel,
       thinking: model.thinking,
       ready: false,
-      readOnly: [dependencyRoot(bbApp)],
+      readOnly: [dependencyRoot(bbApp), ...(nodeRuntime ? [nodeRuntime] : [])],
       seedFiles: {
         "bb/driver.mjs": fileURLToPath(new URL("./driver.mjs", import.meta.url)),
-        [authDestination]: authFile,
+        ...(authFile && authDestination ? { [authDestination]: authFile } : {}),
+        ...(modelsFile ? { "home/.pi/agent/models.json": modelsFile } : {}),
       },
       env: {
         BB_APP: bbApp,
@@ -117,6 +139,8 @@ const bb = defineHarness({
         BB_PROVIDER: provider,
         BB_MODEL: selectedModel,
         BB_REASONING: model.thinking,
+        ...(serverUrl ? { BB_SERVER_URL: serverUrl } : {}),
+        ...(nodeRuntime ? { PATH: `${nodeRuntime}/bin:/usr/local/bin:/usr/bin:/bin` } : {}),
       },
     };
   },

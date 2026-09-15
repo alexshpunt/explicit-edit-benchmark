@@ -92,6 +92,8 @@ const IDENTITY_FIELDS = [
   "modelFamily",
   "modelVersion",
   "adapterVersion",
+  "configurationId",
+  "configuration",
   "configurationLabels",
 ];
 /** Stop when recording an adapter would change its published identity. */
@@ -129,6 +131,8 @@ const safeAdapters = Object.fromEntries(
         provider: a.provider ?? null,
         harnessFamily: a.harnessFamily,
         adapterVersion: a.adapterVersion,
+        configurationId: a.configurationId,
+        configuration: a.configuration,
         configurationLabels: a.configurationLabels,
       },
     ];

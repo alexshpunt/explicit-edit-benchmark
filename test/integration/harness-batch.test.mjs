@@ -17,6 +17,15 @@ await test("batch preserves a timed-out trial and runs the next task with the ex
     version: process.version,
     harnessVersion: "9.9.9",
     harnessFamily: "test-family",
+    configurationId: "test-family/minimal",
+    configuration: {
+      tools: ["native-edit"],
+      extensions: [],
+      rules: [],
+      runtimeFlags: ["mode=test"],
+      environment: [],
+    },
+    configurationLabels: ["harness/test-family"],
     model: "test-model-not-luna",
     thinking: "medium",
     ready: true,
@@ -82,6 +91,8 @@ await test("batch preserves a timed-out trial and runs the next task with the ex
   assert.equal(manifest.harnesses.success.harnessId, "test-family");
   assert.equal(manifest.harnesses.success.harnessVersion, "9.9.9");
   assert.equal(manifest.harnesses.timeout.harnessVersion, "9.9.9");
+  assert.equal(manifest.harnesses.success.configurationId, "test-family/minimal");
+  assert.deepEqual(manifest.harnesses.success.configuration, shared.configuration);
   assert.equal(manifest.contract, explicitEditContract);
   // The run records the rules it was judged by, not a commit that a rewrite can invalidate.
   assert.equal(manifest.evalCommit, undefined);
