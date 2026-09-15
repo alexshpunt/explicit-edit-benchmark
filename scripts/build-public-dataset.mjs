@@ -104,6 +104,8 @@ function datasetCard({ includeSubmissions = false, models = [] } = {}) {
     "",
     "**[Open the interactive Explorer](https://huggingface.co/spaces/alexshpunt/benchmark-explorer)** to compare agents, harnesses, models, versions, reasoning modes, correctness, recovery, time, cost and tokens.",
     "",
+    "**Harness project:** [Pi Agent IDE — agent-native IDE extension for the Pi coding agent](https://github.com/alexshpunt/pi-agent-ide)",
+    "",
     ...(models.length
       ? [
           "## Leaderboard by model",
