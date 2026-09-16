@@ -317,19 +317,22 @@ jobs:
         with:
           subject-path: ${{ env.ARTIFACT }}
 
-      - name: Collect public proof
+      - name: Collect retained signed result
         env:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
-        run: cp "$BUNDLE_PATH" "$RUNNER_TEMP/attestation.jsonl"
+        run: |
+          set -euo pipefail
+          retained="$RUNNER_TEMP/official-retained"
+          mkdir "$retained"
+          cp "$ARTIFACT" "$retained/official-result.tar.gz"
+          cp "$RUNNER_TEMP/official-producer/official-result.sha256" "$retained/"
+          cp "$BUNDLE_PATH" "$retained/attestation.jsonl"
 
       - name: Upload signed result and proof
         # yamllint disable-line rule:line-length
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: official-result-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ env.ARTIFACT }}
-            ${{ runner.temp }}/official-producer/official-result.sha256
-            ${{ runner.temp }}/attestation.jsonl
+          path: ${{ runner.temp }}/official-retained/
           if-no-files-found: error
           retention-days: 14
