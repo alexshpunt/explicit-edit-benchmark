@@ -46,6 +46,7 @@ test("official extraction accepts only the signed public layout", async () => {
   try {
     const file = path.join(root, "result.tar.gz");
     await archive(file, [
+      { name: "normalized/", type: "5" },
       { name: "official-manifest.json", content: "{}" },
       { name: "execution-plan.json", content: "{}" },
       { name: "installed-dependencies.json", content: "{}" },

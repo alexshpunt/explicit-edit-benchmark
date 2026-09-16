@@ -46,13 +46,17 @@ export async function extractOfficialArchive(archive, outputDirectory) {
     const fullName = prefix ? `${prefix}/${name}` : name;
     const size = tarNumber(header, 124, 12);
     const type = tarText(header, 156, 1) || "0";
+    const start = offset + 512;
+    const end = start + size;
+    if (end > tar.length) throw Error("official archive: truncated entry");
+    if (type === "5" && fullName === "normalized/" && size === 0) {
+      offset = start;
+      continue;
+    }
     if (type !== "0") throw Error("official archive: every entry must be a regular file");
     if (!FILES.has(fullName) || path.posix.normalize(fullName) !== fullName)
       throw Error(`official archive: invalid layout entry ${fullName}`);
     if (entries.has(fullName)) throw Error(`official archive: duplicate entry ${fullName}`);
-    const start = offset + 512;
-    const end = start + size;
-    if (end > tar.length) throw Error("official archive: truncated entry");
     entries.set(fullName, tar.subarray(start, end));
     offset = start + Math.ceil(size / 512) * 512;
   }
