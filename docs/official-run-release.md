@@ -40,6 +40,8 @@ The `accept` job requests a GitHub OIDC token with audience `https://huggingface
 
 Use the `oidc_check_only` workflow input after changing publisher settings. The check proves that the configured workflow can exchange for the canonical Dataset while the same identity cannot exchange for another Dataset. A run from another repository, branch, or workflow must fail claim matching.
 
+Hugging Face currently accepts the repo-scoped OIDC token for Dataset commits but may reject the separate discussion-close endpoint. Publication success is therefore recorded independently from candidate closure. A close failure is reported as `candidateClosed: false`; it does not misreport an already committed Dataset update as failed or retry the observation.
+
 ## Delivery recovery
 
 Inference, signing, and delivery are separate lifecycle stages. The attestation job uploads the original result archive, its digest, and its attestation as a retained GitHub Artifact before any Hugging Face request starts. A delivery failure therefore changes only delivery state; it never invalidates or repeats the measurement.

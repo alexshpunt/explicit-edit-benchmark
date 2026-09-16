@@ -220,13 +220,20 @@ export async function acceptOfficialCandidate({
     outputDirectory,
     title: `Accept verified benchmark execution ${runId}`,
   });
-  await close(
-    repository,
-    Number(candidateNumber),
-    token,
-    `Accepted verified execution ${runId} in Dataset commit ${commitOid}.`,
-  );
-  return { executionId: runId, candidateCommit, commitOid };
+  let candidateClosed = true;
+  let closeError = null;
+  try {
+    await close(
+      repository,
+      Number(candidateNumber),
+      token,
+      `Accepted verified execution ${runId} in Dataset commit ${commitOid}.`,
+    );
+  } catch (error) {
+    candidateClosed = false;
+    closeError = String(error?.message ?? error);
+  }
+  return { executionId: runId, candidateCommit, commitOid, candidateClosed, closeError };
 }
 
 /** List open official candidate numbers without trusting their titles as verification. */
