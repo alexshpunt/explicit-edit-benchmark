@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { submitOfficialCandidate } from "./official-delivery.mjs";
+import { recoverOfficialDelivery, submitOfficialCandidate } from "./official-delivery.mjs";
 
 function value(args, flag) {
   const index = args.indexOf(flag);
@@ -17,7 +17,7 @@ if (!artifact || !attestation || !manifest || !signerWorkflowSha || !repository 
   throw Error(
     "Usage: official-delivery-cli.mjs --artifact FILE --attestation FILE --manifest FILE --signer-sha SHA --repository OWNER/DATASET --status-file FILE",
   );
-const status = await submitOfficialCandidate({
+let status = await submitOfficialCandidate({
   artifact,
   attestation,
   manifest,
@@ -26,4 +26,15 @@ const status = await submitOfficialCandidate({
   statusFile,
   accessToken: process.env.HF_TOKEN,
 });
+if (args.includes("--wait-for-acceptance") && status.status === "delivered")
+  status = await recoverOfficialDelivery({
+    repository,
+    delivery: status,
+    accessToken: process.env.HF_TOKEN,
+    statusFile,
+    wait: {
+      attempts: Number(process.env.ACCEPTANCE_POLL_ATTEMPTS ?? 120),
+      delayMs: Number(process.env.ACCEPTANCE_POLL_DELAY_MS ?? 10_000),
+    },
+  });
 console.log(JSON.stringify(status));
