@@ -71,6 +71,12 @@ You install and sign in to that CLI yourself. The benchmark leaves your CLI alon
 
 For anything not in this list you write your own adapter. [Benchmark automation and public data](docs/benchmark-automation.md) documents the config API, and [examples/bb](examples/bb/benchmark.config.mjs) is a worked example for a harness that is more than one CLI call: it starts a server, runs another agent in a thread, and reads that thread's timeline. We ship the example and a smoke run, not a bb result.
 
+## Run a verified observation on GitHub
+
+Use the [official run template](https://github.com/alexshpunt/explicit-edit-benchmark-run-template) to run a registered adapter on GitHub-hosted Actions with your own credentials. The workflow produces an attested result, opens a Dataset candidate, and the benchmark repository verifies and accepts it automatically. Partial runs are valid, and a low score or task failure does not block acceptance.
+
+The Dataset marks approved workflow results as `verified` and ordinary local contributions as `unverified`. Both remain visible. See [Official community runs](docs/official-community-runs.md) for the trust boundary, setup, delivery recovery, and independent verification.
+
 ## Run it
 
 One command does the whole run. You choose the harness, the exact model, and the reasoning level:
@@ -153,13 +159,14 @@ It runs formatting, linting, type checks, the unit and integration tests, and on
 
 ## Where to read more
 
-| Document                                                             | What it adds                                                                       |
-| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [Configuration guide](docs/running.md)                               | Per-adapter model and auth details, provider routes, mounts, lower-level commands  |
-| [Share a result](docs/contributing-results.md)                       | The submission flow step by step, and what happens after you open the pull request |
-| [Benchmark automation and public data](docs/benchmark-automation.md) | The config API, the normalized data format, and the Dataset views                  |
-| [Methodology](docs/methodology.md)                                   | How tasks are generated, what the scores mean, and how recovery works              |
-| [Architecture](docs/architecture.md)                                 | Where each fact lives, and which layer owns what                                   |
+| Document                                                             | What it adds                                                                         |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| [Official community runs](docs/official-community-runs.md)           | GitHub template, verified provenance, automatic acceptance, and submit-only recovery |
+| [Configuration guide](docs/running.md)                               | Per-adapter model and auth details, provider routes, mounts, lower-level commands    |
+| [Share a result](docs/contributing-results.md)                       | The submission flow step by step, and what happens after you open the pull request   |
+| [Benchmark automation and public data](docs/benchmark-automation.md) | The config API, the normalized data format, and the Dataset views                    |
+| [Methodology](docs/methodology.md)                                   | How tasks are generated, what the scores mean, and how recovery works                |
+| [Architecture](docs/architecture.md)                                 | Where each fact lives, and which layer owns what                                     |
 
 ## Skills for coding agents
 

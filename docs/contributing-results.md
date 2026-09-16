@@ -2,7 +2,7 @@
 
 Submit a run with your own Hugging Face account. You never need a maintainer token.
 
-Setup, requirements, and the command itself are in the [README](../README.md). This document covers what happens while the command runs, what you are responsible for, and how a maintainer accepts the result.
+Setup, requirements, and the command itself are in the [README](../README.md). This document covers ordinary local contributions. For an attested GitHub run with automatic acceptance, use [Official community runs](official-community-runs.md).
 
 ## What happens while it runs
 
@@ -27,12 +27,8 @@ You never run the smoke task yourself, and you never set `ready: true`. That fla
 
 The pull request holds benchmark facts only. The [README](../README.md#what-gets-published) lists exactly what is published and what never leaves your machine.
 
-## Maintainer acceptance
+## Acceptance
 
-```sh
-HF_TOKEN=hf_... npm run benchmark -- accept \
-  --repository alexshpunt/explicit-edit-benchmark \
-  --candidate PR_NUMBER_OR_REF
-```
+Ordinary local candidates are `unverified` and follow the repository's contribution review. Official candidates from the approved reusable workflow are verified and accepted automatically by policy; they do not wait for a maintainer to approve their score. Code changes to tasks, adapters, policies, and workflows still require normal pull-request review.
 
-Acceptance validates the candidate, appends it to `source/accepted/`, and rebuilds every generated view in one parent-checked commit. [Benchmark automation and public data](benchmark-automation.md) describes the data format, the generated views, and the acceptance internals.
+Acceptance appends evidence to `source/accepted/` and rebuilds every generated view in one parent-checked commit. [Benchmark automation and public data](benchmark-automation.md) describes the data format and acceptance internals.

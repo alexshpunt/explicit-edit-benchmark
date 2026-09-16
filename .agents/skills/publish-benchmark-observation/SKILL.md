@@ -14,6 +14,8 @@ compatibility: Linux, Node.js 24+, authenticated target harness, Hugging Face CL
 
 If the agent has no ready adapter, use `add-benchmark-harness` first.
 
+For a verified community result, prefer the public [official run template](https://github.com/alexshpunt/explicit-edit-benchmark-run-template). It accepts only registered official inputs, supports partial runs, attests the exact result, and is accepted automatically. Use the local flow below for development or an unverified contribution.
+
 ## Ask for three things
 
 1. the harness family: `pi-default`, `pi-agent-ide`, `codex-cli-default`, `opencode-default`, `oh-my-pi-default`, `github-copilot-cli-default`, `dsh-standard`, or `dsh-code`;
@@ -54,14 +56,8 @@ It always uses five Oracle recovery attempts and a 120-second timeout.
 
 Keep failures, timeouts, and recovery rounds. Never edit normalized rows to improve a result. Report the run ID and the pull request URL.
 
-## Maintainers
+## Acceptance
 
-Accept a reviewed candidate with:
+Official candidates are verified and accepted automatically by the repository workflow. Do not ask for manual approval based on score. If delivery fails after inference, use the template's submit-only recovery with the original run ID and attempt.
 
-```sh
-HF_TOKEN=hf_... npm run benchmark -- accept \
-  --repository alexshpunt/explicit-edit-benchmark \
-  --candidate PR_NUMBER_OR_REF
-```
-
-Acceptance calculates Score and every ranking view from the retained benchmark facts.
+Ordinary local candidates remain unverified and follow the contribution review process. Code, adapter, task, workflow, and policy changes always require normal review.

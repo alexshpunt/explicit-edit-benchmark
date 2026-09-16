@@ -8,10 +8,11 @@ compatibility: Linux, Node.js 24+, an authenticated Hugging Face login or HF_TOK
 
 ## Recognise what you are reviewing
 
-- **Benchmark result candidate** — a pull request on the Hugging Face Dataset `alexshpunt/explicit-edit-benchmark` containing exactly one `candidates/<run-id>/` directory. This is the normal contribution: a contributor ran the benchmark and wants the result published. Accepting it changes accepted evidence.
+- **Ordinary result candidate** — a Hugging Face Dataset pull request containing one normalized `candidates/<run-id>/` directory. It is unverified and follows the manual review below.
+- **Official result candidate** — a Dataset pull request under `candidates/official/<executionId>/` containing the signed archive, attestation, and transport metadata. Repository automation verifies and accepts it by policy; do not manually approve or reject it based on score.
 - **Code pull request** — a pull request on this GitHub repository: adapters, tasks, docs, or tooling. Merging it changes the benchmark itself.
 
-Never accept or merge before the user confirms. Validation passing is not permission.
+Never manually accept an ordinary candidate or merge code before the user confirms. Official result candidates are handled by automatic policy and do not need a human score review.
 
 ## Read it
 
