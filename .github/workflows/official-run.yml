@@ -325,7 +325,9 @@ jobs:
           retained="$RUNNER_TEMP/official-retained"
           mkdir "$retained"
           cp "$ARTIFACT" "$retained/official-result.tar.gz"
-          cp "$RUNNER_TEMP/official-producer/official-result.sha256" "$retained/"
+          cp \
+            "$RUNNER_TEMP/official-producer/official-result.sha256" \
+            "$retained/"
           cp "$BUNDLE_PATH" "$retained/attestation.jsonl"
 
       - name: Upload signed result and proof
