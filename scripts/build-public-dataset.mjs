@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { validateNormalizedRun } from "./validate-normalized-run.mjs";
+import { applyExclusions, exclusionPolicyRevision, loadExclusionRegistry } from "./exclusions.mjs";
 import {
   aggregateGroupScore,
   aggregateLeaderboard,
@@ -12,6 +13,9 @@ import {
   taskFamily,
 } from "./result-aggregation.mjs";
 const TABLES = ["profiles", "configurations", "trials", "rounds", "tool-calls"];
+const DEFAULT_EXCLUSIONS = fileURLToPath(
+  new URL("../policies/exclusions/v1.json", import.meta.url),
+);
 
 function withRunId(content, runId) {
   return (
@@ -382,7 +386,11 @@ function summarizeEfficiency(trials, rounds) {
 }
 
 /** Build a public dataset from every accepted observation in an ingestion store. */
-export async function buildPublicDatasetFromStore(outputDirectory, storeDirectory) {
+export async function buildPublicDatasetFromStore(
+  outputDirectory,
+  storeDirectory,
+  { exclusionRegistryFile = DEFAULT_EXCLUSIONS } = {},
+) {
   const store = path.resolve(storeDirectory);
   const sourceIndex = JSON.parse(await readFile(path.join(store, "index.json"), "utf8"));
   if (sourceIndex.schemaVersion !== 1 || !Array.isArray(sourceIndex.submissions))
@@ -461,10 +469,24 @@ export async function buildPublicDatasetFromStore(outputDirectory, storeDirector
         .map((line) => ({ runId: run.runId, ...JSON.parse(line) })),
     })),
   );
-  const allTrials = trialGroups.flatMap((group) => group.trials);
-  const allRounds = trialGroups.flatMap((group) => group.rounds);
-  const allProfiles = trialGroups.flatMap((group) => group.profiles);
-  const allToolCalls = trialGroups.flatMap((group) => group.toolCalls);
+  const rawEvidence = {
+    trials: trialGroups.flatMap((group) => group.trials),
+    rounds: trialGroups.flatMap((group) => group.rounds),
+    profiles: trialGroups.flatMap((group) => group.profiles),
+    toolCalls: trialGroups.flatMap((group) => group.toolCalls),
+  };
+  const exclusionRegistry = await loadExclusionRegistry(exclusionRegistryFile);
+  const derivedEvidence = applyExclusions(exclusionRegistry, rawEvidence);
+  const allTrials = derivedEvidence.trials;
+  const allRounds = derivedEvidence.rounds;
+  const allProfiles = derivedEvidence.profiles;
+  const allToolCalls = derivedEvidence.toolCalls;
+  const exclusions = {
+    policyId: exclusionRegistry.policyId,
+    policyRevision: exclusionPolicyRevision(exclusionRegistry),
+    decisions: exclusionRegistry.decisions,
+    applied: derivedEvidence.applied,
+  };
   const publicIndex = { runs: index.runs };
   const serializeLeaderboard = (rows) =>
     rows.map(
@@ -480,6 +502,7 @@ export async function buildPublicDatasetFromStore(outputDirectory, storeDirector
     );
   const leaderboard = {
     schemaVersion: 1,
+    exclusions,
     scoring: {
       id: "explicit-edit-score",
       version: 2,
@@ -519,6 +542,7 @@ export async function buildPublicDatasetFromStore(outputDirectory, storeDirector
   const views = {
     schemaVersion: 1,
     scoring: leaderboard.scoring,
+    exclusions,
     leaderboard: leaderboardRows,
     groups: groupScores(leaderboardRows),
     taskFamilies: familyRows,
@@ -555,6 +579,7 @@ export async function buildPublicDatasetFromStore(outputDirectory, storeDirector
   };
   const summary = {
     schemaVersion: 1,
+    exclusions,
     ...summarizeTrials(allTrials),
     models: models.length,
     configurations: leaderboardRows.length,
