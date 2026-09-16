@@ -9,6 +9,7 @@ import { officialRunMetadata } from "../../scripts/build-public-dataset.mjs";
 await test("publishes factual official proof metadata without changing historical runs", async () => {
   const store = await mkdtemp(path.join(os.tmpdir(), "public-provenance-"));
   const executionId = "a".repeat(64);
+  const normalizedRunId = "official-12345-1";
   const proof = path.join(store, "official", executionId);
   await mkdir(proof, { recursive: true });
   await writeFile(
@@ -16,6 +17,7 @@ await test("publishes factual official proof metadata without changing historica
     JSON.stringify({
       schemaVersion: 1,
       executionId,
+      normalizedRunId,
       artifactSha256: "b".repeat(64),
       candidateNumber: 40,
       candidateCommit: "c".repeat(40),
@@ -29,11 +31,12 @@ await test("publishes factual official proof metadata without changing historica
     JSON.stringify({
       schemaVersion: 1,
       executionId,
+      normalizedRunId,
       producer: { repository: "person/caller", runId: "123", producerAttempt: 1 },
     }),
   );
 
-  assert.deepEqual(await officialRunMetadata(store, "official-123-1"), {
+  assert.deepEqual(await officialRunMetadata(store, normalizedRunId), {
     executionId,
     proofPath: `source/official/${executionId}`,
     artifactSha256: "b".repeat(64),
