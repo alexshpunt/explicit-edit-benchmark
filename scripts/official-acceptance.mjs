@@ -384,8 +384,23 @@ export async function acceptOfficialCandidates({
     }
   }
 
-  if (!accepted.some((item) => !item.duplicate))
+  if (!accepted.some((item) => !item.duplicate)) {
+    for (const item of accepted) {
+      try {
+        await close(
+          repository,
+          item.candidate,
+          token,
+          `Execution ${item.executionId} was already accepted before Dataset commit ${parentCommit}.`,
+        );
+        item.candidateClosed = true;
+      } catch (error) {
+        item.candidateClosed = false;
+        item.closeError = error.message;
+      }
+    }
     return { parentCommit, commitOid: null, accepted, rejected, deferred };
+  }
   await mkdir(path.join(output, "source"), { recursive: true });
   const sourceContent = JSON.stringify(sourceIndex, null, 2) + "\n";
   await writeFile(path.join(output, "source", "index.json"), sourceContent);
@@ -407,14 +422,11 @@ export async function acceptOfficialCandidates({
   const commitOid = result.commit.oid;
   if (!commitOid) throw Error("Hugging Face did not return a dataset commit");
   for (const item of accepted) {
-    if (item.duplicate) continue;
     try {
-      await close(
-        repository,
-        item.candidate,
-        token,
-        `Accepted verified execution ${item.executionId} in Dataset commit ${commitOid}.`,
-      );
+      const receipt = item.duplicate
+        ? `Execution ${item.executionId} was already accepted before Dataset commit ${commitOid}.`
+        : `Accepted verified execution ${item.executionId} in Dataset commit ${commitOid}.`;
+      await close(repository, item.candidate, token, receipt);
       item.candidateClosed = true;
     } catch (error) {
       item.candidateClosed = false;
