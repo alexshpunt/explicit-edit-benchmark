@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { commit, listCommits, listFiles, snapshotDownload } from "@huggingface/hub";
 import { ingestSubmission } from "./benchmark-ingestion.mjs";
@@ -37,11 +37,6 @@ async function verifyAttestation({ artifact, attestation, signerSha, repository 
     "policies/official-runs/v1.json",
     signerSha,
   ]);
-}
-
-async function revisionCommit(hub, repo, revision, accessToken) {
-  for await (const item of hub.listCommits({ repo, revision, accessToken })) return item.oid;
-  throw Error(`Hugging Face revision has no commits: ${revision}`);
 }
 
 async function findOfficialCandidate(snapshot) {
@@ -93,7 +88,6 @@ export async function acceptOfficialCandidate({
   if (!token) throw Error("HF_TOKEN is required to accept an official candidate");
   const repo = { type: "dataset", name: repository };
   const revision = `refs/pr/${candidateNumber}`;
-  const candidateCommit = await revisionCommit(hub, repo, revision, token);
   const parentCommit = await headCommit(hub, repo, token);
   const workspace = path.resolve(workspaceDirectory);
   await mkdir(workspace, { recursive: true });
@@ -105,10 +99,13 @@ export async function acceptOfficialCandidate({
   });
   const candidateSnapshot = await hub.snapshotDownload({
     repo,
-    revision: candidateCommit,
+    revision,
     accessToken: token,
     cacheDir: path.join(workspace, "cache-candidate"),
   });
+  const candidateCommit = path.basename(await realpath(candidateSnapshot));
+  if (!/^[a-f0-9]{40}$/.test(candidateCommit))
+    throw Error("Hugging Face candidate did not resolve to an immutable commit");
   const candidate = await findOfficialCandidate(candidateSnapshot);
   const transport = JSON.parse(await readFile(path.join(candidate, "transport.json"), "utf8"));
   const extracted = path.join(workspace, "extracted");
