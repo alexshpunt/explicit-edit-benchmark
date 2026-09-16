@@ -630,6 +630,32 @@ await test("aggregateGroupScore: adds a partial run as evidence instead of letti
   assertCloseTo(group.score, 0.5, 10);
 });
 
+await test("aggregateGroupScore: gives each configuration equal weight inside a task", () => {
+  const repeatedPasses = configuration([
+    sample("t1", true),
+    sample("t1", true),
+    sample("t1", true),
+    sample("t1", true),
+  ]);
+  const oneFailure = configuration([sample("t1", false)]);
+
+  const group = aggregateGroupScore([repeatedPasses, oneFailure]);
+
+  assert.equal(group.observations, 5);
+  assert.equal(group.firstExactRate, 0.5);
+  assert.equal(group.finalExactRate, 0.5);
+  assert.equal(group.qualityScore, 0.5);
+});
+
+await test("aggregateGroupScore: is invariant to row order", () => {
+  const rows = [
+    configuration([sample("t1", true), sample("t2", false)]),
+    configuration([sample("t1", false, true)]),
+  ];
+
+  assert.deepEqual(aggregateGroupScore(rows), aggregateGroupScore(rows.toReversed()));
+});
+
 await test("aggregateGroupScore: scores a group with little evidence low instead of complete", () => {
   const group = aggregateGroupScore([configuration([sample("t1", true)])]);
 

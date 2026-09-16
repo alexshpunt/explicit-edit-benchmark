@@ -108,8 +108,10 @@ function datasetCard({ includeSubmissions = false, models = [] } = {}) {
       ? [
           "## Leaderboard by model",
           "",
-          "Score = coverage × (0.75 × first attempt + 0.25 × final attempt), over every accepted",
-          "configuration of that model. The same numbers are in `views.json`, and the",
+          "Score v2 = coverage × quality, where quality is 75% first exact and 25% final exact.",
+          "Repeated runs are averaged inside each configuration and task; configurations then have",
+          "equal weight inside each task, and tasks have equal weight. The same numbers are in",
+          "`views.json`, and the",
           "[Explorer](https://huggingface.co/spaces/alexshpunt/benchmark-explorer) breaks them down by",
           "harness, version and reasoning mode.",
           "",
@@ -465,16 +467,25 @@ export async function buildPublicDatasetFromStore(outputDirectory, storeDirector
   const allToolCalls = trialGroups.flatMap((group) => group.toolCalls);
   const publicIndex = { runs: index.runs };
   const serializeLeaderboard = (rows) =>
-    rows.map(({ trialSamples: _trialSamples, configurationLabels, ...row }) => ({
-      ...row,
-      configurationLabels: [...configurationLabels],
-    }));
+    rows.map(
+      ({
+        trialSamples: _trialSamples,
+        configurationTaskCells: _configurationTaskCells,
+        configurationLabels,
+        ...row
+      }) => ({
+        ...row,
+        configurationLabels: [...configurationLabels],
+      }),
+    );
   const leaderboard = {
     schemaVersion: 1,
     scoring: {
       id: "explicit-edit-score",
-      version: 1,
-      formula: "coverage * (0.75 * firstExactRate + 0.25 * finalExactRate)",
+      version: 2,
+      formula: "coverage * (0.75 * taskBalancedFirstExactRate + 0.25 * taskBalancedFinalExactRate)",
+      repetitionUnit: "mean within configurationHash × task",
+      rollup: "equal configurations within task; equal tasks",
       source: "scripts/result-aggregation.mjs",
     },
     rows: serializeLeaderboard(

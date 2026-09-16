@@ -174,37 +174,52 @@ export function describeDistribution(values) {
 function mean(values) {
   return values.length ? values.reduce((total, value) => total + value, 0) / values.length : null;
 }
+function configurationTaskCells(samples) {
+  const tasks = new Map();
+  for (const sample of samples) {
+    const task = tasks.get(sample.taskId) ?? {
+      taskId: sample.taskId,
+      observations: 0,
+      firstPasses: 0,
+      finalPasses: 0,
+    };
+    task.observations += 1;
+    task.firstPasses += Number(sample.firstExactPassed);
+    task.finalPasses += Number(sample.finalExactPassed);
+    tasks.set(sample.taskId, task);
+  }
+  return [...tasks.values()].map((task) => ({
+    taskId: task.taskId,
+    observations: task.observations,
+    firstExactRate: task.firstPasses / task.observations,
+    finalExactRate: task.finalPasses / task.observations,
+  }));
+}
+
 /**
- * Score for the configurations that share one identity: a model, an agent, a
- * harness, or a reasoning mode.
+ * Score configurations that share one visible identity.
  *
- * Trials are pooled per benchmark task, so a configuration that ran only a few
- * tasks adds evidence instead of dragging the group down. Averaging the
- * configuration scores instead let a one-task run cost a model 9.7 points while
- * contributing a single observation. Coverage is still the share of the
- * benchmark the group has been measured on at all, so a group without enough
- * evidence scores low rather than looking complete.
+ * Repetitions first estimate one configuration × task cell. Configurations then
+ * have equal weight inside each task, and tasks have equal weight in the group.
+ * Coverage remains separate, so partial evidence stays useful without looking
+ * complete or gaining weight merely because it was submitted more often.
  */
 export function aggregateGroupScore(rows) {
   const tasks = new Map();
   let observations = 0;
   for (const row of rows) {
-    for (const sample of row.trialSamples ?? []) {
-      const item = tasks.get(sample.taskId) ?? {
-        observations: 0,
-        firstPasses: 0,
-        finalPasses: 0,
-      };
-      item.observations += 1;
-      item.firstPasses += Number(sample.firstExactPassed);
-      item.finalPasses += Number(sample.finalExactPassed);
-      tasks.set(sample.taskId, item);
-      observations += 1;
+    const cells = row.configurationTaskCells ?? configurationTaskCells(row.trialSamples ?? []);
+    for (const cell of cells) {
+      const task = tasks.get(cell.taskId) ?? { firstRates: [], finalRates: [] };
+      task.firstRates.push(cell.firstExactRate);
+      task.finalRates.push(cell.finalExactRate);
+      tasks.set(cell.taskId, task);
     }
+    observations += row.observations ?? (row.trialSamples ?? []).length;
   }
   const perTask = [...tasks.values()];
-  const firstExactRate = mean(perTask.map((task) => task.firstPasses / task.observations));
-  const finalExactRate = mean(perTask.map((task) => task.finalPasses / task.observations));
+  const firstExactRate = mean(perTask.map((task) => mean(task.firstRates)));
+  const finalExactRate = mean(perTask.map((task) => mean(task.finalRates)));
   const qualityScore =
     firstExactRate == null || finalExactRate == null
       ? null
@@ -489,6 +504,7 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
           coveredTasks: durationByTask.length,
         },
         taskFamilies: [...group.taskFamilies].sort(),
+        configurationTaskCells: configurationTaskCells(group.trialSamples),
         runIds: [...group.runIds].sort(),
         sourceProfiles: [...group.sourceProfiles].sort(),
         submissionIds: [...group.submissionIds].sort(),
@@ -635,6 +651,9 @@ export function aggregateLeaderboard(index, profiles, trials, rounds, filters = 
       recoveryGain: hierarchicalMean(families, (row) => row.recoveryGain),
       observations: group.rows.reduce((total, row) => total + row.observations, 0),
       trialSamples: group.rows.flatMap((row) => row.trialSamples ?? []),
+      configurationTaskCells: group.rows.flatMap(
+        (row) => row.configurationTaskCells ?? configurationTaskCells(row.trialSamples ?? []),
+      ),
       recoveryRounds: group.rows.reduce((total, row) => total + row.recoveryRounds, 0),
       taskCount: group.rows.reduce((total, row) => total + row.taskCount, 0),
       benchmarkTaskCount: Math.max(...group.rows.map((row) => row.benchmarkTaskCount)),

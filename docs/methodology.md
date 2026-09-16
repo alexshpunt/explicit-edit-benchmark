@@ -12,6 +12,18 @@ Explicit Edit has 226 generated mechanical editing tasks.
 
 A missing file, an extra file, a symlink, a change to content that should not have moved, or a timeout all fail exact validation. The verifier compares file bytes. It does not care whether a test compiles or whether the behavior is equivalent.
 
+### Scoring version 2
+
+The public score keeps first-attempt success more important without discarding useful recovery:
+
+`quality = 0.75 × first exact + 0.25 × final exact`
+
+Repeated observations first form one mean for each exact `configurationHash × task` cell. Repeating the same configuration refines that cell and increases its observation count; it does not give the configuration more weight. Compatible configurations then receive equal weight within each task, and tasks receive equal weight in the final quality score.
+
+Coverage is the share of the declared task set observed at least once. Partial runs are valid and remain visible. The conservative leaderboard score is `quality × coverage`, while quality and coverage are also published separately. This prevents a perfect one-task run from looking like a complete benchmark.
+
+Owner, display labels, run IDs, and timestamps do not create new experimental cells. Runs with different task sets, verifier contracts, or run policies are not mixed. Raw observations remain in the Dataset when scoring rules change.
+
 ## Recovery
 
 `--oracle-recoveries N` carries on in the same session and workspace after a failed check. N counts extra rounds, not total attempts, and the chain stops at the first exact pass. Feedback comes from the verifier, so a recovery round is not another independent trial.
