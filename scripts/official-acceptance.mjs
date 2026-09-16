@@ -209,6 +209,7 @@ export async function acceptOfficialCandidates({
   hub = defaultHub,
   attestationVerifier = verifyAttestation,
   close = closeCandidate,
+  dryRun = false,
 }) {
   if (!REPOSITORY.test(repository ?? "")) throw Error("Dataset repository must be owner/name");
   const token = await resolveHuggingFaceToken({ accessToken });
@@ -411,6 +412,16 @@ export async function acceptOfficialCandidates({
   };
   await buildDerivedDatasetFromAggregateState(output, datasetIndex, aggregateState);
   const operations = await incrementalCommitOperations(output);
+  if (dryRun)
+    return {
+      parentCommit,
+      commitOid: null,
+      dryRun: true,
+      operationCount: operations.length,
+      accepted: accepted.map((item) => ({ ...item, wouldAccept: !item.duplicate })),
+      rejected,
+      deferred,
+    };
   const result = await hub.commit({
     repo,
     accessToken: token,

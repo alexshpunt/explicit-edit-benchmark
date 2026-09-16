@@ -8,6 +8,7 @@ import {
 
 const [command, ...args] = process.argv.slice(2);
 const repository = process.env.DATASET_REPOSITORY ?? "alexshpunt/explicit-edit-benchmark";
+const dryRun = process.env.DRY_RUN === "true";
 if (command === "accept") {
   const candidate = args[0];
   if (!candidate) throw Error("Usage: official-acceptance-cli.mjs accept CANDIDATE_NUMBER");
@@ -18,6 +19,7 @@ if (command === "accept") {
     workspaceDirectory: process.env.RUNNER_TEMP
       ? path.join(process.env.RUNNER_TEMP, `official-accept-${candidate}`)
       : path.resolve(".tmp", `official-accept-${candidate}`),
+    dryRun,
   });
   console.log(JSON.stringify(result));
   if (result.rejected.length) process.exitCode = 1;
@@ -31,6 +33,7 @@ if (command === "accept") {
     workspaceDirectory: process.env.RUNNER_TEMP
       ? path.join(process.env.RUNNER_TEMP, "official-accept-batch")
       : path.resolve(".tmp", "official-accept-batch"),
+    dryRun,
   });
   console.log(JSON.stringify({ candidates: candidates.length, ...result }));
   if (result.rejected.length) process.exitCode = 1;

@@ -20,6 +20,11 @@ name: Auto-accept official observations
         required: false
         default: false
         type: boolean
+      dry_run:
+        description: Verify and build a verdict without publishing
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -48,8 +53,29 @@ jobs:
       - name: Install pinned dependencies
         run: npm ci
 
+      - name: Check production kill switch
+        id: gate
+        env:
+          AUTO_ACCEPT_ENABLED: ${{ vars.OFFICIAL_AUTO_ACCEPT_ENABLED }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REBUILD_ONLY: ${{ inputs.rebuild_only }}
+          OIDC_CHECK_ONLY: ${{ inputs.oidc_check_only }}
+        run: |
+          enabled=false
+          if [[ "$AUTO_ACCEPT_ENABLED" = "true" || "$DRY_RUN" = "true" || \
+                "$REBUILD_ONLY" = "true" || "$OIDC_CHECK_ONLY" = "true" ]]; then
+            enabled=true
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          if [[ "$enabled" != "true" ]]; then
+            echo "## Official auto-accept is disabled" >> "$GITHUB_STEP_SUMMARY"
+            message="Set OFFICIAL_AUTO_ACCEPT_ENABLED=true"
+            message="$message to resume scheduled imports."
+            echo "$message" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Confirm OIDC token cannot target another Dataset
-        if: inputs.oidc_check_only
+        if: steps.gate.outputs.enabled == 'true' && inputs.oidc_check_only
         env:
           HF_OIDC_RESOURCE: datasets/alexshpunt/explicit-edit-benchmark-denied
         run: |
@@ -78,6 +104,7 @@ jobs:
             "invalid_grant"
 
       - name: Exchange GitHub identity for scoped Hugging Face token
+        if: steps.gate.outputs.enabled == 'true'
         env:
           HF_OIDC_RESOURCE: datasets/alexshpunt/explicit-edit-benchmark
         run: |
@@ -107,17 +134,41 @@ jobs:
           printf 'HF_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
 
       - name: Verify and publish official candidates
-        if: ${{ !inputs.oidc_check_only }}
+        id: acceptance
+        if: steps.gate.outputs.enabled == 'true' && !inputs.oidc_check_only
         env:
           DATASET_REPOSITORY: alexshpunt/explicit-edit-benchmark
           CANDIDATE: ${{ inputs.candidate }}
           MAX_CANDIDATES: "4"
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
+          result="$RUNNER_TEMP/acceptance-result.json"
           if [[ "${{ inputs.rebuild_only }}" = "true" ]]; then
-            node scripts/official-acceptance-cli.mjs rebuild
+            node scripts/official-acceptance-cli.mjs rebuild | tee "$result"
           elif [[ -n "$CANDIDATE" ]]; then
-            node scripts/official-acceptance-cli.mjs accept "$CANDIDATE"
+            node scripts/official-acceptance-cli.mjs accept \
+              "$CANDIDATE" | tee "$result"
           else
-            node scripts/official-acceptance-cli.mjs poll
+            node scripts/official-acceptance-cli.mjs poll | tee "$result"
           fi
+
+      - name: Summarize acceptance batch
+        if: always() && steps.acceptance.outcome != 'skipped'
+        run: |
+          result="$RUNNER_TEMP/acceptance-result.json"
+          if [[ ! -s "$result" ]]; then
+            echo "## Official acceptance failed before producing a verdict" >> \
+              "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          jq --raw-output '
+            "## Official acceptance\n" +
+            "- discovered: " + ((.candidates // 0) | tostring) + "\n" +
+            "- accepted/duplicate: " +
+              ((.accepted // []) | length | tostring) + "\n" +
+            "- rejected: " + ((.rejected // []) | length | tostring) + "\n" +
+            "- deferred: " + ((.deferred // []) | length | tostring) + "\n" +
+            "- dry run: " + ((.dryRun // false) | tostring) + "\n" +
+            "- Dataset commit: " + (.commitOid // "none")
+          ' "$result" >> "$GITHUB_STEP_SUMMARY"
