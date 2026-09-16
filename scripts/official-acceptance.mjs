@@ -251,7 +251,21 @@ export async function acceptOfficialCandidates({
   const rejected = [];
   const deferred = [];
 
-  for (const candidateNumber of candidateNumbers) {
+  const acceptedExecutions = new Set(
+    datasetIndex.runs.map((run) => run.official?.executionId).filter(Boolean),
+  );
+  for (const candidateReference of candidateNumbers) {
+    const candidateNumber = candidateReference.number ?? candidateReference;
+    const executionHint = candidateReference.executionId ?? null;
+    if (executionHint && acceptedExecutions.has(executionHint)) {
+      accepted.push({
+        candidate: Number(candidateNumber),
+        executionId: executionHint,
+        duplicate: true,
+        cached: true,
+      });
+      continue;
+    }
     try {
       const prepared = await prepareVerifiedCandidate({
         hub,
@@ -369,6 +383,7 @@ export async function acceptOfficialCandidates({
           path.join(output, "data", table, `${normalizedManifest.runId}.jsonl.gz`),
         );
       }
+      acceptedExecutions.add(runId);
       accepted.push({
         candidate: Number(candidateNumber),
         candidateCommit: prepared.candidateCommit,
@@ -384,23 +399,8 @@ export async function acceptOfficialCandidates({
     }
   }
 
-  if (!accepted.some((item) => !item.duplicate)) {
-    for (const item of accepted) {
-      try {
-        await close(
-          repository,
-          item.candidate,
-          token,
-          `Execution ${item.executionId} was already accepted before Dataset commit ${parentCommit}.`,
-        );
-        item.candidateClosed = true;
-      } catch (error) {
-        item.candidateClosed = false;
-        item.closeError = error.message;
-      }
-    }
+  if (!accepted.some((item) => !item.duplicate))
     return { parentCommit, commitOid: null, accepted, rejected, deferred };
-  }
   await mkdir(path.join(output, "source"), { recursive: true });
   const sourceContent = JSON.stringify(sourceIndex, null, 2) + "\n";
   await writeFile(path.join(output, "source", "index.json"), sourceContent);
@@ -603,12 +603,8 @@ export async function listOpenOfficialCandidates(repository, fetchImpl = fetch) 
   );
   if (!response.ok) throw Error(`Hugging Face candidate listing failed (${response.status})`);
   const body = await response.json();
+  const prefix = "Contribute official benchmark execution ";
   return body.discussions
-    .filter(
-      (item) =>
-        item.isPullRequest &&
-        item.status === "open" &&
-        item.title.startsWith("Contribute official benchmark execution "),
-    )
-    .map((item) => item.num);
+    .filter((item) => item.isPullRequest && item.status === "open" && item.title.startsWith(prefix))
+    .map((item) => ({ number: item.num, executionId: item.title.slice(prefix.length) }));
 }

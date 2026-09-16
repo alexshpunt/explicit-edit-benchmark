@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   incrementalCommitOperations,
   isDeferredHubError,
+  listOpenOfficialCandidates,
 } from "../../scripts/official-acceptance.mjs";
 
 test("only rate limits and server failures are deferred", () => {
@@ -14,6 +15,25 @@ test("only rate limits and server failures are deferred", () => {
   assert.equal(isDeferredHubError(Error("Hub request failed (502)")), true);
   assert.equal(isDeferredHubError({ status: 401 }), false);
   assert.equal(isDeferredHubError(Error("invalid signature")), false);
+});
+
+test("official candidate listing keeps the execution identity for durable duplicate filtering", async () => {
+  const executionId = "a".repeat(64);
+  const candidates = await listOpenOfficialCandidates("owner/dataset", async () => ({
+    ok: true,
+    json: async () => ({
+      discussions: [
+        {
+          num: 45,
+          isPullRequest: true,
+          status: "open",
+          title: `Contribute official benchmark execution ${executionId}`,
+        },
+        { num: 44, isPullRequest: true, status: "open", title: "ordinary contribution" },
+      ],
+    }),
+  }));
+  assert.deepEqual(candidates, [{ number: 45, executionId }]);
 });
 
 test("incremental commit contains only new source, shards, and compact views", async () => {
