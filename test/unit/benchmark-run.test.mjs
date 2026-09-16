@@ -21,7 +21,7 @@ test("local mode delegates to the existing complete unverified submission", asyn
   const calls = [];
   await runLocal(
     {
-      harness: "pi-default",
+      harness: "codex-cli-default",
       model: "openai/model",
       thinking: "low",
       concurrency: "3",
@@ -36,7 +36,7 @@ test("local mode delegates to the existing complete unverified submission", asyn
         "benchmark:submit",
         "--",
         "--harness",
-        "pi-default",
+        "codex-cli-default",
         "--model",
         "openai/model",
         "--thinking",

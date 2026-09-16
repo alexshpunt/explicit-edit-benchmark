@@ -87,6 +87,10 @@ export function parseRunOptions(args) {
 
 /** Run and submit an ordinary unverified observation on this machine. */
 export async function runLocal(values, execute = command) {
+  if (values.harness.startsWith("pi-") && values["auth-file"] === undefined) {
+    const defaultAuth = path.join(os.homedir(), ".pi", "agent", "auth.json");
+    if (await exists(defaultAuth)) values = { ...values, "auth-file": defaultAuth };
+  }
   const args = [
     "run",
     "benchmark:submit",

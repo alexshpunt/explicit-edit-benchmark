@@ -216,7 +216,7 @@ async function main(args) {
     const smokeRunId = `${runId}-smoke`;
     console.log("Running an automatic smoke task for every selected profile…");
     await benchmarkCommand([
-      "run",
+      "raw-run",
       "--config",
       config,
       "--smoke",
@@ -243,7 +243,7 @@ async function main(args) {
     console.log(`Running ${runId} with concurrency ${options.concurrency}…`);
     await benchmarkCommand(
       [
-        "run",
+        "raw-run",
         "--config",
         config,
         "--oracle-recoveries",
