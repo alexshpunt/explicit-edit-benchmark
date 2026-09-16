@@ -131,7 +131,9 @@ export async function acceptOfficialCandidate({
     submission,
   );
   if (!result.created) throw Error("Official observation already exists on main");
-  const proof = path.join(store, "official", runId);
+  const proofRoot = path.join(store, "official");
+  await mkdir(proofRoot, { recursive: true });
+  const proof = path.join(proofRoot, runId);
   await mkdir(proof, { recursive: false });
   await Promise.all([
     cp(verified.artifact, path.join(proof, "official-result.tar.gz")),
