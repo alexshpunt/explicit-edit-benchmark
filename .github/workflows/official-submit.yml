@@ -32,13 +32,13 @@ permissions:
 jobs:
   submit-only:
     runs-on: ubuntu-22.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Checkout pinned delivery code and policy
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           repository: alexshpunt/explicit-edit-benchmark
-          ref: 4fc9a70387202761f54d3222822efe210e386956
+          ref: 1f8271960be350bae2f92191f942d6ef418df08c
           persist-credentials: false
 
       - name: Setup Node
@@ -96,7 +96,8 @@ jobs:
             --manifest "$root/extracted/official-manifest.json" \
             --signer-sha "$SIGNER_SHA" \
             --repository "$DATASET_REPOSITORY" \
-            --status-file "$root/delivery-status.json"
+            --status-file "$root/delivery-status.json" \
+            --wait-for-acceptance
 
       - name: Record terminal delivery failure
         if: steps.delivery.outcome == 'failure'
