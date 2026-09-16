@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { commit, listCommits, listFiles, snapshotDownload } from "@huggingface/hub";
+import { commit, downloadFile, listCommits, listFiles, snapshotDownload } from "@huggingface/hub";
 import { ingestSubmission } from "./benchmark-ingestion.mjs";
 import { buildSubmission } from "./benchmark-submission.mjs";
 import { submissionMetadata } from "./benchmark-submit.mjs";
@@ -15,7 +15,7 @@ import {
 import { resolveHuggingFaceToken } from "./huggingface-auth.mjs";
 import { verifyOfficialCandidate } from "./official-verifier.mjs";
 
-const defaultHub = { commit, listCommits, listFiles, snapshotDownload };
+const defaultHub = { commit, downloadFile, listCommits, listFiles, snapshotDownload };
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 async function run(command, args) {
@@ -37,6 +37,43 @@ async function verifyAttestation({ artifact, attestation, signerSha, repository 
     "policies/official-runs/v1.json",
     signerSha,
   ]);
+}
+
+async function downloadOfficialCandidate(hub, repo, repository, candidateNumber, token, directory) {
+  const response = await fetch(
+    `https://huggingface.co/api/datasets/${repository}/discussions/${candidateNumber}`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  if (!response.ok) throw Error(`Hugging Face candidate lookup failed (${response.status})`);
+  const discussion = await response.json();
+  const prefix = "Contribute official benchmark execution ";
+  if (
+    !discussion.isPullRequest ||
+    discussion.status !== "open" ||
+    !discussion.title.startsWith(prefix)
+  )
+    throw Error("Hugging Face candidate is not an open official pull request");
+  const executionId = discussion.title.slice(prefix.length);
+  if (!/^[a-f0-9]{64}$/.test(executionId))
+    throw Error("Official candidate title has invalid execution ID");
+  const commits = discussion.events.filter((event) => event.type === "commit");
+  const candidateCommit = commits.at(-1)?.data?.oid;
+  if (!/^[a-f0-9]{40}$/.test(candidateCommit ?? ""))
+    throw Error("Official candidate has no immutable head commit");
+  await mkdir(directory, { recursive: true });
+  for (const name of ["attestation.jsonl", "official-result.tar.gz", "transport.json"]) {
+    const blob = await hub.downloadFile({
+      repo,
+      path: `candidates/official/${executionId}/${name}`,
+      revision: candidateCommit,
+      accessToken: token,
+    });
+    if (!blob) throw Error(`Official candidate is missing ${name}`);
+    await writeFile(path.join(directory, name), Buffer.from(await blob.arrayBuffer()), {
+      flag: "wx",
+    });
+  }
+  return { candidateCommit, executionId };
 }
 
 async function findOfficialCandidate(snapshot) {
@@ -85,7 +122,6 @@ export async function acceptOfficialCandidate({
   const token = await resolveHuggingFaceToken({ accessToken });
   if (!token) throw Error("HF_TOKEN is required to accept an official candidate");
   const repo = { type: "dataset", name: repository };
-  const revision = `refs/pr/${candidateNumber}`;
   const parentCommit = await headCommit(hub, repo, token);
   const workspace = path.resolve(workspaceDirectory);
   await mkdir(workspace, { recursive: true });
@@ -95,16 +131,17 @@ export async function acceptOfficialCandidate({
     accessToken: token,
     cacheDir: path.join(workspace, "cache-main"),
   });
-  const candidateSnapshot = await hub.snapshotDownload({
+  const candidateRoot = path.join(workspace, "candidate-snapshot");
+  const candidateDirectory = path.join(candidateRoot, "candidates", "official", "execution");
+  const { candidateCommit } = await downloadOfficialCandidate(
+    hub,
     repo,
-    revision,
-    accessToken: token,
-    cacheDir: path.join(workspace, "cache-candidate"),
-  });
-  const candidateCommit = path.basename(await realpath(candidateSnapshot));
-  if (!/^[a-f0-9]{40}$/.test(candidateCommit))
-    throw Error("Hugging Face candidate did not resolve to an immutable commit");
-  const candidate = await findOfficialCandidate(candidateSnapshot);
+    repository,
+    candidateNumber,
+    token,
+    candidateDirectory,
+  );
+  const candidate = await findOfficialCandidate(candidateRoot);
   const transport = JSON.parse(await readFile(path.join(candidate, "transport.json"), "utf8"));
   const extracted = path.join(workspace, "extracted");
   await rm(extracted, { recursive: true, force: true });
