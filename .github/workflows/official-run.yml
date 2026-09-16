@@ -43,14 +43,16 @@ name: Official benchmark run
 
 permissions:
   contents: read
-  id-token: write
-  attestations: write
-  artifact-metadata: write
 
 jobs:
-  produce-and-attest:
+  produce:
+    permissions:
+      contents: read
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    outputs:
+      artifact-id: ${{ steps.producer-artifact.outputs.artifact-id }}
+      archive-sha256: ${{ steps.bundle.outputs.sha256 }}
 
     steps:
       - name: Checkout pinned benchmark
@@ -224,31 +226,21 @@ jobs:
             -C "results/$run_id" \
             official-manifest.json execution-plan.json \
             installed-dependencies.json normalized
-          sha256sum "$artifact" | tee "$RUNNER_TEMP/official-result.sha256"
-          echo "ARTIFACT=$artifact" >> "$GITHUB_ENV"
+          digest=$(sha256sum "$artifact" | cut -d ' ' -f 1)
+          printf '%s  %s\n' "$digest" "official-result.tar.gz" \
+            > "$RUNNER_TEMP/official-result.sha256"
+          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+        id: bundle
 
-      - name: Attest exact result archive
-        id: attest
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
-        with:
-          subject-path: ${{ env.ARTIFACT }}
-
-      - name: Collect public proof
-        env:
-          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
-        run: |
-          set -euo pipefail
-          cp "$BUNDLE_PATH" "$RUNNER_TEMP/attestation.jsonl"
-
-      - name: Upload result and proof
+      - name: Upload unsigned producer artifact
+        id: producer-artifact
         # yamllint disable-line rule:line-length
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: official-result-${{ github.run_id }}-${{ github.run_attempt }}
+          name: official-producer-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ env.ARTIFACT }}
+            ${{ runner.temp }}/official-result.tar.gz
             ${{ runner.temp }}/official-result.sha256
-            ${{ runner.temp }}/attestation.jsonl
           if-no-files-found: error
           retention-days: 14
 
@@ -258,3 +250,86 @@ jobs:
           rm --force \
             "$RUNNER_TEMP/pi-auth.json" \
             "$RUNNER_TEMP/pi-auth-source.json"
+
+  attest:
+    needs: produce
+    permissions:
+      actions: read
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout pinned verifier and policy
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: alexshpunt/explicit-edit-benchmark
+          ref: 4d1f3cb87ad8aabb42fd17b3134d5bffee0c3c65
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install pinned verifier dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Download exact producer artifact by ID
+        # yamllint disable-line rule:line-length
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.produce.outputs.artifact-id }}
+          path: ${{ runner.temp }}/official-producer
+
+      - name: Verify producer bytes, layout, manifest, and policy
+        env:
+          EXPECTED_SHA256: ${{ needs.produce.outputs.archive-sha256 }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/official-producer"
+          artifact="$root/official-result.tar.gz"
+          recorded=$(cut -d ' ' -f 1 "$root/official-result.sha256")
+          actual=$(sha256sum "$artifact" | cut -d ' ' -f 1)
+          test "$recorded" = "$EXPECTED_SHA256"
+          test "$actual" = "$EXPECTED_SHA256"
+          mkdir "$RUNNER_TEMP/official-extracted"
+          ARCHIVE="$artifact" OUTPUT="$RUNNER_TEMP/official-extracted" \
+            node --input-type=module <<'NODE'
+          import {
+            extractOfficialArchive,
+          } from "./scripts/official-verifier.mjs";
+          await extractOfficialArchive(process.env.ARCHIVE, process.env.OUTPUT);
+          NODE
+          node scripts/official-result.mjs validate-runner \
+            "$RUNNER_TEMP/official-extracted/official-manifest.json" \
+            "$RUNNER_TEMP/official-extracted/normalized" \
+            policies/official-runs/v1.json \
+            0eb81b72b4986df72207bfef822137320c360053
+          echo "ARTIFACT=$artifact" >> "$GITHUB_ENV"
+
+      - name: Attest exact verified result archive
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: ${{ env.ARTIFACT }}
+
+      - name: Collect public proof
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" "$RUNNER_TEMP/attestation.jsonl"
+
+      - name: Upload signed result and proof
+        # yamllint disable-line rule:line-length
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: official-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.ARTIFACT }}
+            ${{ runner.temp }}/official-producer/official-result.sha256
+            ${{ runner.temp }}/attestation.jsonl
+          if-no-files-found: error
+          retention-days: 14
