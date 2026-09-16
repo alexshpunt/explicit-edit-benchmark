@@ -15,6 +15,11 @@ name: Auto-accept official observations
         required: false
         default: false
         type: boolean
+      rebuild_only:
+        description: Rebuild canonical views without processing a candidate
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -109,7 +114,9 @@ jobs:
           MAX_CANDIDATES: "4"
         run: |
           set -euo pipefail
-          if [[ -n "$CANDIDATE" ]]; then
+          if [[ "${{ inputs.rebuild_only }}" = "true" ]]; then
+            node scripts/official-acceptance-cli.mjs rebuild
+          elif [[ -n "$CANDIDATE" ]]; then
             node scripts/official-acceptance-cli.mjs accept "$CANDIDATE"
           else
             node scripts/official-acceptance-cli.mjs poll

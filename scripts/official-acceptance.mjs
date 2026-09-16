@@ -240,6 +240,43 @@ export async function acceptOfficialCandidate({
   return { executionId: runId, candidateCommit, commitOid, candidateClosed, closeError };
 }
 
+/** Rebuild every derived Dataset file from immutable canonical source and publish atomically. */
+export async function rebuildOfficialDataset({
+  repository,
+  accessToken,
+  workspaceDirectory,
+  hub = defaultHub,
+}) {
+  if (!REPOSITORY.test(repository ?? "")) throw Error("Dataset repository must be owner/name");
+  const token = await resolveHuggingFaceToken({ accessToken });
+  if (!token) throw Error("HF_TOKEN is required to rebuild the Dataset");
+  const repo = { type: "dataset", name: repository };
+  const parentCommit = await headCommit(hub, repo, token);
+  const workspace = path.resolve(workspaceDirectory);
+  await rm(workspace, { recursive: true, force: true });
+  await mkdir(workspace, { recursive: true });
+  const snapshot = await hub.snapshotDownload({
+    repo,
+    revision: parentCommit,
+    accessToken: token,
+    cacheDir: path.join(workspace, "cache"),
+  });
+  const store = path.join(workspace, "store");
+  const outputDirectory = path.join(workspace, "dataset");
+  await cp(path.join(snapshot, "source"), store, { recursive: true, dereference: true });
+  const index = await buildPublicDatasetFromStore(outputDirectory, store);
+  assertPreserved(await readDatasetIndex(snapshot), index);
+  const commitOid = await publishDirectory({
+    hub,
+    repo,
+    accessToken: token,
+    parentCommit,
+    outputDirectory,
+    title: "Rebuild canonical Dataset views",
+  });
+  return { parentCommit, commitOid, scoring: 2, exclusionPolicy: "benchmark-exclusions-v1" };
+}
+
 /** List open official candidate numbers without trusting their titles as verification. */
 export async function listOpenOfficialCandidates(repository, fetchImpl = fetch) {
   if (!REPOSITORY.test(repository ?? "")) throw Error("Dataset repository must be owner/name");
