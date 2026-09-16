@@ -26,14 +26,20 @@ const verdict = await officialVerdict({
   policyFile,
   signerSha,
   verifyAttestation: async ({ artifact, attestation, repository }) => {
-    await run(process.execPath, [
-      "scripts/verify-official-attestation.mjs",
-      artifact,
-      attestation,
-      repository,
-      policyFile,
-      signerSha,
-    ]);
+    try {
+      await run(process.execPath, [
+        "scripts/verify-official-attestation.mjs",
+        artifact,
+        attestation,
+        repository,
+        policyFile,
+        signerSha,
+      ]);
+    } catch (error) {
+      throw Object.assign(Error("GitHub attestation verification failed", { cause: error }), {
+        code: "invalid-signature",
+      });
+    }
   },
 });
 console.log(JSON.stringify(verdict, (key, value) => (key === "evidence" ? undefined : value)));

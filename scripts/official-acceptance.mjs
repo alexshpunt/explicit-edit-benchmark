@@ -29,14 +29,24 @@ async function run(command, args) {
 }
 
 async function verifyAttestation({ artifact, attestation, signerSha, repository }) {
-  await run(process.execPath, [
-    "scripts/verify-official-attestation.mjs",
-    artifact,
-    attestation,
-    repository,
-    "policies/official-runs/v1.json",
-    signerSha,
-  ]);
+  try {
+    await run(process.execPath, [
+      "scripts/verify-official-attestation.mjs",
+      artifact,
+      attestation,
+      repository,
+      "policies/official-runs/v1.json",
+      signerSha,
+    ]);
+  } catch (error) {
+    throw new OfficialVerificationError(
+      "invalid-signature",
+      "GitHub attestation verification failed",
+      {
+        cause: error,
+      },
+    );
+  }
 }
 
 async function downloadOfficialCandidate(hub, repo, repository, candidateNumber, token, directory) {

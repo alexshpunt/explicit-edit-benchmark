@@ -35,6 +35,7 @@ function reject(code, message, cause) {
 /** Convert every verification failure into one stable machine-readable reason. */
 export function officialRejectionCode(error) {
   if (error instanceof OfficialVerificationError) return error.code;
+  if (error?.code === "invalid-signature") return "invalid-signature";
   const status = error?.statusCode ?? error?.status ?? error?.response?.status;
   if (
     status === 429 ||
