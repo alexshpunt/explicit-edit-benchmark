@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           repository: alexshpunt/explicit-edit-benchmark
-          ref: d2fad261a3fba81a4e2b9e4255a858ea36726dce
+          ref: 510f6cc1f08dd86937161e3936cab26e39a85627
           persist-credentials: false
 
       - name: Setup Node
