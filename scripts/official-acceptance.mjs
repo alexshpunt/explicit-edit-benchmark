@@ -13,7 +13,7 @@ import {
   readDatasetIndex,
 } from "./huggingface-contributions.mjs";
 import { resolveHuggingFaceToken } from "./huggingface-auth.mjs";
-import { verifyOfficialCandidate } from "./official-verifier.mjs";
+import { OfficialVerificationError, officialVerdict } from "./official-verifier.mjs";
 
 const defaultHub = { commit, downloadFile, listCommits, listFiles, snapshotDownload };
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -145,13 +145,19 @@ export async function acceptOfficialCandidate({
   const transport = JSON.parse(await readFile(path.join(candidate, "transport.json"), "utf8"));
   const extracted = path.join(workspace, "extracted");
   await rm(extracted, { recursive: true, force: true });
-  const verified = await verifyOfficialCandidate({
+  const verdict = await officialVerdict({
     candidateDirectory: candidate,
     extractedDirectory: extracted,
     policyFile: "policies/official-runs/v1.json",
     signerSha: transport.signerWorkflowSha,
     verifyAttestation: attestationVerifier,
   });
+  if (verdict.status !== "accepted")
+    throw new OfficialVerificationError(
+      verdict.code,
+      `Official candidate rejected: ${verdict.code}: ${verdict.message ?? ""}`,
+    );
+  const verified = verdict.evidence;
   const store = path.join(workspace, "store");
   const outputDirectory = path.join(workspace, "dataset");
   await rm(store, { recursive: true, force: true });
