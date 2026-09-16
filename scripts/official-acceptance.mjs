@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { cp, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { commit, listCommits, listFiles, snapshotDownload } from "@huggingface/hub";
 import { ingestSubmission } from "./benchmark-ingestion.mjs";
@@ -49,10 +49,8 @@ async function findOfficialCandidate(snapshot) {
   const entries = await readdir(candidate, { withFileTypes: true });
   const expected = ["attestation.jsonl", "official-result.tar.gz", "transport.json"];
   const actual = entries.map((entry) => entry.name).sort();
-  if (
-    entries.some((entry) => !entry.isFile()) ||
-    JSON.stringify(actual) !== JSON.stringify(expected)
-  )
+  const types = await Promise.all(entries.map((entry) => stat(path.join(candidate, entry.name))));
+  if (types.some((entry) => !entry.isFile()) || JSON.stringify(actual) !== JSON.stringify(expected))
     throw Error(`Official candidate files must be exactly ${expected.join(", ")}`);
   return candidate;
 }
