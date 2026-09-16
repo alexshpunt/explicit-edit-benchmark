@@ -24,15 +24,27 @@ await test("publishes factual official proof metadata without changing historica
       policyId: "official-runs-v1",
     }),
   );
+  await writeFile(
+    path.join(proof, "transport.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      executionId,
+      producer: { repository: "person/caller", runId: "123", producerAttempt: 1 },
+    }),
+  );
 
-  assert.deepEqual(await officialRunMetadata(store, executionId), {
+  assert.deepEqual(await officialRunMetadata(store, "official-123-1"), {
     executionId,
     proofPath: `source/official/${executionId}`,
     artifactSha256: "b".repeat(64),
-    signerWorkflowSha: "e".repeat(40),
+    workflow: {
+      repository: "person/caller",
+      runId: "123",
+      attempt: 1,
+      signerSha: "e".repeat(40),
+    },
     policyId: "official-runs-v1",
-    candidateNumber: 40,
-    candidateCommit: "c".repeat(40),
+    acceptedCandidateCommit: "c".repeat(40),
   });
   assert.equal(await officialRunMetadata(store, "historical-run"), null);
 });

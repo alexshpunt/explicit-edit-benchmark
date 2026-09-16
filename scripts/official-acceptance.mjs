@@ -174,6 +174,9 @@ export async function acceptOfficialCandidate({
   await rm(outputDirectory, { recursive: true, force: true });
   await cp(path.join(mainSnapshot, "source"), store, { recursive: true, dereference: true });
   const normalized = path.join(extracted, "normalized");
+  const normalizedManifest = JSON.parse(
+    await readFile(path.join(normalized, "manifest.json"), "utf8"),
+  );
   const runId = verified.manifest.executionIdentity.executionId;
   const metadata = await submissionMetadata(normalized, runId);
   metadata.purpose = "official";
@@ -198,6 +201,7 @@ export async function acceptOfficialCandidate({
         {
           schemaVersion: 1,
           executionId: runId,
+          normalizedRunId: normalizedManifest.runId,
           artifactSha256: verified.artifactSha256,
           candidateNumber: Number(candidateNumber),
           candidateCommit,

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -385,52 +385,31 @@ function summarizeEfficiency(trials, rounds) {
   });
 }
 
-/** Read factual proof metadata for one official run; historical runs return no invented proof. */
+/** Read durable official provenance for one accepted run without inventing it for historical data. */
 export async function officialRunMetadata(storeDirectory, runId) {
-  const acceptance = path.join(storeDirectory, "official", runId, "acceptance.json");
-  let value;
+  const officialRoot = path.join(storeDirectory, "official");
+  let executionIds;
   try {
-    value = JSON.parse(await readFile(acceptance, "utf8"));
+    executionIds = await readdir(officialRoot);
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
-  if (
-    value.schemaVersion !== 1 ||
-    value.executionId !== runId ||
-    !/^[a-f0-9]{64}$/u.test(value.executionId) ||
-    !/^[a-f0-9]{64}$/u.test(value.artifactSha256) ||
-    !/^[a-f0-9]{40}$/u.test(value.signerWorkflowSha) ||
-    !/^[a-f0-9]{40}$/u.test(value.candidateCommit) ||
-    !Number.isInteger(value.candidateNumber) ||
-    typeof value.policyId !== "string"
-  )
-    throw Error(`Invalid official acceptance record for ${runId}`);
-  return {
-    executionId: value.executionId,
-    proofPath: `source/official/${runId}`,
-    artifactSha256: value.artifactSha256,
-    signerWorkflowSha: value.signerWorkflowSha,
-    policyId: value.policyId,
-    candidateNumber: value.candidateNumber,
-    candidateCommit: value.candidateCommit,
-  };
-}
-
-/** Read durable official provenance for one accepted run without inventing it for historical data. */
-export async function officialRunMetadata(storeDirectory, runId) {
-  const proofPath = path.posix.join("source", "official", runId);
-  const directory = path.join(storeDirectory, "official", runId);
-  try {
+  for (const executionId of executionIds.sort()) {
+    const directory = path.join(officialRoot, executionId);
     const [acceptance, transport] = await Promise.all([
       readFile(path.join(directory, "acceptance.json"), "utf8").then(JSON.parse),
       readFile(path.join(directory, "transport.json"), "utf8").then(JSON.parse),
     ]);
-    if (acceptance.executionId !== runId || transport.executionId !== runId)
-      throw Error("Official proof identity mismatch for " + runId);
+    const normalizedRunId =
+      acceptance.normalizedRunId ??
+      `official-${transport.producer.runId}-${transport.producer.producerAttempt}`;
+    if (normalizedRunId !== runId) continue;
+    if (acceptance.executionId !== executionId || transport.executionId !== executionId)
+      throw Error("Official proof identity mismatch for " + executionId);
     return {
-      executionId: runId,
-      proofPath,
+      executionId,
+      proofPath: path.posix.join("source", "official", executionId),
       artifactSha256: acceptance.artifactSha256,
       workflow: {
         repository: transport.producer.repository,
@@ -441,11 +420,10 @@ export async function officialRunMetadata(storeDirectory, runId) {
       policyId: acceptance.policyId,
       acceptedCandidateCommit: acceptance.candidateCommit,
     };
-  } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    throw error;
   }
+  return null;
 }
+
 /** Build a public dataset from every accepted observation in an ingestion store. */
 export async function buildPublicDatasetFromStore(
   outputDirectory,
