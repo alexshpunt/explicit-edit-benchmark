@@ -401,7 +401,7 @@ export async function acceptOfficialCandidates({
   }
 
   if (!accepted.some((item) => !item.duplicate))
-    return { parentCommit, commitOid: null, accepted, rejected, deferred };
+    return { parentCommit, commitOid: null, dryRun, accepted, rejected, deferred };
   await mkdir(path.join(output, "source"), { recursive: true });
   const sourceContent = JSON.stringify(sourceIndex, null, 2) + "\n";
   await writeFile(path.join(output, "source", "index.json"), sourceContent);
