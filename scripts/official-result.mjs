@@ -194,6 +194,21 @@ export async function validateOfficialManifest(
   return { manifest, policy, workflow };
 }
 
+/** Validate a producer bundle against an active pinned runner before it receives signing authority. */
+export async function validateOfficialManifestForRunner(
+  manifestFile,
+  normalizedDirectory,
+  policyFile,
+  runnerSha,
+) {
+  const policy = await loadOfficialPolicy(policyFile);
+  const workflow = policy.workflows.find(
+    (candidate) => candidate.status === "active" && candidate.runnerSha === runnerSha,
+  );
+  if (!workflow) throw Error(`Unknown active official runner SHA: ${runnerSha}`);
+  return validateOfficialManifest(manifestFile, normalizedDirectory, policyFile, workflow.sha);
+}
+
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (command === "build") {
@@ -211,7 +226,16 @@ async function main() {
     await validateOfficialManifest(manifest, normalized, policy, signerSha);
     return;
   }
-  throw Error("Usage: official-result.mjs <build|validate> ...");
+  if (command === "validate-runner") {
+    const [manifest, normalized, policy, runnerSha] = args;
+    if (!manifest || !normalized || !policy || !runnerSha)
+      throw Error(
+        "Usage: official-result.mjs validate-runner MANIFEST NORMALIZED POLICY RUNNER_SHA",
+      );
+    await validateOfficialManifestForRunner(manifest, normalized, policy, runnerSha);
+    return;
+  }
+  throw Error("Usage: official-result.mjs <build|validate|validate-runner> ...");
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) await main();
