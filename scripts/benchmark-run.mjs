@@ -125,10 +125,25 @@ export async function runOfficial(values, execute = command) {
   await execute("gh", ["auth", "status"]);
   const owner = await execute("gh", ["api", "user", "--jq", ".login"], { capture: true });
   const repository = values["caller-repository"] ?? `${owner}/explicit-edit-benchmark-run`;
+  let created = false;
   try {
     await execute("gh", ["repo", "view", repository, "--json", "name"], { capture: true });
   } catch {
     await execute("gh", ["repo", "create", repository, "--public", "--template", TEMPLATE]);
+    created = true;
+  }
+  if (created) {
+    let available = false;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        await execute("gh", ["workflow", "view", WORKFLOW, "--repo", repository]);
+        available = true;
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
+    if (!available) throw Error(`Caller repository was created, but ${WORKFLOW} is unavailable`);
   }
 
   const authFile = path.resolve(
