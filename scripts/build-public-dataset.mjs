@@ -4,6 +4,7 @@ import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { createAggregateState, materializeAggregateState } from "./aggregate-state.mjs";
 import { validateNormalizedRun } from "./validate-normalized-run.mjs";
 import { applyExclusions, exclusionPolicyRevision, loadExclusionRegistry } from "./exclusions.mjs";
 import {
@@ -424,6 +425,156 @@ export async function officialRunMetadata(storeDirectory, runId) {
   return null;
 }
 
+/** Rebuild only compact derived files from an already verified aggregate state. */
+export async function buildDerivedDatasetFromAggregateState(
+  outputDirectory,
+  index,
+  aggregateState,
+  { exclusionRegistryFile = DEFAULT_EXCLUSIONS } = {},
+) {
+  await mkdir(path.join(outputDirectory, "data"), { recursive: true });
+  const aggregateStateContent = JSON.stringify(aggregateState) + "\n";
+  await writeFile(path.join(outputDirectory, "aggregate-state.json"), aggregateStateContent);
+  index.aggregateState = {
+    path: "aggregate-state.json",
+    bytes: Buffer.byteLength(aggregateStateContent),
+    sha256: createHash("sha256").update(aggregateStateContent).digest("hex"),
+    schemaVersion: aggregateState.schemaVersion,
+    aggregationVersion: aggregateState.aggregationVersion,
+  };
+  const exclusionRegistry = await loadExclusionRegistry(exclusionRegistryFile);
+  const restored = materializeAggregateState(aggregateState);
+  const evidence = applyExclusions(exclusionRegistry, restored);
+  const exclusions = {
+    policyId: exclusionRegistry.policyId,
+    policyRevision: exclusionPolicyRevision(exclusionRegistry),
+    decisions: exclusionRegistry.decisions,
+    applied: evidence.applied,
+  };
+  const publicIndex = { runs: index.runs };
+  const serializeLeaderboard = (rows) =>
+    rows.map(
+      ({
+        trialSamples: _trialSamples,
+        configurationTaskCells: _configurationTaskCells,
+        configurationLabels,
+        ...row
+      }) => ({ ...row, configurationLabels: [...configurationLabels] }),
+    );
+  const scoring = {
+    id: "explicit-edit-score",
+    version: 2,
+    formula: "coverage * (0.75 * taskBalancedFirstExactRate + 0.25 * taskBalancedFinalExactRate)",
+    repetitionUnit: "mean within configurationHash × task",
+    rollup: "equal configurations within task; equal tasks",
+    source: "scripts/result-aggregation.mjs",
+  };
+  const leaderboardRows = aggregateLeaderboard(
+    publicIndex,
+    evidence.profiles,
+    evidence.trials,
+    evidence.rounds,
+  );
+  const leaderboard = {
+    schemaVersion: 1,
+    exclusions,
+    scoring,
+    rows: serializeLeaderboard(leaderboardRows),
+  };
+  const taskFamilies = [
+    ...new Set(evidence.trials.map((trial) => taskFamily(trial.taskId))),
+  ].sort();
+  const groupScores = (rows) => {
+    const dimensions = ["modelFamily", "agentFamily", "harnessFamily", "thinking"];
+    return Object.fromEntries(
+      dimensions.map((dimension) => [
+        dimension,
+        Object.fromEntries(
+          [...Map.groupBy(rows, (row) => row[dimension])].map(([name, members]) => [
+            name,
+            aggregateGroupScore(members),
+          ]),
+        ),
+      ]),
+    );
+  };
+  const familyRows = Object.fromEntries(
+    taskFamilies.map((family) => [
+      family,
+      aggregateLeaderboard(publicIndex, evidence.profiles, evidence.trials, evidence.rounds, {
+        taskFamily: [family],
+      }),
+    ]),
+  );
+  const views = {
+    schemaVersion: 1,
+    scoring,
+    exclusions,
+    leaderboard: leaderboardRows,
+    groups: groupScores(leaderboardRows),
+    taskFamilies: familyRows,
+    taskFamilyGroups: Object.fromEntries(
+      Object.entries(familyRows).map(([family, rows]) => [family, groupScores(rows)]),
+    ),
+    toolUsage: aggregateToolUsage(
+      publicIndex,
+      evidence.profiles,
+      evidence.trials,
+      evidence.rounds,
+      evidence.toolCalls,
+    ),
+  };
+  const models = modelLeaderboard(views.groups.modelFamily, leaderboardRows);
+  const modelsContent =
+    models.map((row) => JSON.stringify(row)).join("\n") + (models.length ? "\n" : "");
+  const modelsCompressed = gzipSync(modelsContent, { level: 6, mtime: 0 });
+  await writeFile(path.join(outputDirectory, "data", "models.jsonl.gz"), modelsCompressed);
+  index.models = fileRecord("data/models.jsonl.gz", modelsCompressed);
+  const viewsContent = JSON.stringify(views) + "\n";
+  await writeFile(path.join(outputDirectory, "views.json"), viewsContent);
+  index.views = fileRecord("views.json", viewsContent);
+  const badges = await writeHarnessBadges(outputDirectory, latestHarnessGroups(leaderboardRows));
+  if (badges) index.badges = badges;
+  const leaderboardContent = JSON.stringify(leaderboard, null, 2) + "\n";
+  await writeFile(path.join(outputDirectory, "leaderboard.json"), leaderboardContent);
+  index.leaderboard = fileRecord("leaderboard.json", leaderboardContent);
+  const summary = {
+    schemaVersion: 1,
+    exclusions,
+    ...summarizeTrials(evidence.trials),
+    models: models.length,
+    configurations: leaderboardRows.length,
+    efficiency: summarizeEfficiency(evidence.trials, evidence.rounds),
+  };
+  const summaryContent = JSON.stringify(summary, null, 2) + "\n";
+  await writeFile(path.join(outputDirectory, "summary.json"), summaryContent);
+  index.summary = fileRecord("summary.json", summaryContent);
+  const submissions =
+    index.runs.map((run) => JSON.stringify(run)).join("\n") + (index.runs.length ? "\n" : "");
+  const submissionsCompressed = gzipSync(submissions, { level: 6, mtime: 0 });
+  await writeFile(
+    path.join(outputDirectory, "data", "submissions.jsonl.gz"),
+    submissionsCompressed,
+  );
+  index.submissions = fileRecord("data/submissions.jsonl.gz", submissionsCompressed);
+  await writeFile(
+    path.join(outputDirectory, "dataset-index.json"),
+    JSON.stringify(index, null, 2) + "\n",
+  );
+  await writeFile(
+    path.join(outputDirectory, "README.md"),
+    datasetCard({ includeSubmissions: true, models }),
+  );
+  return index;
+}
+
+function fileRecord(filePath, content) {
+  return {
+    path: filePath,
+    bytes: Buffer.byteLength(content),
+    sha256: createHash("sha256").update(content).digest("hex"),
+  };
+}
 /** Build a public dataset from every accepted observation in an ingestion store. */
 export async function buildPublicDatasetFromStore(
   outputDirectory,
@@ -518,8 +669,23 @@ export async function buildPublicDatasetFromStore(
     profiles: trialGroups.flatMap((group) => group.profiles),
     toolCalls: trialGroups.flatMap((group) => group.toolCalls),
   };
+  const aggregateState = createAggregateState({
+    sourceIndex,
+    run: index.runs,
+    ...rawEvidence,
+  });
+  const aggregateStateContent = JSON.stringify(aggregateState) + "\n";
+  await writeFile(path.join(outputDirectory, "aggregate-state.json"), aggregateStateContent);
+  index.aggregateState = {
+    path: "aggregate-state.json",
+    bytes: Buffer.byteLength(aggregateStateContent),
+    sha256: createHash("sha256").update(aggregateStateContent).digest("hex"),
+    schemaVersion: aggregateState.schemaVersion,
+    aggregationVersion: aggregateState.aggregationVersion,
+  };
   const exclusionRegistry = await loadExclusionRegistry(exclusionRegistryFile);
-  const derivedEvidence = applyExclusions(exclusionRegistry, rawEvidence);
+  const restoredEvidence = materializeAggregateState(aggregateState);
+  const derivedEvidence = applyExclusions(exclusionRegistry, restoredEvidence);
   const allTrials = derivedEvidence.trials;
   const allRounds = derivedEvidence.rounds;
   const allProfiles = derivedEvidence.profiles;
