@@ -8,6 +8,7 @@ import { buildNormalizedReport } from "./build-normalized-report.mjs";
 import { loadBenchmarkProfiles } from "./benchmark-config.mjs";
 import { assertNormalizedIdentity, exportNormalizedRun } from "./normalized-run.mjs";
 import { validateNormalizedRun } from "./validate-normalized-run.mjs";
+import { runBenchmark } from "./benchmark-run.mjs";
 import {
   acceptHuggingFaceCandidate,
   submitHuggingFaceCandidate,
@@ -146,11 +147,12 @@ async function accept(args) {
 const [command, ...args] = process.argv.slice(2);
 if (!command || ["-h", "--help", "help"].includes(command)) {
   console.log(
-    `Usage: npm run benchmark -- COMMAND\n\nCommands:\n  init [--output FILE]\n  check --config FILE\n  run RUNNER_OPTIONS...\n  export RUN_DIRECTORY [--output DIRECTORY]\n  inspect NORMALIZED_DIRECTORY\n  report NORMALIZED_DIRECTORY [--output DIRECTORY]\n  dataset --output DIRECTORY NORMALIZED_DIRECTORY [...]\n  submit NORMALIZED_DIRECTORY --repository OWNER/DATASET --metadata FILE\n  accept --repository OWNER/DATASET --candidate PR_OR_REF [--workspace DIRECTORY] [--dry-run]`,
+    `Usage: npm run benchmark -- COMMAND\n\nCommands:\n  init [--output FILE]\n  check --config FILE\n  run (--official | --local) --harness ID --model ID [OPTIONS]\n  raw-run RUNNER_OPTIONS...\n  export RUN_DIRECTORY [--output DIRECTORY]\n  inspect NORMALIZED_DIRECTORY\n  report NORMALIZED_DIRECTORY [--output DIRECTORY]\n  dataset --output DIRECTORY NORMALIZED_DIRECTORY [...]\n  submit NORMALIZED_DIRECTORY --repository OWNER/DATASET --metadata FILE\n  accept --repository OWNER/DATASET --candidate PR_OR_REF [--workspace DIRECTORY] [--dry-run]`,
   );
 } else if (command === "init") await init(args);
 else if (command === "check") await check(args);
-else if (command === "run") await runScript("run-harness-batch.mjs", args);
+else if (command === "run") await runBenchmark(args);
+else if (command === "raw-run") await runScript("run-harness-batch.mjs", args);
 else if (command === "export") await exportRun(args);
 else if (command === "inspect") await inspect(args);
 else if (command === "report") await report(args);
