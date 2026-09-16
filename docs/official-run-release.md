@@ -27,6 +27,19 @@ Task failures are measurements, not infrastructure failures. A selected subset i
 
 Ordinary reviewed Dataset contributions remain `unverified`. Both paths may contain partial runs and remain visible and filterable in the same Dataset.
 
+## Hugging Face publication authority
+
+Canonical publication uses a Hugging Face repo trusted publisher, not a stored write token. Configure it on the Dataset settings page with these exact claims:
+
+- provider: GitHub Actions;
+- repository: `alexshpunt/explicit-edit-benchmark`;
+- branch: `main`;
+- workflow: `auto-accept-official.yml`.
+
+The `accept` job requests a GitHub OIDC token with audience `https://huggingface.co` only after its trusted checkout and dependencies are ready. It exchanges that identity for a one-hour token with resource `datasets/alexshpunt/explicit-edit-benchmark`, masks the token, and keeps it only in the job environment. The workflow has no `HF_TOKEN` secret dependency.
+
+Use the `oidc_check_only` workflow input after changing publisher settings. The check proves that the configured workflow can exchange for the canonical Dataset while the same identity cannot exchange for another Dataset. A run from another repository, branch, or workflow must fail claim matching.
+
 ## Delivery recovery
 
 Inference, signing, and delivery are separate lifecycle stages. The attestation job uploads the original result archive, its digest, and its attestation as a retained GitHub Artifact before any Hugging Face request starts. A delivery failure therefore changes only delivery state; it never invalidates or repeats the measurement.

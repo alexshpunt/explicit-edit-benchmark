@@ -10,9 +10,15 @@ name: Auto-accept official observations
         description: Optional single Hugging Face candidate number
         required: false
         type: string
+      oidc_check_only:
+        description: Check a scoped short-lived token without publishing
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: huggingface-dataset-alexshpunt-explicit-edit-benchmark
@@ -37,10 +43,68 @@ jobs:
       - name: Install pinned dependencies
         run: npm ci
 
+      - name: Confirm OIDC token cannot target another Dataset
+        if: inputs.oidc_check_only
+        env:
+          HF_OIDC_RESOURCE: datasets/alexshpunt/explicit-edit-benchmark-denied
+        run: |
+          set -euo pipefail
+          oidc_response=$(curl --fail --silent --show-error \
+            --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fhuggingface.co")
+          subject_token=$(jq --exit-status --raw-output \
+            .value <<<"$oidc_response")
+          request=$(jq --null-input --compact-output \
+            --arg token "$subject_token" \
+            --arg resource "$HF_OIDC_RESOURCE" \
+            '{
+              grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+              subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+              subject_token: $token,
+              resource: $resource
+            }')
+          status=$(curl --silent --output "$RUNNER_TEMP/hf-denied.json" \
+            --write-out '%{http_code}' \
+            --header "Content-Type: application/json" \
+            --data "$request" \
+            https://huggingface.co/oauth/token)
+          test "$status" = "400"
+          test "$(jq --raw-output .error "$RUNNER_TEMP/hf-denied.json")" = \
+            "invalid_grant"
+
+      - name: Exchange GitHub identity for scoped Hugging Face token
+        env:
+          HF_OIDC_RESOURCE: datasets/alexshpunt/explicit-edit-benchmark
+        run: |
+          set -euo pipefail
+          oidc_response=$(curl --fail --silent --show-error \
+            --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fhuggingface.co")
+          subject_token=$(jq --exit-status --raw-output \
+            .value <<<"$oidc_response")
+          request=$(jq --null-input --compact-output \
+            --arg token "$subject_token" \
+            --arg resource "$HF_OIDC_RESOURCE" \
+            '{
+              grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+              subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+              subject_token: $token,
+              resource: $resource
+            }')
+          response=$(curl --fail-with-body --silent --show-error \
+            --header "Content-Type: application/json" \
+            --data "$request" \
+            https://huggingface.co/oauth/token)
+          token=$(jq --exit-status --raw-output .access_token <<<"$response")
+          test "$(jq --raw-output .token_type <<<"$response")" = "bearer"
+          test "$(jq --raw-output .expires_in <<<"$response")" = "3600"
+          echo "::add-mask::$token"
+          printf 'HF_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
+
       - name: Verify and publish official candidates
+        if: ${{ !inputs.oidc_check_only }}
         env:
           DATASET_REPOSITORY: alexshpunt/explicit-edit-benchmark
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CANDIDATE: ${{ inputs.candidate }}
           MAX_CANDIDATES: "4"
         run: |
