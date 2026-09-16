@@ -43,7 +43,7 @@ function exactKeys(value, expected, label) {
     throw Error(`${label}: fields must be exactly ${keys.join(", ")}`);
 }
 
-async function headCommit(hub, repo, accessToken) {
+export async function headCommit(hub, repo, accessToken) {
   for await (const item of hub.listCommits({ repo, revision: "main", accessToken }))
     return item.oid;
   throw Error("Hugging Face dataset main has no commits");
@@ -64,7 +64,14 @@ async function directoryFiles(root, directory = root) {
   return result;
 }
 
-async function publishDirectory({ hub, repo, accessToken, parentCommit, outputDirectory, title }) {
+export async function publishDirectory({
+  hub,
+  repo,
+  accessToken,
+  parentCommit,
+  outputDirectory,
+  title,
+}) {
   const files = await directoryFiles(outputDirectory);
   const generatedPaths = new Set(files.map((file) => file.path));
   const operations = files.map((file) => ({ operation: "addOrUpdate", ...file }));
@@ -210,7 +217,7 @@ async function findCandidate(snapshot) {
   return directory;
 }
 
-async function readDatasetIndex(snapshot) {
+export async function readDatasetIndex(snapshot) {
   try {
     return JSON.parse(await readFile(path.join(snapshot, "dataset-index.json"), "utf8"));
   } catch (error) {
@@ -219,7 +226,7 @@ async function readDatasetIndex(snapshot) {
   }
 }
 
-function assertPreserved(currentIndex, nextIndex) {
+export function assertPreserved(currentIndex, nextIndex) {
   const next = new Map(nextIndex.runs.map((run) => [run.runId, run]));
   for (const run of currentIndex.runs ?? []) {
     const retained = next.get(run.runId);

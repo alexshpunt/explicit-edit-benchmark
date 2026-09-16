@@ -400,6 +400,15 @@ export async function buildPublicDatasetFromStore(outputDirectory, storeDirector
     errorOnExist: true,
     force: false,
   });
+  try {
+    await cp(path.join(store, "official"), path.join(sourceDirectory, "official"), {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+    });
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
   const sourceIndexContent = await readFile(path.join(sourceDirectory, "index.json"));
   const metadataByRun = new Map(sourceIndex.submissions.map((item) => [item.runId, item]));
   index.schemaVersion = 1;
