@@ -164,48 +164,68 @@ function badgeColor(score) {
   return "red";
 }
 
-/** Keep only the highest accepted semantic version of each harness family. */
-export function latestHarnessRows(rows) {
-  const families = Map.groupBy(rows, (row) => row.harnessFamily);
+/** Aggregate every accepted version and run into one score per harness family. */
+export function harnessFamilyGroups(rows) {
   return Object.fromEntries(
-    [...families].map(([family, members]) => {
-      const latest = members
-        .map((row) => row.harnessVersion)
-        .filter(Boolean)
-        .reduce(
-          (current, version) =>
-            current == null || compareVersions(current, version) < 0 ? version : current,
-          null,
-        );
-      return [family, members.filter((row) => row.harnessVersion === latest)];
-    }),
-  );
-}
-
-function latestHarnessGroups(rows) {
-  return Object.fromEntries(
-    Object.entries(latestHarnessRows(rows)).map(([family, members]) => [
+    [...Map.groupBy(rows, (row) => row.harnessFamily)].map(([family, members]) => [
       family,
       aggregateGroupScore(members),
     ]),
   );
 }
 
-function compareVersions(left, right) {
-  const values = (version) =>
-    version.split(/[.-]/u).map((part) => (/^\d+$/u.test(part) ? Number(part) : part));
-  const a = values(left);
-  const b = values(right);
-  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
-    if (a[index] === b[index]) continue;
-    if (a[index] == null) return 1;
-    if (b[index] == null) return -1;
-    if (typeof a[index] === "number" && typeof b[index] === "number") return a[index] - b[index];
-    return String(a[index]).localeCompare(String(b[index]), undefined, { numeric: true });
+/** Keep complete benchmark runs for badges while leaving partial evidence in public views. */
+export function completeRunEvidence(index, profiles, trials, rounds) {
+  const canonicalTaskCount = Math.max(
+    0,
+    ...index.runs.map((run) => run.definitions?.taskSet?.taskIds?.length ?? 0),
+  );
+  const profilesByRun = Map.groupBy(profiles, (profile) => profile.runId);
+  const taskIdsByProfile = new Map();
+  for (const trial of trials) {
+    const key = `${trial.runId}::${trial.profileId}`;
+    const taskIds = taskIdsByProfile.get(key) ?? new Set();
+    taskIds.add(trial.taskId);
+    taskIdsByProfile.set(key, taskIds);
   }
-  return 0;
+  const completeRunIds = new Set(
+    index.runs
+      .filter((run) => {
+        const runProfiles = profilesByRun.get(run.runId) ?? [];
+        return (
+          canonicalTaskCount > 0 &&
+          runProfiles.length > 0 &&
+          runProfiles.every(
+            (profile) =>
+              taskIdsByProfile.get(`${run.runId}::${profile.profileId}`)?.size ===
+              canonicalTaskCount,
+          )
+        );
+      })
+      .map((run) => run.runId),
+  );
+  return {
+    index: { runs: index.runs.filter((run) => completeRunIds.has(run.runId)) },
+    profiles: profiles.filter((profile) => completeRunIds.has(profile.runId)),
+    trials: trials.filter((trial) => completeRunIds.has(trial.runId)),
+    rounds: rounds.filter((round) => completeRunIds.has(round.runId)),
+  };
 }
 
+function completeHarnessGroups(index, profiles, trials, rounds) {
+  const complete = completeRunEvidence(index, profiles, trials, rounds);
+  const rows = aggregateLeaderboard(
+    complete.index,
+    complete.profiles,
+    complete.trials,
+    complete.rounds,
+  );
+  const groups = harnessFamilyGroups(rows);
+  for (const family of new Set(profiles.map((profile) => profile.harnessFamily))) {
+    groups[family] ??= { score: null };
+  }
+  return groups;
+}
 /** Build one README badge per accepted harness family, in the shields.io endpoint format. */
 async function writeHarnessBadges(outputDirectory, groups) {
   const files = {};
@@ -535,7 +555,10 @@ export async function buildDerivedDatasetFromAggregateState(
   const viewsContent = JSON.stringify(views) + "\n";
   await writeFile(path.join(outputDirectory, "views.json"), viewsContent);
   index.views = fileRecord("views.json", viewsContent);
-  const badges = await writeHarnessBadges(outputDirectory, latestHarnessGroups(leaderboardRows));
+  const badges = await writeHarnessBadges(
+    outputDirectory,
+    completeHarnessGroups(publicIndex, evidence.profiles, evidence.trials, evidence.rounds),
+  );
   if (badges) index.badges = badges;
   const leaderboardContent = JSON.stringify(leaderboard, null, 2) + "\n";
   await writeFile(path.join(outputDirectory, "leaderboard.json"), leaderboardContent);
@@ -780,7 +803,10 @@ export async function buildPublicDatasetFromStore(
     bytes: Buffer.byteLength(viewsContent),
     sha256: createHash("sha256").update(viewsContent).digest("hex"),
   };
-  const badges = await writeHarnessBadges(outputDirectory, latestHarnessGroups(leaderboardRows));
+  const badges = await writeHarnessBadges(
+    outputDirectory,
+    completeHarnessGroups(publicIndex, allProfiles, allTrials, allRounds),
+  );
   if (badges) index.badges = badges;
   const leaderboardContent = JSON.stringify(leaderboard, null, 2) + "\n";
   await writeFile(path.join(outputDirectory, "leaderboard.json"), leaderboardContent);
