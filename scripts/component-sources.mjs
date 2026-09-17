@@ -13,21 +13,24 @@ function packagePage(name) {
 }
 
 /** Public source links for harnesses and models; unknown components remain ordinary text. */
-export function componentSources() {
+export function componentSources(observedHarnesses = []) {
+  const harnesses = Object.fromEntries(
+    Object.entries(ADAPTERS).map(([id, adapter]) => {
+      const packageName = adapter.extensionPackage ?? adapter.package;
+      return [
+        id,
+        {
+          repositoryUrl: adapter.repositoryUrl,
+          packageName,
+          packageUrl: packagePage(packageName),
+        },
+      ];
+    }),
+  );
+  for (const id of observedHarnesses)
+    if (!(id in harnesses)) harnesses[id] = { packageName: id, packageUrl: packagePage(id) };
   return {
-    harnesses: Object.fromEntries(
-      Object.entries(ADAPTERS).map(([id, adapter]) => {
-        const packageName = adapter.extensionPackage ?? adapter.package;
-        return [
-          id,
-          {
-            repositoryUrl: adapter.repositoryUrl,
-            packageName,
-            packageUrl: packagePage(packageName),
-          },
-        ];
-      }),
-    ),
+    harnesses,
     models: Object.fromEntries(
       Object.entries(MODEL_SOURCES).map(([id, officialPageUrl]) => [id, { officialPageUrl }]),
     ),

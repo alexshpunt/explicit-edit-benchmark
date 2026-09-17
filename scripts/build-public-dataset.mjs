@@ -509,7 +509,7 @@ export async function buildDerivedDatasetFromAggregateState(
   );
   const views = {
     schemaVersion: 1,
-    sources: componentSources(),
+    sources: componentSources(leaderboardRows.map((row) => row.harnessFamily)),
     scoring,
     exclusions,
     leaderboard: leaderboardRows,
@@ -752,7 +752,7 @@ export async function buildPublicDatasetFromStore(
   );
   const views = {
     schemaVersion: 1,
-    sources: componentSources(),
+    sources: componentSources(leaderboardRows.map((row) => row.harnessFamily)),
     scoring: leaderboard.scoring,
     exclusions,
     leaderboard: leaderboardRows,

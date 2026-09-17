@@ -21,3 +21,9 @@ test("known model families publish official pages without affecting configuratio
   );
   assert.match(sources.models["deepseek-v4.1-flash"].officialPageUrl, /^https:/u);
 });
+
+test("an observed extension gets a package source without a UI mapping", () => {
+  const source = componentSources(["pi-example-extension"]).harnesses["pi-example-extension"];
+  assert.equal(source.packageName, "pi-example-extension");
+  assert.equal(source.packageUrl, "https://www.npmjs.com/package/pi-example-extension");
+});
