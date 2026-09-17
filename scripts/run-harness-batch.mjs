@@ -19,6 +19,7 @@ import { cp } from "node:fs/promises";
 import { retryBudget, nextRetry, retrySummary } from "./retry-failures.mjs";
 import { selectedTasks } from "./focused-selection.mjs";
 import { loadBenchmarkProfiles } from "./benchmark-config.mjs";
+import { assertConfigurationMetadata } from "./normalized-run.mjs";
 
 const args = process.argv.slice(2);
 if (args.includes("--help")) {
@@ -105,6 +106,8 @@ function assertRecordedIdentity(name, source, recorded) {
         `${name}: recorded ${field} ${JSON.stringify(recorded[field] ?? null)} differs from the loaded profile ${JSON.stringify(source[field] ?? null)}`,
       );
 }
+
+for (const name of names) assertConfigurationMetadata(config.harnesses[name], name);
 
 const safeAdapters = Object.fromEntries(
   names.map((n) => {

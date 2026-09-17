@@ -24,12 +24,12 @@ export interface BenchmarkAdapter {
   adapterVersion: string;
   configurationLabels: string[];
   configurationId?: string;
-  configuration?: {
-    tools?: string[];
-    extensions?: string[];
-    rules?: string[];
-    runtimeFlags?: string[];
-    environment?: string[];
+  configuration: {
+    tools: string[];
+    extensions: string[];
+    rules: string[];
+    runtimeFlags: string[];
+    environment: string[];
   };
   [key: string]: unknown;
 }

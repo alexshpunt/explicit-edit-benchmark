@@ -125,8 +125,30 @@ const IDENTITY_FIELDS = [
   "adapterVersion",
 ];
 
+const CONFIGURATION_METADATA_FIELDS = [
+  "tools",
+  "extensions",
+  "rules",
+  "runtimeFlags",
+  "environment",
+];
+
+/** Reject adapters that would publish missing configuration metadata as empty lists. */
+export function assertConfigurationMetadata(adapter, label = "adapter") {
+  if (!adapter.configuration || typeof adapter.configuration !== "object") {
+    throw Error(`${label}: configuration metadata is required`);
+  }
+  for (const field of CONFIGURATION_METADATA_FIELDS) {
+    const value = adapter.configuration[field];
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+      throw Error(`${label}: configuration.${field} must be an array of strings`);
+    }
+  }
+}
+
 /** Reject adapters that cannot produce the canonical public identity. */
 export function assertNormalizedIdentity(adapter, label = "adapter") {
+  assertConfigurationMetadata(adapter, label);
   const missing = IDENTITY_FIELDS.filter(
     (key) => typeof adapter[key] !== "string" || !adapter[key],
   );

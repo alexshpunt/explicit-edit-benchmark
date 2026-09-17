@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { safeConfiguration, rehashConfiguration } from "../../scripts/normalized-run.mjs";
+import {
+  assertConfigurationMetadata,
+  safeConfiguration,
+  rehashConfiguration,
+} from "../../scripts/normalized-run.mjs";
 import { assertDeclaredHarnessVersions } from "../../scripts/benchmark-ingestion.mjs";
 
 const adapter = {
@@ -25,6 +29,22 @@ const adapter = {
     environment: [],
   },
 };
+
+await test("configuration metadata is required before a run can be published", () => {
+  assert.doesNotThrow(() => assertConfigurationMetadata(adapter));
+  assert.throws(
+    () => assertConfigurationMetadata({ ...adapter, configuration: undefined }),
+    /configuration metadata/u,
+  );
+  assert.throws(
+    () =>
+      assertConfigurationMetadata({
+        ...adapter,
+        configuration: { ...adapter.configuration, tools: undefined },
+      }),
+    /configuration.tools/u,
+  );
+});
 
 await test("a published configuration can be re-hashed after a documented rename", () => {
   const row = safeConfiguration(adapter);
