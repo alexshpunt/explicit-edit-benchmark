@@ -35,7 +35,7 @@ function requireMaintainerAutomation() {
     process.env.OFFICIAL_RELEASE_AUTOMATION !== "1" ||
     process.env.GITHUB_ACTIONS !== "true" ||
     process.env.GITHUB_REPOSITORY !== RELEASE_REPOSITORY ||
-    process.env.GITHUB_EVENT_NAME !== "workflow_dispatch"
+    !["push", "workflow_dispatch"].includes(process.env.GITHUB_EVENT_NAME ?? "")
   )
     throw Error("Official workflow releases run only through the maintainer release workflow");
 }
