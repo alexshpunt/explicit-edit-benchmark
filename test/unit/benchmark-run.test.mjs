@@ -64,6 +64,8 @@ test("the reusable workflow keeps partial and full execution paths distinct", as
   assert.ok(workflow.includes("EXPLICIT_EDIT_SMOKE_PASSED=1 npm run benchmark -- raw-run"));
   assert.ok(workflow.includes("--oracle-recoveries 5"));
   assert.ok(workflow.includes('--concurrency "$CONCURRENCY"'));
+  assert.ok(workflow.includes("value.job_workflow_sha"));
+  assert.ok(workflow.includes("value.job_workflow_ref"));
 });
 
 test("full official dispatch omits task and forwards full-run concurrency", async () => {

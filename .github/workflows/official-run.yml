@@ -75,14 +75,18 @@ jobs:
             --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=explicit-edit-official-run")
           token=$(jq --raw-output .value <<<"$response")
-          workflow_ref=$(TOKEN="$token" node -e '
+          claims=$(TOKEN="$token" node -e '
             const payload = process.env.TOKEN.split(".")[1];
-            const claims = JSON.parse(Buffer.from(payload, "base64url"));
-            process.stdout.write(claims.job_workflow_ref ?? "");
+            const value = JSON.parse(Buffer.from(payload, "base64url"));
+            process.stdout.write(JSON.stringify({
+              ref: value.job_workflow_ref ?? "",
+              sha: value.job_workflow_sha ?? "",
+            }));
           ')
+          workflow_ref=$(jq --raw-output .ref <<<"$claims")
+          sha=$(jq --raw-output .sha <<<"$claims")
           prefix="alexshpunt/explicit-edit-benchmark/.github/workflows/official-run.yml@"
-          sha="${workflow_ref#"$prefix"}"
-          test "$workflow_ref" = "$prefix$sha"
+          test "${workflow_ref#"$prefix"}" != "$workflow_ref"
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
