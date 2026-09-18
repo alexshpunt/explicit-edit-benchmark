@@ -7,7 +7,6 @@ import { parseArgs } from "node:util";
 
 const SHA = /^[0-9a-f]{40}$/u;
 const WORKFLOW = ".github/workflows/official-run.yml";
-const PI_AGENT_IDE_WORKFLOW = ".github/workflows/benchmark.yml";
 const POLICY = "policies/official-runs/v1.json";
 const RELEASE_REPOSITORY = "alexshpunt/explicit-edit-benchmark";
 
@@ -68,27 +67,6 @@ export function pinCallerTemplate(text, workflowSha, policySha) {
   return complete;
 }
 
-export function pinPiAgentIdeWorkflow(text, workflowSha, policySha) {
-  let workflowCount = 0;
-  const updated = text.replace(
-    /(official-(?:run|submit)\.yml@|signer_sha:\s*)[0-9a-f]{40}/gu,
-    (match, prefix) => {
-      workflowCount += 1;
-      return `${prefix}${workflowSha}`;
-    },
-  );
-  if (workflowCount !== 3)
-    throw Error(`Unexpected Pi Agent IDE workflow pin layout: ${workflowCount}`);
-
-  let policyCount = 0;
-  const complete = updated.replace(/(policy_sha:\s*)[0-9a-f]{40}/gu, (match, prefix) => {
-    policyCount += 1;
-    return `${prefix}${policySha}`;
-  });
-  if (policyCount !== 2) throw Error(`Unexpected Pi Agent IDE policy pin layout: ${policyCount}`);
-  return complete;
-}
-
 /**
  * Maintainer-only release transaction. It derives every pin from committed Git state.
  */
@@ -96,16 +74,14 @@ export async function releaseOfficialWorkflow({
   root = process.cwd(),
   templateDirectory,
   callerDirectories = [],
-  piAgentIdeDirectories = [],
 }) {
   requireMaintainerAutomation();
   root = path.resolve(root);
   templateDirectory = path.resolve(templateDirectory);
   callerDirectories = callerDirectories.map((directory) => path.resolve(directory));
-  piAgentIdeDirectories = piAgentIdeDirectories.map((directory) => path.resolve(directory));
   requireClean(root);
   requireClean(templateDirectory);
-  for (const directory of [...callerDirectories, ...piAgentIdeDirectories]) requireClean(directory);
+  for (const directory of callerDirectories) requireClean(directory);
   if (git(root, "branch", "--show-current") === "main")
     throw Error("Create a release branch before updating official workflow pins");
 
@@ -144,21 +120,7 @@ export async function releaseOfficialWorkflow({
     callerShas.push(commit(directory, "Pin official benchmark workflow release", [WORKFLOW]));
   }
 
-  const piAgentIdeShas = [];
-  for (const directory of piAgentIdeDirectories) {
-    const workflowFile = path.join(directory, PI_AGENT_IDE_WORKFLOW);
-    await writeFile(
-      workflowFile,
-      pinPiAgentIdeWorkflow(await readFile(workflowFile, "utf8"), runnerSha, policySha),
-    );
-    piAgentIdeShas.push(
-      commit(directory, "Pin official benchmark workflow release [skip ci]", [
-        PI_AGENT_IDE_WORKFLOW,
-      ]),
-    );
-  }
-
-  return { workflowSha: runnerSha, policySha, templateSha, callerShas, piAgentIdeShas };
+  return { workflowSha: runnerSha, policySha, templateSha, callerShas };
 }
 
 async function main() {
@@ -167,17 +129,15 @@ async function main() {
     options: {
       "template-directory": { type: "string" },
       "caller-directory": { type: "string", multiple: true, default: [] },
-      "pi-agent-ide-directory": { type: "string", multiple: true, default: [] },
     },
   });
   if (!values["template-directory"])
     throw Error(
-      "Usage: release-official-workflow --template-directory PATH [--caller-directory PATH ...] [--pi-agent-ide-directory PATH ...]",
+      "Usage: release-official-workflow --template-directory PATH [--caller-directory PATH ...]",
     );
   const result = await releaseOfficialWorkflow({
     templateDirectory: values["template-directory"],
     callerDirectories: values["caller-directory"],
-    piAgentIdeDirectories: values["pi-agent-ide-directory"],
   });
   console.log(JSON.stringify(result, null, 2));
 }

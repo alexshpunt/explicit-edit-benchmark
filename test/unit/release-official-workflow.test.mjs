@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import {
-  pinCallerTemplate,
-  pinPiAgentIdeWorkflow,
-} from "../../scripts/release-official-workflow.mjs";
+import { pinCallerTemplate } from "../../scripts/release-official-workflow.mjs";
 
 const old = "a".repeat(40);
 const current = "b".repeat(40);
@@ -15,14 +12,6 @@ test("one derived workflow SHA updates both caller pins", () => {
   assert.equal(
     pinCallerTemplate(template, current, policy),
     `uses: owner/repo/.github/workflows/official-run.yml@${current}\npolicy_sha: ${policy}\nsigner_sha: ${current}\nuses: owner/repo/.github/workflows/official-submit.yml@${policy}\npolicy_sha: ${policy}\n`,
-  );
-});
-
-test("one release updates every Pi Agent IDE workflow pin", () => {
-  const workflow = `uses: owner/repo/.github/workflows/official-run.yml@${old}\npolicy_sha: ${old}\nuses: owner/repo/.github/workflows/official-submit.yml@${old}\nsigner_sha: ${old}\npolicy_sha: ${old}\n`;
-  assert.equal(
-    pinPiAgentIdeWorkflow(workflow, current, policy),
-    `uses: owner/repo/.github/workflows/official-run.yml@${current}\npolicy_sha: ${policy}\nuses: owner/repo/.github/workflows/official-submit.yml@${current}\nsigner_sha: ${current}\npolicy_sha: ${policy}\n`,
   );
 });
 
