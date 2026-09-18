@@ -262,7 +262,6 @@ async function writeHarnessBadges(outputDirectory, groups) {
         label: "Explicit Edit Benchmark",
         message: score == null ? "no data" : `${(score * 100).toFixed(1)}%`,
         color: badgeColor(score),
-        style: "flat-square",
         cacheSeconds: 300,
       }) + "\n";
   }
