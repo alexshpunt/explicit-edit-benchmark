@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
 import { pinCallerTemplate } from "../../scripts/release-official-workflow.mjs";
 
@@ -17,6 +19,14 @@ test("one derived workflow SHA updates both caller pins", () => {
 
 test("release pinning fails when the caller template layout drifts", () => {
   assert.throws(() => pinCallerTemplate(`signer_sha: ${old}\n`, current, policy), /pin layout/);
+});
+
+test("official releases publish one mutable workflow reference", async () => {
+  const workflow = await readFile(
+    path.join(import.meta.dirname, "../../.github/workflows/release-official-workflow.yml"),
+    "utf8",
+  );
+  assert.match(workflow, /RUNNER_SHA:refs\/heads\/official/);
 });
 
 test("ordinary users cannot invoke the maintainer release command", () => {

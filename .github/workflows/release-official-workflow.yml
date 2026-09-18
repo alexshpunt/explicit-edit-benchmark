@@ -79,6 +79,7 @@ jobs:
           git -C benchmark switch -c "$RELEASE_BRANCH"
           git -C template switch -c "$RELEASE_BRANCH"
           git -C caller switch -c "$RELEASE_BRANCH"
+          echo "RUNNER_SHA=$(git -C benchmark rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Compute and commit every pin
         working-directory: benchmark
@@ -107,6 +108,9 @@ jobs:
           done
           echo "Benchmark policy release did not merge within ten minutes" >&2
           exit 1
+
+      - name: Publish current official workflow reference
+        run: git -C benchmark push origin "$RUNNER_SHA:refs/heads/official" --force
 
       - name: Merge caller pin releases
         env:
