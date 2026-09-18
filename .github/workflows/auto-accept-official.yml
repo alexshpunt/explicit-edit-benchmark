@@ -175,3 +175,11 @@ jobs:
             "- dry run: " + ((.dryRun // false) | tostring) + "\n" +
             "- Dataset commit: " + (.commitOid // "none")
           ' "$result" >> "$GITHUB_STEP_SUMMARY"
+          rejected=$(jq '.rejected | length' "$result")
+          close_failures=$(jq '[.accepted[] | select(.candidateClosed == false)] | length' "$result")
+          if (( rejected > 0 )); then
+            echo "::warning::$rejected official candidate(s) were rejected; see the acceptance summary."
+          fi
+          if (( close_failures > 0 )); then
+            echo "::warning::$close_failures accepted candidate(s) could not be closed; contributor delivery will retry."
+          fi
