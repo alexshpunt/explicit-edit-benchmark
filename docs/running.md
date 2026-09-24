@@ -257,7 +257,7 @@ A finished queue does not mean every task passed. Read `summary.json` before you
 | `pi-lector`                       | `@danypops/pi-lector@0.17.2`                 | Needs its Lector daemon            |
 | `personal-pi-extensions-opencode` | `@trim21/personal-pi-extensions@0.1.556`     | Ready; file tools module only      |
 | `pi-openai-codex-compat`          | `pi-openai-codex-compat@0.0.9`               | Ready; legacy peer resolution      |
-| `pi-better-edit`                  | `pi-better-edit@1.7.0`                       | Ready                              |
+| `pi-better-edit`                  | `pi-better-edit@2.2.0`                       | Ready                              |
 | `d3ara1n-pi-hashline-edit`        | `@d3ara1n/pi-hashline-edit@0.5.0`            | Ready                              |
 | `pi-semantic-edit`                | `pi-semantic-edit@0.4.0`                     | Ready                              |
 | `pi-hashline-edit`                | `pi-hashline-edit@0.8.3`                     | Ready                              |

@@ -88,10 +88,10 @@ export const PI_EXTENSION_ARMS = {
   },
   "pi-better-edit": {
     package: "pi-better-edit",
-    version: "1.7.0",
-    entries: ["index.ts"],
+    version: "2.1.0",
+    entries: ["dist/index.js"],
     tools: ["read", "bash", "edit", "write", "read_skill", "undo_last_edit"],
-    rules: ["three-character stable anchors", "session-served state validation"],
+    rules: ["three-character content-addressed anchors", "session-served state validation"],
   },
   "d3ara1n-pi-hashline-edit": {
     package: "@d3ara1n/pi-hashline-edit",
