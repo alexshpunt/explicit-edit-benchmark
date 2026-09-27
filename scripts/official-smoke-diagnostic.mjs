@@ -24,7 +24,10 @@ async function stderrPrefix(file) {
 }
 
 function failureKind(result, stderr, exactMatch) {
-  const evidence = `${stderr}\n${typeof result.error === "string" ? result.error : ""}`;
+  // Pi reports provider errors inside message_end events, not necessarily on stderr.
+  // Inspect them in memory but expose only one fixed category.
+  const agentErrors = Array.isArray(result.errors) ? JSON.stringify(result.errors) : "";
+  const evidence = `${agentErrors.slice(0, 32 * 1024)}\n${stderr.slice(0, 16 * 1024)}\n${typeof result.error === "string" ? result.error.slice(0, 16 * 1024) : ""}`;
   if (result.timedOut) return "timeout";
   if (/\b(401|403|unauthorized|forbidden|expired token|invalid api key)\b/i.test(evidence))
     return "authentication";

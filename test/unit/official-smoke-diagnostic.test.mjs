@@ -49,6 +49,35 @@ test("reports auth failure without exposing stderr, paths or error text", async 
   }
 });
 
+test("classifies a Pi message_end provider error without leaking its contents", async () => {
+  const root = await fixture(
+    {
+      exitCode: 0,
+      timedOut: false,
+      modelRounds: 1,
+      toolCalls: 0,
+      errors: [
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "error",
+            errorMessage: "401 unauthorized: secret-provider-token",
+          },
+        },
+      ],
+    },
+    { exactMatch: false },
+  );
+  try {
+    const report = await officialSmokeDiagnostic(root, "pi-agent-ide");
+    assert.equal(report.kind, "authentication");
+    assert.equal(report.agentErrors, 1);
+    assert.equal(JSON.stringify(report).includes("secret-provider-token"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("classifies a missing runtime module without copying its private path", async () => {
   const root = await fixture(
     { exitCode: 1, timedOut: false, modelRounds: 0 },

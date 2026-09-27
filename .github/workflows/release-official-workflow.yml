@@ -14,6 +14,7 @@ name: Release official workflow
       - scripts/execution-plan-cli.mjs
       - scripts/model-registry.mjs
       - scripts/normalized-run.mjs
+      - scripts/official-smoke-diagnostic.mjs
       - scripts/official-result.mjs
       - scripts/official-verifier.mjs
       - scripts/prepare-benchmark.mjs
