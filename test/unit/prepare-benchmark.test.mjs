@@ -109,6 +109,7 @@ await test("native adapters carry explicit model and reasoning through recovery"
     assert.ok(JSON.stringify(adapter.args).includes("provider/model-example"));
     assert.ok(JSON.stringify(adapter.args).includes("medium"));
     assert.equal(adapter.ready, false);
+    assert.equal(adapter.env.SHELL, harness === "pi-agent-ide" ? "/bin/bash" : undefined);
     assert.deepEqual(adapter.seedFiles, {});
     assert.ok(
       JSON.stringify(recoveryAdapter(adapter, true).args).includes("provider/model-example"),

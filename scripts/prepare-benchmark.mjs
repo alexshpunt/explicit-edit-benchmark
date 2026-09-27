@@ -320,7 +320,11 @@ export function makeAdapter({
           "--",
           "{prompt}",
         ],
-        env: { ...env, PI_CODING_AGENT_DIR: "/state/pi" },
+        env: {
+          ...env,
+          PI_CODING_AGENT_DIR: "/state/pi",
+          ...(harness === "pi-agent-ide" ? { SHELL: "/bin/bash" } : {}),
+        },
         seedFiles: {
           ...auth("pi/auth.json"),
           ...(modelFile ? { "pi/models.json": path.resolve(modelFile) } : {}),
