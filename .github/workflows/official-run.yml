@@ -220,14 +220,20 @@ jobs:
               --concurrency 1 \
               --timeout-seconds 180 \
               --run-id "$smoke_run_id"
-            SMOKE_SUMMARY="results/$smoke_run_id/summary.json" \
+            SMOKE_RUN_ID="$smoke_run_id" SMOKE_SUMMARY="results/$smoke_run_id/summary.json" \
               node --input-type=module <<'NODE'
           import { readFile } from "node:fs/promises";
+          import { officialSmokeDiagnostic } from "./scripts/official-smoke-diagnostic.mjs";
 
           const summary = JSON.parse(await readFile(process.env.SMOKE_SUMMARY, "utf8"));
           const failed = Object.entries(summary.profiles ?? {})
             .filter(([, profile]) => profile.trials !== 1 || profile.passed !== 1)
             .map(([id]) => id);
+          for (const profile of failed) {
+            const diagnostic = await officialSmokeDiagnostic(`results/${process.env.SMOKE_RUN_ID}`, profile)
+              .catch(() => ({ kind: "diagnostic-unavailable" }));
+            console.log(`Smoke diagnostic: ${JSON.stringify(diagnostic)}`);
+          }
           if (failed.length > 0) throw new Error(`Smoke failed for: ${failed.join(", ")}`);
           NODE
             echo "Running full canonical task set with concurrency $CONCURRENCY"
