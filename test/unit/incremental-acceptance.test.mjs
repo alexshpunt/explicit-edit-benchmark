@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createAggregateState } from "../../scripts/aggregate-state.mjs";
-import { compactExplorerSummary } from "../../scripts/build-public-dataset.mjs";
+import {
+  compactExplorerRunDetail,
+  compactExplorerSummary,
+} from "../../scripts/build-public-dataset.mjs";
 import { verifyIncrementalDatasetState } from "../../scripts/huggingface-contributions.mjs";
 import {
   acceptOfficialCandidates,
@@ -154,12 +157,15 @@ test("Explorer summary keeps UI facts and removes private or unused evidence", (
       rounds: [
         { runId: "run-1", roundId: "round-1", trialId: "trial-1", seconds: 1, stdout: "no" },
       ],
-      toolCalls: [{ runId: "run-1", roundId: "round-1", tool: "read", arguments: "no" }],
+      toolCalls: [
+        { runId: "run-1", roundId: "round-1", tool: "read", arguments: "no" },
+        { runId: "run-1", roundId: "round-1", tool: "read", arguments: "still no" },
+      ],
     },
   );
 
   assert.deepEqual(summary, {
-    schemaVersion: 1,
+    schemaVersion: 2,
     views: { schemaVersion: 1, leaderboard: [] },
     profiles: [{ runId: "run-1", profileId: "profile-1", modelFamily: "model" }],
     trials: [
@@ -173,6 +179,27 @@ test("Explorer summary keeps UI facts and removes private or unused evidence", (
         finalExactPassed: true,
       },
     ],
+    rounds: [{ runId: "run-1", roundId: "round-1", trialId: "trial-1", seconds: 1 }],
+    toolCounts: [{ runId: "run-1", roundId: "round-1", tool: "read", calls: 2 }],
+  });
+});
+
+test("Explorer run detail contains one run and no unused fields", () => {
+  const detail = compactExplorerRunDetail("run-1", {
+    profiles: [
+      { runId: "run-1", profileId: "profile-1", modelFamily: "model", secret: "no" },
+      { runId: "run-2", profileId: "profile-2" },
+    ],
+    trials: [{ runId: "run-1", trialId: "trial-1", taskId: "task", output: "no" }],
+    rounds: [{ runId: "run-1", roundId: "round-1", trialId: "trial-1", seconds: 1 }],
+    toolCalls: [{ runId: "run-1", roundId: "round-1", tool: "read", arguments: "no" }],
+  });
+
+  assert.deepEqual(detail, {
+    schemaVersion: 1,
+    runId: "run-1",
+    profiles: [{ runId: "run-1", profileId: "profile-1", modelFamily: "model" }],
+    trials: [{ runId: "run-1", trialId: "trial-1", taskId: "task" }],
     rounds: [{ runId: "run-1", roundId: "round-1", trialId: "trial-1", seconds: 1 }],
     toolCalls: [{ runId: "run-1", roundId: "round-1", tool: "read" }],
   });

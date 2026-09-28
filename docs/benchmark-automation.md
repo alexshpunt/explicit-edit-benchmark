@@ -148,7 +148,7 @@ npm run benchmark -- dataset --output public-dataset \
   accepted/run-a/normalized accepted/run-b/normalized
 ```
 
-Every row gains a `runId`. `dataset-index.json` records the source manifest hashes, contracts, task-set hashes, completeness, counts, and the hash of every compressed shard. Building the dataset neither uploads it nor reads a Hugging Face token. An acceptance build also writes `leaderboard.json`, `views.json`, and `data/explorer-summary.json.gz` from the same aggregation module. `views.json` holds the precomputed group, task-family, tool-usage, and drill-down views. The Explorer summary contains only the public UI fields it needs, so its deployment reads one checked file instead of downloading every historical shard.
+Every row gains a `runId`. `dataset-index.json` records the source manifest hashes, contracts, task-set hashes, completeness, counts, and the hash of every compressed shard. Building the dataset neither uploads it nor reads a Hugging Face token. An acceptance build also writes `leaderboard.json`, `views.json`, and `data/explorer-summary.json.gz` from the same aggregation module. `views.json` holds the precomputed group, task-family, tool-usage, and drill-down views. The Explorer summary contains only the public UI fields needed for ordinary interaction, so its deployment reads one checked file instead of downloading every historical shard. Acceptance also writes one content-addressed detail package per run. The browser fetches and verifies that package only when the run is opened.
 
 Useful Hugging Face references: [Datasets](https://huggingface.co/docs/hub/datasets-overview), [Data Studio](https://huggingface.co/docs/hub/data-studio), and [storage limits](https://huggingface.co/docs/hub/storage-limits).
 
