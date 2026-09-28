@@ -267,8 +267,8 @@ jobs:
             "- dry run: " + ((.dryRun // false) | tostring) + "\n" +
             "- Dataset commit: " + (.commitOid // "none")
           ' "$result" >> "$GITHUB_STEP_SUMMARY"
-          rejected=$(jq '.rejected | length' "$result")
-          close_failures=$(jq '[.accepted[] | select(.candidateClosed == false)] | length' "$result")
+          rejected=$(jq '(.rejected // []) | length' "$result")
+          close_failures=$(jq '[(.accepted // [])[] | select(.candidateClosed == false)] | length' "$result")
           if (( rejected > 0 )); then
             echo "::warning::$rejected official candidate(s) were rejected; see the acceptance summary."
           fi
