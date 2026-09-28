@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createAggregateState } from "../../scripts/aggregate-state.mjs";
+import { compactExplorerSummary } from "../../scripts/build-public-dataset.mjs";
 import { verifyIncrementalDatasetState } from "../../scripts/huggingface-contributions.mjs";
 import {
   acceptOfficialCandidates,
@@ -133,6 +134,50 @@ test("already accepted official candidates receive a receipt and are closed", as
   }
 });
 
+test("Explorer summary keeps UI facts and removes private or unused evidence", () => {
+  const summary = compactExplorerSummary(
+    { schemaVersion: 1, leaderboard: [] },
+    {
+      profiles: [{ runId: "run-1", profileId: "profile-1", modelFamily: "model", secret: "no" }],
+      trials: [
+        {
+          runId: "run-1",
+          trialId: "trial-1",
+          profileId: "profile-1",
+          taskId: "task",
+          rounds: 1,
+          firstExactPassed: true,
+          finalExactPassed: true,
+          output: "no",
+        },
+      ],
+      rounds: [
+        { runId: "run-1", roundId: "round-1", trialId: "trial-1", seconds: 1, stdout: "no" },
+      ],
+      toolCalls: [{ runId: "run-1", roundId: "round-1", tool: "read", arguments: "no" }],
+    },
+  );
+
+  assert.deepEqual(summary, {
+    schemaVersion: 1,
+    views: { schemaVersion: 1, leaderboard: [] },
+    profiles: [{ runId: "run-1", profileId: "profile-1", modelFamily: "model" }],
+    trials: [
+      {
+        runId: "run-1",
+        trialId: "trial-1",
+        profileId: "profile-1",
+        taskId: "task",
+        rounds: 1,
+        firstExactPassed: true,
+        finalExactPassed: true,
+      },
+    ],
+    rounds: [{ runId: "run-1", roundId: "round-1", trialId: "trial-1", seconds: 1 }],
+    toolCalls: [{ runId: "run-1", roundId: "round-1", tool: "read" }],
+  });
+});
+
 test("incremental commit contains only new source, shards, and compact views", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "incremental-commit-"));
   try {
@@ -146,11 +191,13 @@ test("incremental commit contains only new source, shards, and compact views", a
       writeFile(path.join(root, "source", "accepted", "new-submission", "manifest.json"), "{}\n"),
       writeFile(path.join(root, "data", "trials", "new-run.jsonl.gz"), "new"),
       writeFile(path.join(root, "views.json"), "{}\n"),
+      writeFile(path.join(root, "data", "explorer-summary.json.gz"), "summary"),
     ]);
     const operations = await incrementalCommitOperations(root);
     const paths = operations.map((item) => item.path).sort();
     assert.deepEqual(paths, [
       "aggregate-state.json",
+      "data/explorer-summary.json.gz",
       "data/trials/new-run.jsonl.gz",
       "source/accepted/new-submission/manifest.json",
       "source/index.json",

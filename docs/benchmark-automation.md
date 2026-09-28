@@ -148,13 +148,13 @@ npm run benchmark -- dataset --output public-dataset \
   accepted/run-a/normalized accepted/run-b/normalized
 ```
 
-Every row gains a `runId`. `dataset-index.json` records the source manifest hashes, contracts, task-set hashes, completeness, counts, and the hash of every compressed shard. Building the dataset neither uploads it nor reads a Hugging Face token. An acceptance build also writes `leaderboard.json` and `views.json` from the same aggregation module. The second file holds the precomputed group, task-family, tool-usage, and drill-down views.
+Every row gains a `runId`. `dataset-index.json` records the source manifest hashes, contracts, task-set hashes, completeness, counts, and the hash of every compressed shard. Building the dataset neither uploads it nor reads a Hugging Face token. An acceptance build also writes `leaderboard.json`, `views.json`, and `data/explorer-summary.json.gz` from the same aggregation module. `views.json` holds the precomputed group, task-family, tool-usage, and drill-down views. The Explorer summary contains only the public UI fields it needs, so its deployment reads one checked file instead of downloading every historical shard.
 
 Useful Hugging Face references: [Datasets](https://huggingface.co/docs/hub/datasets-overview), [Data Studio](https://huggingface.co/docs/hub/data-studio), and [storage limits](https://huggingface.co/docs/hub/storage-limits).
 
 ## Hugging Face contribution flow
 
-The Hugging Face dataset `main` branch is the only durable home for accepted observations. It stores accepted bundles under `source/`. The compressed tables, dataset card, `leaderboard.json`, `views.json`, `summary.json`, and `dataset-index.json` are generated views. Acceptance calculates Score and every ranking view before publication.
+The Hugging Face dataset `main` branch is the only durable home for accepted observations. It stores accepted bundles under `source/`. The compressed tables, dataset card, `leaderboard.json`, `views.json`, `data/explorer-summary.json.gz`, `summary.json`, and `dataset-index.json` are generated views. Acceptance calculates Score and every ranking view before publication.
 
 Contributors log in with their own Hugging Face token and open a dataset pull request:
 

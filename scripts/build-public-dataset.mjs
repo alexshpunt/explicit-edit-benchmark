@@ -580,6 +580,58 @@ export async function officialRunMetadata(storeDirectory, runId) {
   return null;
 }
 
+const EXPLORER_FIELDS = {
+  profiles: [
+    "runId",
+    "profileId",
+    "agentFamily",
+    "agentVersion",
+    "harnessFamily",
+    "harnessId",
+    "harnessVersion",
+    "modelFamily",
+    "modelId",
+    "model",
+    "modelVersion",
+    "provider",
+    "configurationHash",
+    "transport",
+    "harnessKind",
+    "adapterVersion",
+    "configurationLabels",
+    "thinking",
+  ],
+  trials: [
+    "runId",
+    "trialId",
+    "profileId",
+    "taskId",
+    "rounds",
+    "firstExactPassed",
+    "finalExactPassed",
+  ],
+  rounds: ["runId", "roundId", "trialId", "seconds", "costUsd", "totalTokens"],
+  toolCalls: ["runId", "roundId", "tool"],
+};
+
+/** Build the public, UI-only evidence package consumed by Benchmark Explorer. */
+export function compactExplorerSummary(views, evidence) {
+  const select = (kind, row) =>
+    Object.fromEntries(
+      EXPLORER_FIELDS[kind]
+        .filter((field) => row[field] !== undefined)
+        .map((field) => [field, row[field]]),
+    );
+  return {
+    schemaVersion: 1,
+    views,
+    profiles: evidence.profiles.map((row) => select("profiles", row)),
+    trials: evidence.trials.map((row) => select("trials", row)),
+    rounds: evidence.rounds.map((row) => select("rounds", row)),
+    toolCalls: evidence.toolCalls.map((row) => select("toolCalls", row)),
+  };
+}
+
 /** Rebuild only compact derived files from an already verified aggregate state. */
 export async function buildDerivedDatasetFromAggregateState(
   outputDirectory,
@@ -697,6 +749,16 @@ export async function buildDerivedDatasetFromAggregateState(
   const viewsContent = JSON.stringify(views) + "\n";
   await writeFile(path.join(outputDirectory, "views.json"), viewsContent);
   index.views = fileRecord("views.json", viewsContent);
+  const explorerSummary = compactExplorerSummary(views, evidence);
+  const explorerSummaryCompressed = gzipSync(JSON.stringify(explorerSummary), {
+    level: 9,
+    mtime: 0,
+  });
+  await writeFile(
+    path.join(outputDirectory, "data", "explorer-summary.json.gz"),
+    explorerSummaryCompressed,
+  );
+  index.explorerSummary = fileRecord("data/explorer-summary.json.gz", explorerSummaryCompressed);
   const badges = await writeHarnessBadges(outputDirectory, badgeGroups);
   if (badges) index.badges = badges;
   const leaderboardContent = JSON.stringify(leaderboard, null, 2) + "\n";
@@ -954,6 +1016,16 @@ export async function buildPublicDatasetFromStore(
     bytes: Buffer.byteLength(viewsContent),
     sha256: createHash("sha256").update(viewsContent).digest("hex"),
   };
+  const explorerSummary = compactExplorerSummary(views, derivedEvidence);
+  const explorerSummaryCompressed = gzipSync(JSON.stringify(explorerSummary), {
+    level: 9,
+    mtime: 0,
+  });
+  await writeFile(
+    path.join(outputDirectory, "data", "explorer-summary.json.gz"),
+    explorerSummaryCompressed,
+  );
+  index.explorerSummary = fileRecord("data/explorer-summary.json.gz", explorerSummaryCompressed);
   const badges = await writeHarnessBadges(outputDirectory, badgeGroups);
   if (badges) index.badges = badges;
   const leaderboardContent = JSON.stringify(leaderboard, null, 2) + "\n";
