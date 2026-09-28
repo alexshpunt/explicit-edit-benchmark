@@ -63,7 +63,16 @@ export async function acceptCommunityCandidates({
       (isDeferredHubError(error) ? deferred : rejected).push(item);
     }
   }
-  return { dryRun, accepted, rejected, deferred };
+  const published = accepted.filter((item) => !item.duplicate && item.commitOid);
+  return {
+    changed: !dryRun && published.length > 0,
+    datasetRevision: published.at(-1)?.commitOid ?? accepted.at(-1)?.commitOid ?? null,
+    addedRuns: dryRun ? [] : published.map((item) => item.runId),
+    dryRun,
+    accepted,
+    rejected,
+    deferred,
+  };
 }
 
 async function main() {

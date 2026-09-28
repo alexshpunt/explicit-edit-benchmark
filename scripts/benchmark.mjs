@@ -150,6 +150,9 @@ async function accept(args) {
       );
     console.log(
       JSON.stringify({
+        changed: !dryRun && !result.duplicate && Boolean(result.commitOid),
+        datasetRevision: result.commitOid,
+        addedRuns: !dryRun && !result.duplicate && result.commitOid ? [result.runId] : [],
         runId: result.runId,
         commitOid: result.commitOid,
         candidateClosed: result.candidateClosed ?? null,

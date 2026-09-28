@@ -179,6 +179,48 @@ jobs:
           tail --lines=1 "$output" > "$result"
           jq --exit-status . "$result" > /dev/null
 
+      - name: Notify Explorer about a published Dataset revision
+        env:
+          EXPLORER_DISPATCH_TOKEN: ${{ secrets.EXPLORER_DISPATCH_TOKEN }}
+          EXPLORER_REPOSITORY: alexshpunt/benchmark-explorer
+        run: |
+          set -euo pipefail
+          official="$RUNNER_TEMP/acceptance-result.json"
+          community="$RUNNER_TEMP/community-result.json"
+          changed=false
+          revision=""
+          added='[]'
+          for result in "$official" "$community"; do
+            [[ -s "$result" ]] || continue
+            if [[ "$(jq --raw-output '.changed // false' "$result")" = "true" ]]; then
+              changed=true
+              revision=$(jq --raw-output '.datasetRevision // empty' "$result")
+              added=$(jq --compact-output --argjson prior "$added" \
+                '$prior + (.addedRuns // []) | unique' "$result")
+            fi
+          done
+          if [[ "$changed" != "true" ]]; then
+            echo "Dataset did not change; Explorer notification skipped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          test -n "$revision"
+          if [[ -z "$EXPLORER_DISPATCH_TOKEN" ]]; then
+            echo "::warning::Dataset $revision was published, but EXPLORER_DISPATCH_TOKEN is not configured."
+            echo "Explorer notification skipped for Dataset revision $revision." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          payload=$(jq --null-input --compact-output \
+            --arg revision "$revision" --argjson runs "$added" \
+            '{event_type:"dataset-updated",client_payload:{datasetRevision:$revision,addedRuns:$runs}}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $EXPLORER_DISPATCH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data "$payload" \
+            "https://api.github.com/repos/$EXPLORER_REPOSITORY/dispatches"
+          echo "Requested Explorer refresh for Dataset revision $revision." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Summarize community acceptance
         if: always() && steps.community.outcome != 'skipped'
         run: |

@@ -71,6 +71,9 @@ test("community batch accepts valid candidates and leaves invalid candidates for
       discussionAccessToken: "discussion-token",
     })),
   );
+  assert.equal(result.changed, true);
+  assert.equal(result.datasetRevision, "b".repeat(40));
+  assert.deepEqual(result.addedRuns, ["valid"]);
   assert.equal(result.accepted.length, 1);
   assert.equal(result.accepted[0].index, undefined);
   assert.deepEqual(

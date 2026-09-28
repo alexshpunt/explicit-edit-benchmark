@@ -194,3 +194,5 @@ Acceptance downloads current `main` and the candidate revision separately. It co
 Publication is one Hub commit whose `parentCommit` is the main commit it downloaded. If main moved during the build, Hugging Face rejects the commit. The command never retries against a new parent behind your back, so run it again and it will rebuild from the new main. The same operation rebuilds all accepted views and records their hashes in `dataset-index.json`. Those views are the ones this commit publishes; nothing downstream defines a Score of its own.
 
 The workflow uses the repository `HF_TOKEN` secret. Contributors never get that token.
+
+After a real Dataset change, acceptance sends a `dataset-updated` repository dispatch to `alexshpunt/benchmark-explorer`. Configure `EXPLORER_DISPATCH_TOKEN` as a repository secret with permission to dispatch events to that repository. Prefer a short-lived GitHub App token with only the required repository access. Dry runs and duplicate candidates do not send an event. If the secret is absent, publication still succeeds and the workflow records a warning so the Explorer's scheduled revision check can recover.

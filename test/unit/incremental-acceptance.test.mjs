@@ -115,6 +115,9 @@ test("already accepted official candidates receive a receipt and are closed", as
       close: async (...args) => closed.push(args),
     });
 
+    assert.equal(result.changed, false);
+    assert.equal(result.datasetRevision, parentCommit);
+    assert.deepEqual(result.addedRuns, []);
     assert.equal(result.commitOid, null);
     assert.equal(result.accepted[0].candidateClosed, true);
     assert.deepEqual(closed, [

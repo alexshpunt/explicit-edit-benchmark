@@ -438,7 +438,17 @@ export async function acceptOfficialCandidates({
         datasetCommit: parentCommit,
         close,
       });
-    return { parentCommit, commitOid: null, dryRun, accepted, rejected, deferred };
+    return {
+      changed: false,
+      datasetRevision: parentCommit,
+      addedRuns: [],
+      parentCommit,
+      commitOid: null,
+      dryRun,
+      accepted,
+      rejected,
+      deferred,
+    };
   }
   await mkdir(path.join(output, "source"), { recursive: true });
   const sourceContent = JSON.stringify(sourceIndex, null, 2) + "\n";
@@ -452,6 +462,9 @@ export async function acceptOfficialCandidates({
   const operations = await incrementalCommitOperations(output);
   if (dryRun)
     return {
+      changed: false,
+      datasetRevision: parentCommit,
+      addedRuns: accepted.filter((item) => !item.duplicate).map((item) => item.executionId),
       parentCommit,
       commitOid: null,
       dryRun: true,
@@ -477,7 +490,16 @@ export async function acceptOfficialCandidates({
     datasetCommit: commitOid,
     close,
   });
-  return { parentCommit, commitOid, accepted, rejected, deferred };
+  return {
+    changed: true,
+    datasetRevision: commitOid,
+    addedRuns: accepted.filter((item) => !item.duplicate).map((item) => item.executionId),
+    parentCommit,
+    commitOid,
+    accepted,
+    rejected,
+    deferred,
+  };
 }
 
 /** Rebuild every derived Dataset file from immutable canonical source and publish atomically. */
@@ -514,7 +536,15 @@ export async function rebuildOfficialDataset({
     outputDirectory,
     title: "Rebuild canonical Dataset views",
   });
-  return { parentCommit, commitOid, scoring: 2, exclusionPolicy: "benchmark-exclusions-v1" };
+  return {
+    changed: commitOid !== parentCommit,
+    datasetRevision: commitOid,
+    addedRuns: [],
+    parentCommit,
+    commitOid,
+    scoring: 2,
+    exclusionPolicy: "benchmark-exclusions-v1",
+  };
 }
 
 /** List open official candidate numbers without trusting their titles as verification. */
