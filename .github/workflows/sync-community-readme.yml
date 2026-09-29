@@ -22,7 +22,9 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: "24"
+      - run: npm ci
       - run: node scripts/sync-readme-community.mjs
+      - run: npm exec oxfmt --write README.md
       - name: Open or update the generated README pull request
         env:
           GH_TOKEN: ${{ github.token }}
