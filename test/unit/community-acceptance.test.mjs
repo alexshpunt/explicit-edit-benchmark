@@ -58,7 +58,7 @@ test("community acceptance downloads only one immutable candidate bundle", async
       isPullRequest: true,
       status: "open",
       title: `Contribute benchmark observation ${runId}`,
-      author: "alice",
+      author: { name: "alice", type: "user" },
       events: [{ type: "commit", data: { oid: candidateCommit } }],
     }),
   });

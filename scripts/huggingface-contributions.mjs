@@ -280,7 +280,7 @@ export async function downloadHuggingFaceCandidate({
       flag: "wx",
     });
   }
-  const author = discussion.author;
+  const author = discussion.author?.name ?? discussion.author;
   if (typeof author !== "string" || !SAFE_SEGMENT.test(author) || author === "deleted")
     throw Error("Candidate has no verifiable Hugging Face author");
   return {
