@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyHistoricalContributorAttribution,
   canonicalizeModelProviderRows,
   completeRunEvidence,
   datasetCommunityProjection,
@@ -137,6 +138,43 @@ test("task-family groups use slices from globally complete configurations", () =
 
   assert.equal(groups.harnessFamily.harness.score, 0.75);
   assert.equal(groups.harnessFamily.harness.completeConfigurationCount, 1);
+});
+
+test("historical attribution credits only runs backed by a confirmed Dataset PR", () => {
+  const runs = [
+    { runId: "confirmed", ownerId: "alice" },
+    { runId: "already-current", submittedBy: { accountId: "current" } },
+    { runId: "unknown", ownerId: "owner/repository" },
+  ];
+  const registry = {
+    confirmed: {
+      platform: "huggingface",
+      accountId: "alice",
+      profileUrl: "https://huggingface.co/alice",
+      submissionUrl: "https://huggingface.co/datasets/example/data/discussions/7",
+    },
+    "already-current": {
+      platform: "huggingface",
+      accountId: "historical",
+      profileUrl: "https://huggingface.co/historical",
+      submissionUrl: "https://huggingface.co/datasets/example/data/discussions/8",
+    },
+  };
+
+  assert.deepEqual(applyHistoricalContributorAttribution(runs, registry), [
+    {
+      runId: "confirmed",
+      ownerId: "alice",
+      submittedBy: {
+        platform: "huggingface",
+        accountId: "alice",
+        profileUrl: "https://huggingface.co/alice",
+      },
+      submissionUrl: "https://huggingface.co/datasets/example/data/discussions/7",
+    },
+    { runId: "already-current", submittedBy: { accountId: "current" } },
+    { runId: "unknown", ownerId: "owner/repository" },
+  ]);
 });
 
 test("community projection credits only confirmed people and lists every accepted harness", () => {

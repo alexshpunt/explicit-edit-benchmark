@@ -19,6 +19,9 @@ const TABLES = ["profiles", "configurations", "trials", "rounds", "tool-calls"];
 const DEFAULT_EXCLUSIONS = fileURLToPath(
   new URL("../policies/exclusions/v1.json", import.meta.url),
 );
+const DEFAULT_HISTORICAL_CONTRIBUTORS = fileURLToPath(
+  new URL("../policies/historical-contributors.json", import.meta.url),
+);
 
 function withRunId(content, runId) {
   return (
@@ -94,6 +97,21 @@ export function modelLeaderboard(groups = {}, leaderboardRows = []) {
       };
     })
     .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+}
+
+/** Add submitters that are confirmed by historical Hugging Face Dataset pull requests. */
+export function applyHistoricalContributorAttribution(runs, registry = {}) {
+  return runs.map((run) => {
+    if (run.submittedBy) return run;
+    const historical = registry[run.runId];
+    if (!historical) return run;
+    const { submissionUrl, ...submittedBy } = historical;
+    return { ...run, submittedBy, submissionUrl };
+  });
+}
+
+async function loadHistoricalContributorAttribution(file) {
+  return JSON.parse(await readFile(file, "utf8"));
 }
 
 /** Build stable contributor and harness tables from accepted run evidence. */
@@ -943,7 +961,10 @@ function fileRecord(filePath, content) {
 export async function buildPublicDatasetFromStore(
   outputDirectory,
   storeDirectory,
-  { exclusionRegistryFile = DEFAULT_EXCLUSIONS } = {},
+  {
+    exclusionRegistryFile = DEFAULT_EXCLUSIONS,
+    historicalContributorsFile = DEFAULT_HISTORICAL_CONTRIBUTORS,
+  } = {},
 ) {
   const store = path.resolve(storeDirectory);
   const sourceIndex = JSON.parse(await readFile(path.join(store, "index.json"), "utf8"));
@@ -1000,6 +1021,10 @@ export async function buildPublicDatasetFromStore(
         ...(official ? { official } : {}),
       };
     }),
+  );
+  index.runs = applyHistoricalContributorAttribution(
+    index.runs,
+    await loadHistoricalContributorAttribution(historicalContributorsFile),
   );
   const trialGroups = await Promise.all(
     index.runs.map(async (run) => ({
