@@ -39,7 +39,13 @@ There is room for more than this, too: longer and more involved edits are planne
 
 Thank you to everyone who shares benchmark observations. Your work makes this public comparison possible.
 
-_No confirmed contributor accounts have been published in the current Dataset projection yet._
+| Contributor                                                | Accepted runs | Configurations |
+| ---------------------------------------------------------- | ------------: | -------------: |
+| [@ashokkumards](https://huggingface.co/ashokkumards)       |             1 |              1 |
+| [@TreyThomasCodes](https://huggingface.co/TreyThomasCodes) |             7 |              7 |
+| [@user2221](https://huggingface.co/user2221)               |             5 |              5 |
+| [@xuankunv1](https://huggingface.co/xuankunv1)             |             4 |              4 |
+| [@Yugimob](https://huggingface.co/Yugimob)                 |            11 |             11 |
 
 ## Accepted harnesses
 
