@@ -24,6 +24,24 @@ Use **Auto-accept benchmark observations → Run workflow → dry_run** before c
 
 Temporary Hub failures are deferred. The next scheduled batch reads the current Dataset head and retries the unchanged candidate without model calls. Publishing uses a parent-checked atomic commit; a concurrent Dataset update therefore fails closed and is retried from the new head on the next batch. Submit-only recovery always reuses the retained signed artifact and existing candidate when available.
 
+### Local rebuild
+
+A local rebuild downloads the complete current Dataset before it builds or publishes anything. It keeps that snapshot under `~/.local/share/explicit-edit-benchmark/backups/` in a new directory named with the UTC timestamp and the Dataset commit prefix. Existing backups are never replaced. The final JSON result includes the exact `backupDirectory` path.
+
+Run it with the Hugging Face account already configured on the machine:
+
+```sh
+node scripts/official-acceptance-cli.mjs rebuild
+```
+
+Use a different durable backup root when needed:
+
+```sh
+node scripts/official-acceptance-cli.mjs rebuild --backup-root /mnt/benchmark-backups
+```
+
+`DATASET_BACKUP_ROOT` provides the same override for automation around the local CLI. Do not put this directory inside the repository. A snapshot is a full copy of the public Dataset and can be large.
+
 ### Operator runbook
 
 - **Disable imports:** set the GitHub repository variable `OFFICIAL_AUTO_ACCEPT_ENABLED=false`. Re-enable it with `true`, then dispatch the workflow once to drain the queue.

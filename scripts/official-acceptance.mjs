@@ -511,12 +511,42 @@ export async function acceptOfficialCandidates({
   };
 }
 
+/** Copy one complete Dataset snapshot into a new, timestamped local backup directory. */
+export async function preserveDatasetSnapshot(
+  snapshot,
+  backupRoot,
+  parentCommit,
+  now = new Date(),
+) {
+  const root = path.resolve(backupRoot);
+  await mkdir(root, { recursive: true });
+  const timestamp = now.toISOString().replace(/[:.]/gu, "-");
+  const baseName = `${timestamp}-${parentCommit.slice(0, 12)}`;
+  let backup;
+  for (let copyNumber = 1; ; copyNumber += 1) {
+    backup = path.join(root, copyNumber === 1 ? baseName : `${baseName}-${copyNumber}`);
+    try {
+      await mkdir(backup);
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+  }
+  for (const entry of await readdir(snapshot))
+    await cp(path.join(snapshot, entry), path.join(backup, entry), {
+      recursive: true,
+      dereference: true,
+    });
+  return backup;
+}
+
 /** Rebuild every derived Dataset file from immutable canonical source and publish atomically. */
 export async function rebuildOfficialDataset({
   repository,
   accessToken,
   workspaceDirectory,
   backupDirectory,
+  backupRootDirectory,
   hub = defaultHub,
 }) {
   if (!REPOSITORY.test(repository ?? "")) throw Error("Dataset repository must be owner/name");
@@ -533,9 +563,13 @@ export async function rebuildOfficialDataset({
     accessToken: token,
     cacheDir: path.join(workspace, "cache"),
   });
-  if (backupDirectory) {
+  let preservedBackup = null;
+  if (backupRootDirectory) {
+    preservedBackup = await preserveDatasetSnapshot(snapshot, backupRootDirectory, parentCommit);
+  } else if (backupDirectory) {
     await rm(backupDirectory, { recursive: true, force: true });
     await cp(snapshot, backupDirectory, { recursive: true, dereference: true });
+    preservedBackup = path.resolve(backupDirectory);
   }
   const store = path.join(workspace, "store");
   const outputDirectory = path.join(workspace, "dataset");
@@ -551,6 +585,7 @@ export async function rebuildOfficialDataset({
     title: "Rebuild canonical Dataset views",
   });
   return {
+    backupDirectory: preservedBackup,
     changed: commitOid !== parentCommit,
     datasetRevision: commitOid,
     addedRuns: [],

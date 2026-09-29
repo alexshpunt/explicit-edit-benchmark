@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -6,6 +7,24 @@ import {
   listOpenOfficialCandidates,
   rebuildOfficialDataset,
 } from "./official-acceptance.mjs";
+
+/** Return the durable backup root used by local Dataset rebuilds. */
+export function localRebuildBackupRoot({
+  homeDirectory = os.homedir(),
+  environment = process.env,
+} = {}) {
+  return path.resolve(
+    environment.DATASET_BACKUP_ROOT ??
+      path.join(homeDirectory, ".local", "share", "explicit-edit-benchmark", "backups"),
+  );
+}
+
+/** Resolve the optional CLI override for the local rebuild backup root. */
+export function rebuildBackupRoot(args, options) {
+  if (args.length === 0) return localRebuildBackupRoot(options);
+  if (args.length === 2 && args[0] === "--backup-root" && args[1]) return path.resolve(args[1]);
+  throw Error("Usage: official-acceptance-cli.mjs rebuild [--backup-root DIRECTORY]");
+}
 
 /** Return a failure only when an explicitly requested candidate is rejected. */
 export function acceptanceExitCode(command, result) {
@@ -54,10 +73,13 @@ async function main() {
         ? path.join(process.env.RUNNER_TEMP, "official-rebuild")
         : path.resolve(".tmp", "official-rebuild"),
       backupDirectory: process.env.BACKUP_DIRECTORY,
+      backupRootDirectory: process.env.RUNNER_TEMP ? undefined : rebuildBackupRoot(args),
     });
     console.log(JSON.stringify(result));
   } else {
-    throw Error("Usage: official-acceptance-cli.mjs <accept CANDIDATE_NUMBER|poll|rebuild>");
+    throw Error(
+      "Usage: official-acceptance-cli.mjs <accept CANDIDATE_NUMBER|poll|rebuild [--backup-root DIRECTORY]>",
+    );
   }
 }
 
