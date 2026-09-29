@@ -516,6 +516,7 @@ export async function rebuildOfficialDataset({
   repository,
   accessToken,
   workspaceDirectory,
+  backupDirectory,
   hub = defaultHub,
 }) {
   if (!REPOSITORY.test(repository ?? "")) throw Error("Dataset repository must be owner/name");
@@ -532,6 +533,10 @@ export async function rebuildOfficialDataset({
     accessToken: token,
     cacheDir: path.join(workspace, "cache"),
   });
+  if (backupDirectory) {
+    await rm(backupDirectory, { recursive: true, force: true });
+    await cp(snapshot, backupDirectory, { recursive: true, dereference: true });
+  }
   const store = path.join(workspace, "store");
   const outputDirectory = path.join(workspace, "dataset");
   await cp(path.join(snapshot, "source"), store, { recursive: true, dereference: true });

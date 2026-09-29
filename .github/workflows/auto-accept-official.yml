@@ -137,6 +137,7 @@ jobs:
         id: acceptance
         if: steps.gate.outputs.enabled == 'true' && !inputs.oidc_check_only
         env:
+          BACKUP_DIRECTORY: ${{ runner.temp }}/dataset-backup
           DATASET_REPOSITORY: alexshpunt/explicit-edit-benchmark
           CANDIDATE: ${{ inputs.candidate }}
           HF_DISCUSSION_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -157,6 +158,15 @@ jobs:
           tail --lines=1 "$output" > "$result"
           jq --exit-status . "$result" > /dev/null
 
+      - name: Retain the pre-rebuild Dataset snapshot
+        if: always() && inputs.rebuild_only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: dataset-before-rebuild-${{ github.run_id }}
+          path: ${{ runner.temp }}/dataset-backup
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
       - name: Validate and accept community candidates
         id: community
         if: >-

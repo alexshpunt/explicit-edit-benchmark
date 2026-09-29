@@ -53,6 +53,7 @@ async function main() {
       workspaceDirectory: process.env.RUNNER_TEMP
         ? path.join(process.env.RUNNER_TEMP, "official-rebuild")
         : path.resolve(".tmp", "official-rebuild"),
+      backupDirectory: process.env.BACKUP_DIRECTORY,
     });
     console.log(JSON.stringify(result));
   } else {

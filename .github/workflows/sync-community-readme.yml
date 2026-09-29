@@ -40,9 +40,12 @@ jobs:
           git checkout -B "$branch"
           git add README.md
           git commit -m "docs: refresh community tables"
-          git push --force-with-lease origin "$branch"
-          gh pr view "$branch" >/dev/null 2>&1 || gh pr create \
-            --base main \
-            --head "$branch" \
-            --title "docs: refresh community tables" \
-            --body "Refreshes the generated contributor and accepted-harness tables from the published Dataset projection."
+          git push --force origin "$branch"
+          open_prs=$(gh pr list --head "$branch" --state open --json number --jq length)
+          if [[ "$open_prs" = "0" ]]; then
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "docs: refresh community tables" \
+              --body "Refreshes the generated contributor and accepted-harness tables from the published Dataset projection."
+          fi
