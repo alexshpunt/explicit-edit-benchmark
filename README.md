@@ -43,43 +43,44 @@ _No confirmed contributor accounts have been published in the current Dataset pr
 
 ## Accepted harnesses
 
-| Harness | Accepted runs | Configurations |
-| --- | ---: | ---: |
-| [`anchor-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Aanchor-edit%40latest) | 1 | 1 |
-| [`baseline-agent`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Abaseline-agent%40latest) | 6 | 5 |
-| [`bb`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Abb%40latest) | 7 | 7 |
-| [`codex-cli-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Acodex-cli-default%40latest) | 2 | 6 |
-| [`d3ara1n-pi-hashline-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Ad3ara1n-pi-hashline-edit%40latest) | 1 | 1 |
-| [`dsh-code`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Adsh-code%40latest) | 2 | 6 |
-| [`dsh-standard`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Adsh-standard%40latest) | 2 | 6 |
-| [`github-copilot-cli-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Agithub-copilot-cli-default%40latest) | 2 | 6 |
-| [`jerryan-pi-hashline-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Ajerryan-pi-hashline-edit%40latest) | 1 | 1 |
-| [`oh-my-pi-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Aoh-my-pi-default%40latest) | 3 | 7 |
-| [`opencode-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Aopencode-default%40latest) | 2 | 6 |
-| [`personal-pi-extensions-opencode`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Apersonal-pi-extensions-opencode%40latest) | 1 | 1 |
-| [`pi-agent-ide`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-agent-ide%40latest) | 26 | 28 |
-| [`pi-apply-patch`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-apply-patch%40latest) | 1 | 1 |
-| [`pi-better-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-better-edit%40latest) | 5 | 5 |
-| [`pi-better-read-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-better-read-edit%40latest) | 1 | 1 |
-| [`pi-codex-conversion`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-codex-conversion%40latest) | 1 | 1 |
-| [`pi-codex-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-codex-edit%40latest) | 1 | 1 |
-| [`pi-codex-minimal-tools`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-codex-minimal-tools%40latest) | 1 | 1 |
-| [`pi-codex-tools`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-codex-tools%40latest) | 1 | 1 |
-| [`pi-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-default%40latest) | 17 | 12 |
-| [`pi-edit-safe`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-edit-safe%40latest) | 1 | 1 |
-| [`pi-hash-anchored-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hash-anchored-edit%40latest) | 1 | 1 |
-| [`pi-hash-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hash-edit%40latest) | 1 | 1 |
-| [`pi-hashline-context-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hashline-context-edit%40latest) | 1 | 1 |
-| [`pi-hashline-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hashline-edit%40latest) | 1 | 1 |
-| [`pi-hashline-edit-pro`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hashline-edit-pro%40latest) | 12 | 12 |
-| [`pi-hledit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hledit%40latest) | 1 | 1 |
-| [`pi-lean-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-lean-edit%40latest) | 1 | 1 |
-| [`pi-lector`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-lector%40latest) | 1 | 1 |
-| [`pi-mono-multi-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-mono-multi-edit%40latest) | 1 | 1 |
-| [`pi-openai-codex-compat`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-openai-codex-compat%40latest) | 1 | 1 |
-| [`pi-semantic-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-semantic-edit%40latest) | 1 | 1 |
-| [`pi-str-replace-editor`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-str-replace-editor%40latest) | 1 | 1 |
-| [`pi-wayfinder`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-wayfinder%40latest) | 1 | 1 |
+| Harness                                                                                                                                                  | Accepted runs | Configurations |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------: | -------------: |
+| [`anchor-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Aanchor-edit%40latest)                                         |             1 |              1 |
+| [`baseline-agent`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Abaseline-agent%40latest)                                   |             6 |              5 |
+| [`bb`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Abb%40latest)                                                           |             7 |              7 |
+| [`codex-cli-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Acodex-cli-default%40latest)                             |             2 |              6 |
+| [`d3ara1n-pi-hashline-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Ad3ara1n-pi-hashline-edit%40latest)               |             1 |              1 |
+| [`dsh-code`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Adsh-code%40latest)                                               |             2 |              6 |
+| [`dsh-standard`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Adsh-standard%40latest)                                       |             2 |              6 |
+| [`github-copilot-cli-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Agithub-copilot-cli-default%40latest)           |             2 |              6 |
+| [`jerryan-pi-hashline-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Ajerryan-pi-hashline-edit%40latest)               |             1 |              1 |
+| [`oh-my-pi-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Aoh-my-pi-default%40latest)                               |             3 |              7 |
+| [`opencode-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Aopencode-default%40latest)                               |             2 |              6 |
+| [`personal-pi-extensions-opencode`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Apersonal-pi-extensions-opencode%40latest) |             1 |              1 |
+| [`pi-agent-ide`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-agent-ide%40latest)                                       |            26 |             28 |
+| [`pi-apply-patch`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-apply-patch%40latest)                                   |             1 |              1 |
+| [`pi-better-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-better-edit%40latest)                                   |             5 |              5 |
+| [`pi-better-read-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-better-read-edit%40latest)                         |             1 |              1 |
+| [`pi-codex-conversion`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-codex-conversion%40latest)                         |             1 |              1 |
+| [`pi-codex-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-codex-edit%40latest)                                     |             1 |              1 |
+| [`pi-codex-minimal-tools`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-codex-minimal-tools%40latest)                   |             1 |              1 |
+| [`pi-codex-tools`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-codex-tools%40latest)                                   |             1 |              1 |
+| [`pi-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-default%40latest)                                           |            17 |             12 |
+| [`pi-edit-safe`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-edit-safe%40latest)                                       |             1 |              1 |
+| [`pi-hash-anchored-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hash-anchored-edit%40latest)                     |             1 |              1 |
+| [`pi-hash-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hash-edit%40latest)                                       |             1 |              1 |
+| [`pi-hashline-context-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hashline-context-edit%40latest)               |             1 |              1 |
+| [`pi-hashline-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hashline-edit%40latest)                               |             1 |              1 |
+| [`pi-hashline-edit-pro`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hashline-edit-pro%40latest)                       |            12 |             12 |
+| [`pi-hledit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-hledit%40latest)                                             |             1 |              1 |
+| [`pi-lean-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-lean-edit%40latest)                                       |             1 |              1 |
+| [`pi-lector`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-lector%40latest)                                             |             1 |              1 |
+| [`pi-mono-multi-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-mono-multi-edit%40latest)                           |             1 |              1 |
+| [`pi-openai-codex-compat`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-openai-codex-compat%40latest)                   |             1 |              1 |
+| [`pi-semantic-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-semantic-edit%40latest)                               |             1 |              1 |
+| [`pi-str-replace-editor`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-str-replace-editor%40latest)                     |             1 |              1 |
+| [`pi-wayfinder`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-wayfinder%40latest)                                       |             1 |              1 |
+
 <!-- benchmark-community:end -->
 
 ## What you need
