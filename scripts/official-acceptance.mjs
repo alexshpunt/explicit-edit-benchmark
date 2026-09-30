@@ -15,6 +15,7 @@ import {
   buildPublicDatasetFromStore,
 } from "./build-public-dataset.mjs";
 import { appendAggregateRun } from "./aggregate-state.mjs";
+import { auditModelProjectionRebuild } from "./model-projection-audit.mjs";
 import {
   assertPreserved,
   headCommit,
@@ -541,13 +542,14 @@ export async function preserveDatasetSnapshot(
   return backup;
 }
 
-/** Rebuild every derived Dataset file from immutable canonical source and publish atomically. */
+/** Rebuild views atomically; verifyModelProjection also guards source bytes and non-model run facts. */
 export async function rebuildOfficialDataset({
   repository,
   accessToken,
   workspaceDirectory,
   backupDirectory,
   backupRootDirectory,
+  verifyModelProjection = false,
   hub = defaultHub,
 }) {
   if (!REPOSITORY.test(repository ?? "")) throw Error("Dataset repository must be owner/name");
@@ -577,6 +579,9 @@ export async function rebuildOfficialDataset({
   await cp(path.join(snapshot, "source"), store, { recursive: true, dereference: true });
   const index = await buildPublicDatasetFromStore(outputDirectory, store);
   assertPreserved(await readDatasetIndex(snapshot), index);
+  const projectionAudit = verifyModelProjection
+    ? await auditModelProjectionRebuild(snapshot, outputDirectory)
+    : undefined;
   const commitOid = await publishDirectory({
     hub,
     repo,
@@ -587,6 +592,7 @@ export async function rebuildOfficialDataset({
   });
   return {
     backupDirectory: preservedBackup,
+    ...(projectionAudit ? { projectionAudit } : {}),
     changed: commitOid !== parentCommit,
     datasetRevision: commitOid,
     addedRuns: [],
