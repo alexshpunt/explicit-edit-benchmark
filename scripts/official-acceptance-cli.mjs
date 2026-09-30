@@ -73,6 +73,7 @@ async function main() {
         ? path.join(process.env.RUNNER_TEMP, "official-rebuild")
         : path.resolve(".tmp", "official-rebuild"),
       backupDirectory: process.env.BACKUP_DIRECTORY,
+      verifyModelProjection: process.env.MODEL_PROJECTION_ONLY === "true",
       backupRootDirectory: process.env.RUNNER_TEMP ? undefined : rebuildBackupRoot(args),
     });
     console.log(JSON.stringify(result));
