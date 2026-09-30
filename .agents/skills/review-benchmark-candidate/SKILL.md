@@ -20,6 +20,8 @@ Do not download a Dataset snapshot or candidate revision to the maintainer works
 
 The scheduled **Auto-accept benchmark observations** workflow runs four times an hour. It processes official candidates first and ordinary candidates second. Each candidate is handled serially against the current Dataset head.
 
+If a PR has a closed-to-open transition in its history, scheduled acceptance leaves it out of the queue permanently. This applies to ordinary and official PRs, even if new commits are added later. The PR is now under manual review: the scheduled workflow does not accept its data, post receipts, or close it. Explicit maintainer dispatch remains available; reopening does not authorize replacing accepted evidence.
+
 Normal acceptance is append-only:
 
 1. download `source/index.json`, `dataset-index.json`, and `aggregate-state.json` from current `main`;

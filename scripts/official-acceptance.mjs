@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { automaticPullRequests } from "./huggingface-pr-lifecycle.mjs";
 import { gunzipSync } from "node:zlib";
 import { commit, downloadFile, listCommits, listFiles, snapshotDownload } from "@huggingface/hub";
 import { ingestSubmission } from "./benchmark-ingestion.mjs";
@@ -605,7 +606,11 @@ export async function listOpenOfficialCandidates(repository, fetchImpl = fetch) 
   if (!response.ok) throw Error(`Hugging Face candidate listing failed (${response.status})`);
   const body = await response.json();
   const prefix = "Contribute official benchmark execution ";
-  return body.discussions
-    .filter((item) => item.isPullRequest && item.status === "open" && item.title.startsWith(prefix))
-    .map((item) => ({ number: item.num, executionId: item.title.slice(prefix.length) }));
+  const candidates = body.discussions.filter(
+    (item) => item.isPullRequest && item.status === "open" && item.title.startsWith(prefix),
+  );
+  return (await automaticPullRequests(repository, candidates, fetchImpl)).map((item) => ({
+    number: item.num,
+    executionId: item.title.slice(prefix.length),
+  }));
 }
