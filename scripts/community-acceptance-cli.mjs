@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { acceptHuggingFaceCandidate } from "./huggingface-contributions.mjs";
 import { isDeferredHubError } from "./official-acceptance.mjs";
+import { automaticPullRequests } from "./huggingface-pr-lifecycle.mjs";
 
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
@@ -15,9 +16,13 @@ export async function listOpenCommunityCandidates(repository, fetchImpl = fetch)
   if (!response.ok) throw Error(`Hugging Face candidate listing failed (${response.status})`);
   const body = await response.json();
   const prefix = "Contribute benchmark observation ";
-  return body.discussions
-    .filter((item) => item.isPullRequest && item.status === "open" && item.title.startsWith(prefix))
-    .map((item) => ({ number: item.num, runId: item.title.slice(prefix.length) }));
+  const candidates = body.discussions.filter(
+    (item) => item.isPullRequest && item.status === "open" && item.title.startsWith(prefix),
+  );
+  return (await automaticPullRequests(repository, candidates, fetchImpl)).map((item) => ({
+    number: item.num,
+    runId: item.title.slice(prefix.length),
+  }));
 }
 
 /** Validate and append a bounded batch without downloading historical Dataset files. */

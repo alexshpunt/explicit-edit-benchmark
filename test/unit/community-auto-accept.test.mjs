@@ -9,6 +9,7 @@ test("community candidate listing excludes official and unrelated pull requests"
   const candidates = await listOpenCommunityCandidates("owner/dataset", async () => ({
     ok: true,
     json: async () => ({
+      events: [],
       discussions: [
         {
           num: 78,
