@@ -16,6 +16,7 @@ import {
 } from "./build-public-dataset.mjs";
 import { appendAggregateRun } from "./aggregate-state.mjs";
 import { auditModelProjectionRebuild } from "./model-projection-audit.mjs";
+import { downloadSnapshotWithRetry } from "./snapshot-retry.mjs";
 import {
   assertPreserved,
   headCommit,
@@ -560,7 +561,7 @@ export async function rebuildOfficialDataset({
   const workspace = path.resolve(workspaceDirectory);
   await rm(workspace, { recursive: true, force: true });
   await mkdir(workspace, { recursive: true });
-  const snapshot = await hub.snapshotDownload({
+  const snapshot = await downloadSnapshotWithRetry(hub, {
     repo,
     revision: parentCommit,
     accessToken: token,

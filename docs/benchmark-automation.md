@@ -124,6 +124,8 @@ Public views resolve known provider/selector aliases through the model registry.
 
 For a model-only rebuild, dispatch the serialized acceptance workflow with `rebuild_only=true` and `model_projection_only=true`. Before publishing, it checks every retained source file, run identity, outcome, timing and usage table. Its result reports changed model profiles and their token/cost totals. The pre-rebuild snapshot is retained for recovery.
 
+Rebuild snapshot downloads are pinned to the parent revision. If the connection is closed during download, the job makes at most three attempts using the same cache, so completed files are not downloaded again. Other errors stop the job immediately; publication still happens only after the snapshot, backup and checks succeed.
+
 The exporter drops prompts, model prose, raw arguments, command text, command output, workspaces, and credential state. For shell calls it publishes labels such as `search`, `read`, `test-or-build`, or `likely-workspace-write` instead of the command itself. The validator checks file hashes, counts, duplicate IDs, foreign keys, and fields that must never appear.
 
 EOF-normalized correctness is complete only when the run has reviewed failure evidence in `failure-review/cases.json`. Without that review, failed rounds are marked `unknown` and the manifest says the EOF classification is partial. Exact correctness is available either way.
