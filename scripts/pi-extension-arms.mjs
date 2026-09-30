@@ -13,13 +13,10 @@ export const PI_EXTENSION_VERSION = "0.85.1";
 export const PI_EXTENSION_ARMS = {
   "pi-hashline-edit-pro": {
     package: "pi-hashline-edit-pro",
-    version: "4.2.11",
+    version: "4.4.3",
     entries: ["index.ts"],
-    tools: ["read", "bash", "write", "replace", "insert", "undo_last_change"],
+    tools: ["read", "bash", "write", "replace", "insert", "anchor_grep", "undo_last_change"],
     rules: ["four-character session anchors", "stale-content rejection"],
-    stateFiles: {
-      "config/pi-hashline-edit-pro/config.json": '{"autoRead":false,"anchorGrepEnabled":false}\n',
-    },
   },
   "pi-codex-conversion": {
     package: "@howaboua/pi-codex-conversion",

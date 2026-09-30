@@ -256,7 +256,7 @@ A finished queue does not mean every task passed. Read `summary.json` before you
 
 | Arm                               | npm release                                  | Status                             |
 | --------------------------------- | -------------------------------------------- | ---------------------------------- |
-| `pi-hashline-edit-pro`            | `pi-hashline-edit-pro@4.2.11`                | Ready                              |
+| `pi-hashline-edit-pro`            | `pi-hashline-edit-pro@4.4.3`                 | Ready                              |
 | `pi-codex-conversion`             | `@howaboua/pi-codex-conversion@3.0.34`       | Ready                              |
 | `pi-lector`                       | `@danypops/pi-lector@0.17.2`                 | Needs its Lector daemon            |
 | `personal-pi-extensions-opencode` | `@trim21/personal-pi-extensions@0.1.556`     | Ready; file tools module only      |
