@@ -76,6 +76,10 @@ await test("Pi and Codex metrics use finalized events without double-counting", 
     providerFailure: null,
   });
 
+  assert.deepEqual(
+    await inspectHarnessOutput("pi-aft", piOutput),
+    await inspectHarnessOutput("pi-agent-ide", piOutput),
+  );
   const codexOutput = path.join(root, "codex.jsonl");
   await writeFile(
     codexOutput,

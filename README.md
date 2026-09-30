@@ -120,6 +120,7 @@ The benchmark has ready adapters for these CLIs. Use the name in the `--harness`
 | `pi-default`                 | [Pi](https://pi.dev/)                                                                                               | `pi`       |
 | `baseline-agent`             | Pi with bash only and an empty system prompt                                                                        | `pi`       |
 | `pi-agent-ide`               | [Pi Agent IDE](https://github.com/alexshpunt/pi-agent-ide)                                                          | `pi`       |
+| `pi-aft`                     | [Pi](https://pi.dev/) with [AFT](https://github.com/cortexkit/aft)                                                  | `pi`       |
 | `codex-cli-default`          | [Codex CLI](https://github.com/openai/codex)                                                                        | `codex`    |
 | `opencode-default`           | [OpenCode](https://github.com/anomalyco/opencode)                                                                   | `opencode` |
 | `oh-my-pi-default`           | [Oh My Pi](https://github.com/can1357/oh-my-pi)                                                                     | `omp`      |
@@ -127,7 +128,7 @@ The benchmark has ready adapters for these CLIs. Use the name in the `--harness`
 | `dsh-standard`               | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), native tools                                   | `dsh`      |
 | `dsh-code`                   | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), code mode                                      | `dsh`      |
 
-The name in the flag is the published harness family, so a result lands in the leaderboard under the name you ran. The binary column is what actually runs; pass a different path with `--command` when yours is not on `PATH`. `pi-default` and `pi-agent-ide` both run `pi`, and differ only in the tools.
+The name in the flag is the published harness family, so a result lands in the leaderboard under the name you ran. The binary column is what actually runs; pass a different path with `--command` when yours is not on `PATH`. `pi-default`, `pi-agent-ide`, and `pi-aft` all run `pi`, with different explicit tool configurations.
 
 You install and sign in to that CLI yourself. The benchmark leaves your CLI alone, and your credentials stay yours: it copies only the file you point it at, for the length of a run.
 

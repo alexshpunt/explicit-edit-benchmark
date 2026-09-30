@@ -1,5 +1,5 @@
 import { test } from "node:test";
-import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -136,6 +136,92 @@ await test("native adapters carry explicit model and reasoning through recovery"
     () => makeAdapter({ harness: "other", model: "x", thinking: "low" }),
     /Unsupported/,
   );
+});
+
+await test("Pi AFT loads one pinned extension with isolated deterministic state", async () => {
+  const aft = await tempDirectory("aft-package");
+  await mkdir(path.join(aft, "dist"), { recursive: true });
+  await writeFile(path.join(aft, "dist/index.js"), "");
+  await writeFile(
+    path.join(aft, "package.json"),
+    JSON.stringify({
+      name: "@cortexkit/aft-pi",
+      version: "0.58.0",
+      pi: { extensions: ["./dist/index.js"] },
+    }),
+  );
+  const adapter = makeAdapter({
+    harness: "pi-aft",
+    command: "/usr/bin/pi",
+    version: "0.85.1",
+    model: "openai-codex/gpt-5.6-luna",
+    thinking: "low",
+    idePackage: aft,
+  });
+  assert.deepEqual(adapter.args.slice(-4), [
+    "--extension",
+    path.join(aft, "dist/index.js"),
+    "--",
+    "{prompt}",
+  ]);
+  assert.equal(adapter.env.AFT_STORAGE_DIR, "/state/aft/storage");
+  assert.equal(adapter.env.AFT_CACHE_DIR, "/state/aft/cache");
+  assert.equal(adapter.env.XDG_CONFIG_HOME, "/state/home/.config");
+  const config = JSON.parse(adapter.stateFiles["home/.config/cortexkit/aft.jsonc"]);
+  assert.deepEqual(config.disabled_tools, ["aft_move", "aft_delete"]);
+  assert.deepEqual(config.indexes, { trigram: true, semantic: false, callgraph: true });
+  assert.equal(config.lsp.auto_install, false);
+  assert.equal(config.bash.background, false);
+  assert.ok(recoveryAdapter(adapter, true).args.includes("--continue"));
+});
+
+await test("prepared Pi AFT identity separates Pi, AFT, and the fixed tool recipe", async () => {
+  const repository = fileURLToPath(new URL("../../", import.meta.url));
+  const root = await tempDirectory("aft-prepared-config");
+  const aft = path.join(root, "node_modules/@cortexkit/aft-pi");
+  const output = path.join(root, "benchmark.json");
+  await mkdir(path.join(aft, "dist"), { recursive: true });
+  await writeFile(path.join(aft, "dist/index.js"), "");
+  await writeFile(
+    path.join(aft, "package.json"),
+    JSON.stringify({
+      name: "@cortexkit/aft-pi",
+      version: "0.58.0",
+      pi: { extensions: ["./dist/index.js"] },
+    }),
+  );
+  await promisify(execFile)(
+    process.execPath,
+    [
+      path.join(repository, "scripts/prepare-benchmark.mjs"),
+      "--harness",
+      "pi-aft",
+      "--command",
+      process.execPath,
+      "--runtime",
+      path.dirname(path.dirname(process.execPath)),
+      "--model",
+      "openai/gpt-5",
+      "--thinking",
+      "low",
+      "--ide-package",
+      aft,
+      "--harness-version",
+      "0.58.0",
+      "--output",
+      output,
+    ],
+    { cwd: repository },
+  );
+  const adapter = JSON.parse(await readFile(output, "utf8")).harnesses["pi-aft"];
+  assert.equal(adapter.agentFamily, "pi");
+  assert.equal(adapter.harnessFamily, "pi-aft");
+  assert.equal(adapter.harnessVersion, "0.58.0");
+  assert.deepEqual(adapter.configuration.extensions, ["@cortexkit/aft-pi@0.58.0"]);
+  assert.ok(adapter.configuration.tools.includes("aft_outline"));
+  assert.ok(adapter.configuration.tools.includes("find"));
+  assert.deepEqual(adapter.configuration.rules, ["aft-workflow-hints@0.58.0"]);
+  assert.ok(adapter.configuration.runtimeFlags.includes("semantic-index=false"));
 });
 
 await test("Copilot can use its existing account without a custom provider", () => {
@@ -390,7 +476,7 @@ await test("every seeded file an adapter needs exists in the repository", async 
   const { existsSync } = await import("node:fs");
   const { makeAdapter } = await import("../../scripts/prepare-benchmark.mjs");
   // The IDE adapter needs an installed package; it seeds nothing without --auth-file anyway.
-  for (const harness of ADAPTER_IDS.filter((id) => id !== "pi-agent-ide")) {
+  for (const harness of ADAPTER_IDS.filter((id) => !["pi-agent-ide", "pi-aft"].includes(id))) {
     const adapter = makeAdapter({
       harness,
       command: "/usr/bin/tool",

@@ -38,7 +38,7 @@ export const usage = `Usage:
   npm run benchmark:submit -- --harness NAME --model MODEL --thinking LEVEL [--concurrency N] [--timeout-seconds N]
   npm run benchmark:submit -- --config FILE [--concurrency N] [--timeout-seconds N]
 
-Ready adapters: pi-default, baseline-agent, pi-agent-ide, codex-cli-default, opencode-default, oh-my-pi-default, github-copilot-cli-default, dsh-standard, dsh-code.
+Ready adapters: pi-default, baseline-agent, pi-agent-ide, pi-aft, codex-cli-default, opencode-default, oh-my-pi-default, github-copilot-cli-default, dsh-standard, dsh-code.
 
 Run policy:
   --concurrency N       parallel trials, default 10
@@ -52,8 +52,8 @@ Adapter options:
   --model-file FILE     model catalog seed
   --provider-file FILE  provider and endpoint description
   --env-file FILE       local environment values
-  --ide-package DIR     installed pi-agent-ide package
-  --harness-version V   harness version (Pi Agent IDE)
+  --ide-package DIR     installed Pi extension package
+  --harness-version V   exact installed extension version
   --runtime DIR         extra runtime mount, repeatable`;
 
 /** Turn command arguments into one fixed comparable run policy and one prepared config. */

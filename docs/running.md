@@ -14,13 +14,14 @@ npm run benchmark:submit -- --harness codex-cli-default --model PROVIDER/MODEL -
 
 The command writes a temporary configuration into the system temp folder and deletes it when it finishes, so you never prepare or commit a config file for a ready adapter.
 
-`--harness` takes the published harness family: `pi-default`, `baseline-agent`, `pi-agent-ide`, `codex-cli-default`, `opencode-default`, `oh-my-pi-default`, `github-copilot-cli-default`, `dsh-standard`, or `dsh-code`.
+`--harness` takes the published harness family: `pi-default`, `baseline-agent`, `pi-agent-ide`, `pi-aft`, `codex-cli-default`, `opencode-default`, `oh-my-pi-default`, `github-copilot-cli-default`, `dsh-standard`, or `dsh-code`.
 
 | Adapter                      | Binary     |
 | ---------------------------- | ---------- |
 | `pi-default`                 | `pi`       |
 | `baseline-agent`             | `pi`       |
 | `pi-agent-ide`               | `pi`       |
+| `pi-aft`                     | `pi`       |
 | `codex-cli-default`          | `codex`    |
 | `opencode-default`           | `opencode` |
 | `oh-my-pi-default`           | `omp`      |
@@ -41,6 +42,7 @@ Install your agent yourself and log in the way that agent expects. The benchmark
 | `pi-default`                 | Pi provider/model id | Pi `auth.json` via `--auth-file`     |
 | `baseline-agent`             | Pi provider/model id | Pi `auth.json` via `--auth-file`     |
 | `pi-agent-ide`               | Pi provider/model id | Pi `auth.json` via `--auth-file`     |
+| `pi-aft`                     | Pi provider/model id | Pi `auth.json` via `--auth-file`     |
 | `codex-cli-default`          | Provider model id    | Responses provider key               |
 | `opencode-default`           | Provider model id    | OpenAI-compatible provider key       |
 | `oh-my-pi-default`           | Provider model id    | OpenAI-compatible provider key       |
@@ -74,6 +76,22 @@ Each adapter has its own quirks:
   Pi run needs `--auth-file ~/.pi/agent/auth.json`. Without the flag the harness starts with nobody
   logged in and fails on its first request.
 - **Pi Agent IDE** loads the published `pi-agent-ide` npm package, so install it and pass `--ide-package DIRECTORY` pointing at the installed package. The adapter reads the extension entry and version from that package and mounts the tree that holds it, so the extension's own dependencies come along. `--harness-version` must equal the installed package version, otherwise the harness version would be confused with the Pi agent version.
+- **Pi AFT** loads one pinned `@cortexkit/aft-pi` package directly; it never runs AFT's setup command or reads the user's AFT configuration and storage. The adapter enables AFT's default Pi tool surface except `aft_move` and `aft_delete`, keeps trigram and callgraph indexes on, and disables semantic indexing, LSP auto-install, GitHub integration, bash rewriting, compression, and background execution. This avoids per-trial downloads and keeps the profile deterministic.
+
+### Run Pi with AFT
+
+Install an exact AFT Pi release in an isolated package tree; do not run `aft setup`, because setup changes the user's normal Pi configuration:
+
+```sh
+npm install --prefix /opt/aft-benchmark @cortexkit/aft-pi@VERSION
+npm run benchmark:submit -- --harness pi-aft \
+  --model PROVIDER/MODEL --thinking low \
+  --auth-file ~/.pi/agent/auth.json \
+  --ide-package /opt/aft-benchmark/node_modules/@cortexkit/aft-pi \
+  --harness-version VERSION
+```
+
+The extension package and its dependencies are mounted read-only. AFT's config, cache, indexes, logs, and undo state live under the trial's isolated `/state` directory and are deleted with that chain. The exact extension version is published separately from the Pi agent version.
 
 ## Run a harness on your own subscription
 
