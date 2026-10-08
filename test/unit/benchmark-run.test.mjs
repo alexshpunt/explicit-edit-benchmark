@@ -135,6 +135,27 @@ test("local mode delegates to the existing complete unverified submission", asyn
   ]);
 });
 
+test("local mode forwards the Pi Agent IDE harness version", async () => {
+  const calls = [];
+  await runLocal(
+    {
+      harness: "pi-agent-ide",
+      model: "openai-codex/gpt-5.6-terra",
+      thinking: "low",
+      concurrency: "10",
+      "harness-version": "0.6.3",
+      "ide-package": "/tmp/pi-agent-ide",
+    },
+    async (binary, args) => calls.push({ binary, args }),
+  );
+  assert.deepEqual(calls[0].args.slice(-4), [
+    "--harness-version",
+    "0.6.3",
+    "--ide-package",
+    "/tmp/pi-agent-ide",
+  ]);
+});
+
 test("official mode bootstraps secrets through stdin and dispatches approved inputs", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "benchmark-run-"));
   const authFile = path.join(root, "auth.json");

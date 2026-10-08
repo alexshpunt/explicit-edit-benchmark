@@ -126,6 +126,7 @@ export async function runLocal(values, execute = command) {
     "model-file",
     "provider-file",
     "env-file",
+    "harness-version",
     "ide-package",
   ]) {
     if (values[option] !== undefined) args.push(`--${option}`, values[option]);
