@@ -52,6 +52,23 @@ test("an official run is full unless the user explicitly selects one task", () =
   assert.equal(partial.task, "replace-all-10-plain");
 });
 
+test("official Pi AFT requires the exact extension version", () => {
+  const args = [
+    "--official",
+    "--harness",
+    "pi-aft",
+    "--model",
+    "openai-codex/gpt-5.6-luna",
+    "--agent-version",
+    "0.85.1",
+  ];
+  assert.throws(() => parseRunOptions(args), /exact installed --harness-version/);
+  assert.equal(
+    parseRunOptions([...args, "--harness-version", "0.58.0"])["harness-version"],
+    "0.58.0",
+  );
+});
+
 test("the reusable workflow keeps partial and full execution paths distinct", async () => {
   const workflow = await readFile(
     path.join(import.meta.dirname, "../../.github/workflows/official-run.yml"),

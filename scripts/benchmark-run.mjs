@@ -77,8 +77,12 @@ export function parseRunOptions(args) {
   adapterDefinition(values.harness);
   if (values.official && !values["agent-version"])
     throw Error("Official run requires the exact installed --agent-version");
-  if (values.official && values.harness === "pi-agent-ide" && !values["harness-version"])
-    throw Error("Pi Agent IDE requires the exact installed --harness-version");
+  if (
+    values.official &&
+    adapterDefinition(values.harness).extensionPackage &&
+    !values["harness-version"]
+  )
+    throw Error(`${values.harness} requires the exact installed --harness-version`);
   if (values.official && values.harness === "oh-my-pi-default" && !values["runtime-version"])
     throw Error("Oh My Pi requires the exact installed --runtime-version");
   const localOnly = [

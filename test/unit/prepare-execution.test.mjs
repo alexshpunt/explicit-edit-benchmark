@@ -104,5 +104,12 @@ for (const adapter of Object.keys(ADAPTERS)) {
     );
     for (const flag of ["--auth-file", "--provider-file", "--env-file"])
       if (args.includes(flag)) await readFile(args[args.indexOf(flag) + 1]);
+    if (ADAPTERS[adapter].extensionPackage) {
+      assert.equal(
+        args[args.indexOf("--ide-package") + 1],
+        path.join(root, "node_modules", ADAPTERS[adapter].extensionPackage),
+      );
+      assert.equal(args[args.indexOf("--harness-version") + 1], "0.5.1");
+    }
   });
 }
