@@ -4,7 +4,7 @@ import path from "node:path";
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 /** Write a minimal valid normalized bundle for publication contract tests. */
-export async function bundle(directory, runId, identity = {}, usage = {}) {
+export async function bundle(directory, runId, identity = {}, usage = {}, settings = {}) {
   await mkdir(directory, { recursive: true });
   const configuration = {
     configurationId: "test",
@@ -27,6 +27,7 @@ export async function bundle(directory, runId, identity = {}, usage = {}) {
     environment: [],
     configurationLabels: [],
     ...identity,
+    ...settings,
   };
   const configurationHash = digest(JSON.stringify(configuration));
   const profile = {
@@ -48,7 +49,7 @@ export async function bundle(directory, runId, identity = {}, usage = {}) {
     adapterVersion: "1",
     ...identity,
     configurationHash,
-    configurationLabels: [],
+    configurationLabels: configuration.configurationLabels,
   };
   const trial = {
     trialId: "t",
