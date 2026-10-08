@@ -156,6 +156,8 @@ npm run benchmark -- dataset --output public-dataset \
 
 Every row gains a `runId`. `dataset-index.json` records the source manifest hashes, contracts, task-set hashes, completeness, counts, and the hash of every compressed shard. Building the dataset neither uploads it nor reads a Hugging Face token. An acceptance build also writes `leaderboard.json`, `views.json`, and `data/explorer-summary.json.gz` from the same aggregation module. `views.json` holds the precomputed group, task-family, tool-usage, and drill-down views. The Explorer summary contains only the public UI fields needed for ordinary interaction, so its deployment reads one checked file instead of downloading every historical shard. Acceptance also writes one content-addressed detail package per run. The browser fetches and verifies that package only when the run is opened.
 
+The generated card declares the `configurations` feature types so empty lists and null values in early shards do not break the Viewer. CI checks streaming and regular loading with the real Hugging Face `datasets` library. To repeat that check locally, install `datasets==4.8.3` in a Python environment and run `HF_HUB_OFFLINE=1 python3 test/huggingface-viewer.py`.
+
 Useful Hugging Face references: [Datasets](https://huggingface.co/docs/hub/datasets-overview), [Data Studio](https://huggingface.co/docs/hub/data-studio), and [storage limits](https://huggingface.co/docs/hub/storage-limits).
 
 ## Hugging Face contribution flow
