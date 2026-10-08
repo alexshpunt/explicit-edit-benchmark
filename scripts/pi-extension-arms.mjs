@@ -88,8 +88,8 @@ export const PI_EXTENSION_ARMS = {
   },
   "pi-better-edit": {
     package: "pi-better-edit",
-    version: "2.1.0",
-    entries: ["dist/index.js"],
+    version: "2.3.0",
+    entries: ["index.ts"],
     tools: ["read", "bash", "edit", "write", "read_skill", "undo_last_edit"],
     rules: ["three-character content-addressed anchors", "session-served state validation"],
   },
