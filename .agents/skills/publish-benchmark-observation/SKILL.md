@@ -1,6 +1,6 @@
 ---
 name: publish-benchmark-observation
-description: Configure, smoke-test, run, and submit an Explicit Edit Benchmark observation to Hugging Face.
+description: Configure, smoke-test, run, submit, and report an Explicit Edit Benchmark observation to Hugging Face.
 compatibility: Linux, Node.js 24+, authenticated target harness, Hugging Face CLI, and this repository's installed dependencies.
 ---
 
@@ -54,10 +54,51 @@ The command prepares the config, checks the agent and the Hugging Face login, sm
 
 It always uses five Oracle recovery attempts and a 120-second timeout.
 
-Keep failures, timeouts, and recovery rounds. Never edit normalized rows to improve a result. Report the run ID and the pull request URL.
+Keep failures, timeouts, and recovery rounds. Never edit normalized rows to improve a result. After submission, give the user the report below.
 
 ## Acceptance
 
 Official candidates are verified and accepted automatically by the repository workflow. Do not ask for manual approval based on score. If delivery fails after inference, use the template's submit-only recovery with the original run ID and attempt.
 
 Ordinary local candidates remain unverified and follow the contribution review process. Code, adapter, task, workflow, and policy changes always require normal review.
+
+## Report the observation
+
+Do not finish with a PASS count alone. A final exact pass can hide first-attempt misses and expensive recovery. Give the user the following tables after each new observation is submitted. No narrative analysis is required.
+
+Read [Methodology](../../../docs/methodology.md) for the current formula and comparison rules. Use the existing run artifacts and normalized bundle; do not rerun inference to fill a reporting gap. Keep raw logs, credentials, local paths, and model prose out of public comments and uploads.
+
+### Grades and usage
+
+Start with the run ID, submission URL, and acceptance status. Submitted is not the same as accepted.
+
+Give one row per configuration, identified by model, provider, harness version, and reasoning level:
+
+| Field | What to report |
+| --- | --- |
+| First exact | Passes / trials and rate before Oracle recovery |
+| Final exact | Passes / trials and rate after Oracle recovery |
+| Coverage | Distinct observed tasks / full benchmark task count |
+| Quality and Score | Both values using the current canonical formula |
+| Recovery | Tasks that recovered to exact success and total extra rounds |
+| Cost and tokens | Totals across all benchmark rounds, including recovery |
+
+For scoring version 2, quality is `0.75 × first exact rate + 0.25 × final exact rate`, and Score is `quality × coverage`. Use the task-weighted rates from the methodology when task observation counts differ. When trial rates and task-weighted scoring rates differ, show both and label them. Label these as this observation's values, not the aggregated Explorer score. Use the full task count from the benchmark definition, not the selected subset, as the coverage denominator.
+
+Sum `costUsd` and `totalTokens` from the normalized rounds for each configuration. State how many rounds expose each metric. If any are missing, label the known sum as partial; if none are known, report unknown, not zero. Keep smoke usage separate from benchmark totals.
+
+### First-attempt misses
+
+Join failed-first trials to their first rounds by trial ID. Show one row per missed task with the observed timeout, exit status, event errors, failed or invalid tool calls, and byte mismatch when known. Include trials that never started or have no round evidence. Summarize misses with execution-error signals, tool-error signals only, byte mismatches without error signals, and insufficient evidence. Count a timeout, nonzero exit, positive event-error count, confirmed provider failure, or recorded infrastructure failure as an execution-error signal. Count positive failed or invalid tool-call counts as tool-error signals. Call a mismatch error-free only when all relevant error metrics were observed and show no errors. Show the total tool-error miss count separately because it can overlap execution errors.
+
+Use normalized fields such as `infrastructureFailure`, `timedOut`, `exitCode`, `eventErrors`, `failedToolCalls`, `invalidToolCalls`, and `providerFailure`. Check the local run summary for byte-comparison details when the normalized `difference` is unknown. Missing error fields are unknown, not evidence that no error happened.
+
+Keep observed failure types separate from confirmed causes. A generic timeout or process error does not prove a provider failure. A tool error does not prove a harness defect. Wrong bytes without an error do not prove a model defect. Report a confirmed provider cause only when the adapter supplied a machine-readable `providerFailure`; otherwise leave the cause unknown unless separate evidence establishes it.
+
+### Comparable-route results
+
+Query the accepted Dataset views for eligible configurations on the same model route and reasoning level, with compatible benchmark and recovery rules. State the Dataset revision, comparison filters, peer count, ties, and coverage. Exclude partial and quarantined configurations from a full-benchmark rank.
+
+Show the aggregated configuration's rank, first exact, final exact, Score, and gap to the best comparable configuration. Keep that row separate from the new observation: repeated observations can change the aggregate. Describe a score gap through its measured first/final-exact components, not a claim about which model, provider, or harness caused it. Compare cost only when both sides have complete usage data on the same scope.
+
+If acceptance is pending, label the comparison as pre-acceptance and do not invent a rank that includes the new observation. If the Dataset or suitable peers are unavailable, keep the section and state why the comparison is unavailable. Reporting or comparison failures do not undo a submitted observation, authorize another paid run, or justify changing its evidence.

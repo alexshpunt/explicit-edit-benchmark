@@ -1,0 +1,36 @@
+{
+  "skill_name": "publish-benchmark-observation",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The observation has already been run, submitted, and accepted. Give me the final report using evals/files/full.json. This is a synthetic offline verification case: the file contains extracted run evidence and a frozen Dataset snapshot. Read the publishing skill. Do not run, submit, publish, edit files, or access the network.",
+      "expected_output": "Report first/final grades, weighted Score, usage, observed misses and a separate tied aggregate rank, without guessing causes.",
+      "files": [
+        "evals/files/full.json"
+      ],
+      "expectations": [
+        "Observation first exact is 221/226, final exact 226/226, coverage 100%, and Score about 98.3407%.",
+        "Benchmark cost is $0.236 and tokens are 228000; smoke is excluded and both metrics cover 231/231 rounds.",
+        "Five first-attempt misses are shown, with three execution-error signals, two error-free byte mismatches, and one overlapping tool error.",
+        "Only the explicit rate-limit is attributed to the provider; a generic timeout and tool error are not assigned a cause.",
+        "The aggregate is separate: Score 98.5%, tied second among three eligible complete configurations, 1.125 percentage points behind the best.",
+        "The partial and quarantined configurations do not affect the full-benchmark rank."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "The observation has already finished and its submission is pending. Give me the final report using evals/files/partial.json. This is a synthetic offline verification case: the file contains all available extracted evidence. Read the publishing skill. Do not run, submit, publish, edit files, or access the network.",
+      "expected_output": "Keep pending acceptance, partial coverage, uneven task weights, unknown costs, partial token totals, and uncertain errors visible.",
+      "files": [
+        "evals/files/partial.json"
+      ],
+      "expectations": [
+        "Submission is reported as pending, not accepted.",
+        "The raw first exact is 2/3 and final exact 3/3; task-weighted first exact is 50%, quality 62.5%, coverage 2/226, and Score about 0.5531%.",
+        "Cost is unknown, not zero; 1500 tokens is explicitly partial with 2/4 observed rounds.",
+        "The missing error metrics do not establish an error-free model failure.",
+        "Dataset comparison is explicitly unavailable, with no invented rank."
+      ]
+    }
+  ]
+}

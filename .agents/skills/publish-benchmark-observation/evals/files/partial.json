@@ -1,0 +1,70 @@
+{
+  "synthetic": true,
+  "runId": "example-partial",
+  "submissionUrl": "https://example.org/submissions/example-partial",
+  "acceptanceStatus": "pending",
+  "configuration": {
+    "modelFamily": "example-model",
+    "modelVersion": "1",
+    "provider": "example-provider",
+    "transport": "example-api",
+    "harnessFamily": "example-harness",
+    "harnessVersion": "1.0",
+    "reasoning": "low"
+  },
+  "benchmark": {
+    "taskCount": 226,
+    "contract": "explicit-edit-v1",
+    "oracleRecoveries": 5,
+    "timeoutSeconds": 120
+  },
+  "observation": {
+    "trials": 3,
+    "firstExactPasses": 2,
+    "finalExactPasses": 3,
+    "distinctTasks": 2,
+    "recoveredTasks": 1,
+    "extraRounds": 1,
+    "totalRounds": 4,
+    "tasks": [
+      {
+        "taskId": "replace-a",
+        "trials": 2,
+        "firstExactPasses": 2,
+        "finalExactPasses": 2
+      },
+      {
+        "taskId": "insert-b",
+        "trials": 1,
+        "firstExactPasses": 0,
+        "finalExactPasses": 1
+      }
+    ]
+  },
+  "usage": {
+    "costUsd": {
+      "sum": null,
+      "observedRounds": 0
+    },
+    "totalTokens": {
+      "sum": 1500,
+      "observedRounds": 2
+    }
+  },
+  "firstAttemptMisses": [
+    {
+      "taskId": "insert-b",
+      "timedOut": false,
+      "exitCode": 0,
+      "eventErrors": null,
+      "failedToolCalls": null,
+      "invalidToolCalls": null,
+      "providerFailure": null,
+      "byteMismatch": true
+    }
+  ],
+  "datasetSnapshot": {
+    "available": false,
+    "reason": "Offline verification fixture; no accepted Dataset snapshot was supplied."
+  }
+}
