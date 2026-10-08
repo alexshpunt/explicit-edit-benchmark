@@ -20,6 +20,11 @@ name: Auto-accept benchmark observations
         required: false
         default: false
         type: boolean
+      model_projection_only:
+        description: Verify source and non-model run facts stay unchanged during rebuild
+        required: false
+        default: false
+        type: boolean
       dry_run:
         description: Verify and build a verdict without publishing
         required: false
@@ -143,6 +148,7 @@ jobs:
           HF_DISCUSSION_TOKEN: ${{ secrets.HF_TOKEN }}
           MAX_CANDIDATES: "4"
           DRY_RUN: ${{ inputs.dry_run }}
+          MODEL_PROJECTION_ONLY: ${{ inputs.model_projection_only }}
         run: |
           set -euo pipefail
           result="$RUNNER_TEMP/acceptance-result.json"

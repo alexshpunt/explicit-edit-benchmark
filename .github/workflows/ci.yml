@@ -25,3 +25,7 @@ jobs:
       - run: npm run check
         env:
           GITHUB_TOKEN: ${{ github.token }}
+      - name: Check Dataset Viewer loading without network access
+        run: |
+          python3 -m pip install datasets==4.8.3
+          HF_HUB_OFFLINE=1 python3 test/huggingface-viewer.py

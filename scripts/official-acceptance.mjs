@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { automaticPullRequests } from "./huggingface-pr-lifecycle.mjs";
 import { gunzipSync } from "node:zlib";
 import { commit, downloadFile, listCommits, listFiles, snapshotDownload } from "@huggingface/hub";
 import { ingestSubmission } from "./benchmark-ingestion.mjs";
@@ -14,6 +15,8 @@ import {
   buildPublicDatasetFromStore,
 } from "./build-public-dataset.mjs";
 import { appendAggregateRun } from "./aggregate-state.mjs";
+import { auditModelProjectionRebuild } from "./model-projection-audit.mjs";
+import { downloadSnapshotWithRetry } from "./snapshot-retry.mjs";
 import {
   assertPreserved,
   headCommit,
@@ -540,13 +543,14 @@ export async function preserveDatasetSnapshot(
   return backup;
 }
 
-/** Rebuild every derived Dataset file from immutable canonical source and publish atomically. */
+/** Rebuild views atomically; verifyModelProjection also guards source bytes and non-model run facts. */
 export async function rebuildOfficialDataset({
   repository,
   accessToken,
   workspaceDirectory,
   backupDirectory,
   backupRootDirectory,
+  verifyModelProjection = false,
   hub = defaultHub,
 }) {
   if (!REPOSITORY.test(repository ?? "")) throw Error("Dataset repository must be owner/name");
@@ -557,7 +561,7 @@ export async function rebuildOfficialDataset({
   const workspace = path.resolve(workspaceDirectory);
   await rm(workspace, { recursive: true, force: true });
   await mkdir(workspace, { recursive: true });
-  const snapshot = await hub.snapshotDownload({
+  const snapshot = await downloadSnapshotWithRetry(hub, {
     repo,
     revision: parentCommit,
     accessToken: token,
@@ -576,6 +580,9 @@ export async function rebuildOfficialDataset({
   await cp(path.join(snapshot, "source"), store, { recursive: true, dereference: true });
   const index = await buildPublicDatasetFromStore(outputDirectory, store);
   assertPreserved(await readDatasetIndex(snapshot), index);
+  const projectionAudit = verifyModelProjection
+    ? await auditModelProjectionRebuild(snapshot, outputDirectory)
+    : undefined;
   const commitOid = await publishDirectory({
     hub,
     repo,
@@ -586,6 +593,7 @@ export async function rebuildOfficialDataset({
   });
   return {
     backupDirectory: preservedBackup,
+    ...(projectionAudit ? { projectionAudit } : {}),
     changed: commitOid !== parentCommit,
     datasetRevision: commitOid,
     addedRuns: [],
@@ -605,7 +613,11 @@ export async function listOpenOfficialCandidates(repository, fetchImpl = fetch) 
   if (!response.ok) throw Error(`Hugging Face candidate listing failed (${response.status})`);
   const body = await response.json();
   const prefix = "Contribute official benchmark execution ";
-  return body.discussions
-    .filter((item) => item.isPullRequest && item.status === "open" && item.title.startsWith(prefix))
-    .map((item) => ({ number: item.num, executionId: item.title.slice(prefix.length) }));
+  const candidates = body.discussions.filter(
+    (item) => item.isPullRequest && item.status === "open" && item.title.startsWith(prefix),
+  );
+  return (await automaticPullRequests(repository, candidates, fetchImpl)).map((item) => ({
+    number: item.num,
+    executionId: item.title.slice(prefix.length),
+  }));
 }

@@ -7,7 +7,7 @@ import { gzipSync } from "node:zlib";
 import { createAggregateState, materializeAggregateState } from "./aggregate-state.mjs";
 import { componentSources } from "./component-sources.mjs";
 import { validateNormalizedRun } from "./validate-normalized-run.mjs";
-import { canonicalModelProvider, loadModelRegistry } from "./model-registry.mjs";
+import { canonicalModelRow, loadModelRegistry } from "./model-registry.mjs";
 import { applyExclusions, exclusionPolicyRevision, loadExclusionRegistry } from "./exclusions.mjs";
 import {
   aggregateFamilyScore,
@@ -33,29 +33,25 @@ function withRunId(content, runId) {
   );
 }
 
-/** Canonicalize model providers in public projections and reconnect configuration hashes. */
+/** Canonicalize public model identities and reconnect configuration hashes, preserving source rows. */
 export function canonicalizeModelProviderRows(profiles, configurations, registry) {
   const hashMap = new Map();
   const canonicalConfigurations = configurations.map((configuration) => {
-    const provider = canonicalModelProvider(
-      registry,
-      configuration.modelFamily ?? configuration.model,
-      configuration.provider ?? null,
-    );
-    if (provider === configuration.provider) return configuration;
+    const projected = canonicalModelRow(registry, configuration);
+    if (
+      projected.provider === configuration.provider &&
+      projected.modelFamily === configuration.modelFamily &&
+      projected.modelVersion === configuration.modelVersion
+    )
+      return configuration;
     const previousHash = configuration.configurationHash;
-    const { configurationHash: _configurationHash, ...recipe } = { ...configuration, provider };
+    const { configurationHash: _configurationHash, ...recipe } = projected;
     const configurationHash = createHash("sha256").update(JSON.stringify(recipe)).digest("hex");
     hashMap.set(previousHash, configurationHash);
     return { ...recipe, configurationHash };
   });
   const canonicalProfiles = profiles.map((profile) => ({
-    ...profile,
-    provider: canonicalModelProvider(
-      registry,
-      profile.modelFamily ?? profile.model,
-      profile.provider ?? null,
-    ),
+    ...canonicalModelRow(registry, profile),
     configurationHash: hashMap.get(profile.configurationHash) ?? profile.configurationHash,
   }));
   return { profiles: canonicalProfiles, configurations: canonicalConfigurations };
@@ -199,6 +195,30 @@ function communityCardSections(community) {
   return lines;
 }
 
+// Keep viewer types stable when an early shard has only nulls or empty lists.
+const CONFIGURATION_FEATURES = [
+  ...[
+    "runId",
+    "configurationId",
+    "configurationHash",
+    "agentFamily",
+    "agentVersion",
+    "modelFamily",
+    "modelVersion",
+    "provider",
+    "harnessFamily",
+    "harnessVersion",
+    "adapterVersion",
+    "model",
+    "thinking",
+    "transport",
+    "harnessKind",
+  ].map((name) => ({ name, dtype: "string" })),
+  ...["tools", "extensions", "rules", "runtimeFlags", "environment", "configurationLabels"].map(
+    (name) => ({ name, list: "string" }),
+  ),
+];
+
 function datasetCard({
   includeSubmissions = false,
   models = [],
@@ -240,6 +260,9 @@ function datasetCard({
     "- coding-agents",
     "- software-engineering",
     "- text",
+    "dataset_info:",
+    "  - config_name: configurations",
+    `    features: ${JSON.stringify(CONFIGURATION_FEATURES)}`,
     "configs:",
     configs,
     "---",
@@ -811,14 +834,7 @@ export async function buildDerivedDatasetFromAggregateState(
   const exclusionRegistry = await loadExclusionRegistry(exclusionRegistryFile);
   const restored = materializeAggregateState(aggregateState);
   const modelRegistry = await loadModelRegistry();
-  restored.profiles = restored.profiles.map((profile) => ({
-    ...profile,
-    provider: canonicalModelProvider(
-      modelRegistry,
-      profile.modelFamily ?? profile.model,
-      profile.provider ?? null,
-    ),
-  }));
+  restored.profiles = restored.profiles.map((profile) => canonicalModelRow(modelRegistry, profile));
   const evidence = applyExclusions(exclusionRegistry, restored);
   const exclusions = {
     policyId: exclusionRegistry.policyId,

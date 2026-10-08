@@ -20,6 +20,8 @@ Do not download a Dataset snapshot or candidate revision to the maintainer works
 
 The scheduled **Auto-accept benchmark observations** workflow runs four times an hour. It processes official candidates first and ordinary candidates second. Each candidate is handled serially against the current Dataset head.
 
+If a PR has a closed-to-open transition in its history, scheduled acceptance leaves it out of the queue permanently. This applies to ordinary and official PRs, even if new commits are added later. The PR is now under manual review: the scheduled workflow does not accept its data, post receipts, or close it. Explicit maintainer dispatch remains available; reopening does not authorize replacing accepted evidence.
+
 Normal acceptance is append-only:
 
 1. download `source/index.json`, `dataset-index.json`, and `aggregate-state.json` from current `main`;
@@ -60,6 +62,14 @@ gh workflow run accept-huggingface-observation.yml \
 Never retry a `429` immediately. Leave the candidate open for the next scheduled pass.
 
 A full Dataset download and rebuild is a recovery operation for a missing or invalid aggregate state. It is not candidate validation and must not run during ordinary acceptance.
+
+### Correct accepted usage
+
+An ordinary accepted observation can receive a manual token and cost correction through `correct-huggingface-usage.yml`. This is not normal acceptance and never runs on a schedule. Only the repository owner can run it from `main`.
+
+Pin each request's PR number, contributor, immutable candidate commit, manifest SHA-256, rounds SHA-256, expected total tokens, and CLI-reported cost. Run a dry run first. It compares the candidate against retained evidence and rejects any non-usage change, different identity, or contributor mismatch. Official signed observations are not supported.
+
+Review the dry-run result, then publish the same requests with its `parentCommit` as `expected_dataset_revision`. If Dataset main moved, do a new dry run rather than bypassing the check. The batch replaces existing evidence and derived views in one parent-checked commit, preserving run and submission IDs and observation count. The prior Dataset revision is the recovery reference. Receipts are posted only after publication; PRs remain open under manual control. If receipt delivery fails, retain the Dataset commit and deliver the missing comments separately without repeating the replacement.
 
 ## Code pull requests
 

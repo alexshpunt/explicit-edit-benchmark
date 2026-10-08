@@ -120,6 +120,12 @@ An accepted bundle identifies itself with three facts: the contract, the SHA-256
 
 The validator accepts historical schema v1 and current schema v2. Schema v2 adds nullable provider-failure attribution to rounds; schema-v1 timeouts are never reclassified. It keeps family identity separate from exact versions, so a consumer can group a model or harness family without losing the exact configuration behind an observation. Every profile needs `agentFamily`, `agentVersion`, `modelFamily`, `modelVersion`, a nullable `provider`, `harnessFamily`, `adapterVersion`, and sorted `configurationLabels`. The `configurationHash` fingerprints the safe recipe in `configurations.jsonl`, and profiles point at that recipe by hash. Cost, token, failed-call, and invalid-call fields are nullable on purpose: `null` means the harness never exposed that fact, `0` means it was observed as zero. Re-export old bundles from the raw run with truthful identity instead of hand-editing normalized rows.
 
+Public views resolve known provider/selector aliases through the model registry. If a contributor used a registered alias as the model family, the view shows its canonical family and reconnects projected configuration hashes. The wire selector and retained source bundle stay unchanged. Explicit historical model families and versions are not relabelled just because a moving alias now points elsewhere. Unknown routes keep the submitted identity.
+
+For a model-only rebuild, dispatch the serialized acceptance workflow with `rebuild_only=true` and `model_projection_only=true`. Before publishing, it checks every retained source file, run identity, outcome, timing and usage table. Its result reports changed model profiles and their token/cost totals. The pre-rebuild snapshot is retained for recovery.
+
+Rebuild snapshot downloads are pinned to the parent revision. If the connection is closed during download, the job makes at most three attempts using the same cache, so completed files are not downloaded again. Other errors stop the job immediately; publication still happens only after the snapshot, backup and checks succeed.
+
 The exporter drops prompts, model prose, raw arguments, command text, command output, workspaces, and credential state. For shell calls it publishes labels such as `search`, `read`, `test-or-build`, or `likely-workspace-write` instead of the command itself. The validator checks file hashes, counts, duplicate IDs, foreign keys, and fields that must never appear.
 
 EOF-normalized correctness is complete only when the run has reviewed failure evidence in `failure-review/cases.json`. Without that review, failed rounds are marked `unknown` and the manifest says the EOF classification is partial. Exact correctness is available either way.
@@ -149,6 +155,8 @@ npm run benchmark -- dataset --output public-dataset \
 ```
 
 Every row gains a `runId`. `dataset-index.json` records the source manifest hashes, contracts, task-set hashes, completeness, counts, and the hash of every compressed shard. Building the dataset neither uploads it nor reads a Hugging Face token. An acceptance build also writes `leaderboard.json`, `views.json`, and `data/explorer-summary.json.gz` from the same aggregation module. `views.json` holds the precomputed group, task-family, tool-usage, and drill-down views. The Explorer summary contains only the public UI fields needed for ordinary interaction, so its deployment reads one checked file instead of downloading every historical shard. Acceptance also writes one content-addressed detail package per run. The browser fetches and verifies that package only when the run is opened.
+
+The generated card declares the `configurations` feature types so empty lists and null values in early shards do not break the Viewer. CI checks streaming and regular loading with the real Hugging Face `datasets` library. To repeat that check locally, install `datasets==4.8.3` in a Python environment and run `HF_HUB_OFFLINE=1 python3 test/huggingface-viewer.py`.
 
 Useful Hugging Face references: [Datasets](https://huggingface.co/docs/hub/datasets-overview), [Data Studio](https://huggingface.co/docs/hub/data-studio), and [storage limits](https://huggingface.co/docs/hub/storage-limits).
 
