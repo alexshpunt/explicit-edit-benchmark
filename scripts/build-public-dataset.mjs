@@ -195,6 +195,30 @@ function communityCardSections(community) {
   return lines;
 }
 
+// Keep viewer types stable when an early shard has only nulls or empty lists.
+const CONFIGURATION_FEATURES = [
+  ...[
+    "runId",
+    "configurationId",
+    "configurationHash",
+    "agentFamily",
+    "agentVersion",
+    "modelFamily",
+    "modelVersion",
+    "provider",
+    "harnessFamily",
+    "harnessVersion",
+    "adapterVersion",
+    "model",
+    "thinking",
+    "transport",
+    "harnessKind",
+  ].map((name) => ({ name, dtype: "string" })),
+  ...["tools", "extensions", "rules", "runtimeFlags", "environment", "configurationLabels"].map(
+    (name) => ({ name, list: "string" }),
+  ),
+];
+
 function datasetCard({
   includeSubmissions = false,
   models = [],
@@ -236,6 +260,9 @@ function datasetCard({
     "- coding-agents",
     "- software-engineering",
     "- text",
+    "dataset_info:",
+    "  - config_name: configurations",
+    `    features: ${JSON.stringify(CONFIGURATION_FEATURES)}`,
     "configs:",
     configs,
     "---",
