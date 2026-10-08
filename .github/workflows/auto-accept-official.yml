@@ -20,6 +20,11 @@ name: Auto-accept benchmark observations
         required: false
         default: false
         type: boolean
+      model_projection_only:
+        description: Verify source and non-model run facts stay unchanged during rebuild
+        required: false
+        default: false
+        type: boolean
       dry_run:
         description: Verify and build a verdict without publishing
         required: false
@@ -137,11 +142,13 @@ jobs:
         id: acceptance
         if: steps.gate.outputs.enabled == 'true' && !inputs.oidc_check_only
         env:
+          BACKUP_DIRECTORY: ${{ runner.temp }}/dataset-backup
           DATASET_REPOSITORY: alexshpunt/explicit-edit-benchmark
           CANDIDATE: ${{ inputs.candidate }}
           HF_DISCUSSION_TOKEN: ${{ secrets.HF_TOKEN }}
           MAX_CANDIDATES: "4"
           DRY_RUN: ${{ inputs.dry_run }}
+          MODEL_PROJECTION_ONLY: ${{ inputs.model_projection_only }}
         run: |
           set -euo pipefail
           result="$RUNNER_TEMP/acceptance-result.json"
@@ -157,6 +164,15 @@ jobs:
           tail --lines=1 "$output" > "$result"
           jq --exit-status . "$result" > /dev/null
 
+      - name: Retain the pre-rebuild Dataset snapshot
+        if: always() && inputs.rebuild_only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: dataset-before-rebuild-${{ github.run_id }}
+          path: ${{ runner.temp }}/dataset-backup
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
       - name: Validate and accept community candidates
         id: community
         if: >-

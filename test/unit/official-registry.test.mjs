@@ -47,7 +47,7 @@ test("official resolver emits an exact declarative Pi plan", async () => {
   assert.equal(Object.hasOwn(plan, "command"), false);
   assert.equal(Object.hasOwn(plan, "credentials"), false);
 });
-for (const provider of ["deepseek", "zai", "xiaomi", "opencode-go"]) {
+for (const provider of ["deepseek", "zai", "xiaomi", "opencode-go", "opencode"]) {
   test(`official resolver selects only the ${provider} API key`, async () => {
     const plan = await resolveExecutionPlan(
       { ...input, provider, model: `${provider}/model` },

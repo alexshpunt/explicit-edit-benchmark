@@ -1,0 +1,90 @@
+---
+name: Correct accepted observation usage
+
+"on":
+  workflow_dispatch:
+    inputs:
+      dataset_repository:
+        description: Hugging Face Dataset repository (owner/name)
+        required: true
+        default: alexshpunt/explicit-edit-benchmark
+        type: string
+      correction_requests:
+        description: JSON array of pinned candidate, author, candidateCommit, manifestSha256, roundsSha256, totalTokens, costUsd
+        required: true
+        type: string
+      dry_run:
+        description: Validate and prepare corrections without publishing or commenting
+        required: true
+        default: true
+        type: boolean
+      expected_dataset_revision:
+        description: Dataset revision from the reviewed dry run (required for publication)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: huggingface-dataset-alexshpunt-explicit-edit-benchmark
+  cancel-in-progress: false
+
+jobs:
+  correct:
+    if: github.actor == github.repository_owner && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+      - run: npm ci
+      - name: Validate and correct existing observations
+        env:
+          DATASET_REPOSITORY: ${{ inputs.dataset_repository }}
+          CORRECTION_REQUESTS: ${{ inputs.correction_requests }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          EXPECTED_DATASET_REVISION: ${{ inputs.expected_dataset_revision }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          node --import tsx scripts/usage-corrections.mjs | tee "$RUNNER_TEMP/usage-correction.json"
+          jq --exit-status . "$RUNNER_TEMP/usage-correction.json" > /dev/null
+          {
+            echo '## Usage corrections'
+            echo '```json'
+            jq . "$RUNNER_TEMP/usage-correction.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the review result and recovery revision
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: usage-correction-result
+          path: ${{ runner.temp }}/usage-correction.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Notify Explorer about corrected usage
+        env:
+          EXPLORER_DISPATCH_TOKEN: ${{ secrets.EXPLORER_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/usage-correction.json"
+          if [[ "$(jq --raw-output .changed "$result")" != "true" ]]; then
+            exit 0
+          fi
+          if [[ -z "$EXPLORER_DISPATCH_TOKEN" ]]; then
+            echo "::warning::Dataset updated; Explorer will discover the revision on its scheduled check."
+            exit 0
+          fi
+          payload=$(jq --compact-output \
+            '{event_type:"dataset-updated",client_payload:{datasetRevision:.datasetRevision,addedRuns:[]}}' \
+            "$result")
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $EXPLORER_DISPATCH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data "$payload" \
+            "https://api.github.com/repos/alexshpunt/benchmark-explorer/dispatches"

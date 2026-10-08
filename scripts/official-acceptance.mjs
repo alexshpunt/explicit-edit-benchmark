@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { automaticPullRequests } from "./huggingface-pr-lifecycle.mjs";
 import { gunzipSync } from "node:zlib";
 import { commit, downloadFile, listCommits, listFiles, snapshotDownload } from "@huggingface/hub";
 import { ingestSubmission } from "./benchmark-ingestion.mjs";
@@ -14,6 +15,8 @@ import {
   buildPublicDatasetFromStore,
 } from "./build-public-dataset.mjs";
 import { appendAggregateRun } from "./aggregate-state.mjs";
+import { auditModelProjectionRebuild } from "./model-projection-audit.mjs";
+import { downloadSnapshotWithRetry } from "./snapshot-retry.mjs";
 import {
   assertPreserved,
   headCommit,
@@ -316,7 +319,11 @@ export async function acceptOfficialCandidates({
       const submission = await buildSubmission(normalized, metadata);
       const result = await ingestSubmission(
         store,
-        { ownerId: prepared.verified.transport.producer.repository, verification: "verified" },
+        {
+          ownerId: prepared.verified.transport.producer.repository,
+          sourceRepository: prepared.verified.transport.producer.repository,
+          verification: "verified",
+        },
         submission,
       );
       if (!result.created) {
@@ -333,6 +340,11 @@ export async function acceptOfficialCandidates({
         ...single.runs[0],
         submissionId: sourceMetadata.submissionId,
         ownerId: sourceMetadata.ownerId,
+        ...(sourceMetadata.submittedBy ? { submittedBy: sourceMetadata.submittedBy } : {}),
+        ...(sourceMetadata.sourceRepository
+          ? { sourceRepository: sourceMetadata.sourceRepository }
+          : {}),
+        ...(sourceMetadata.submissionUrl ? { submissionUrl: sourceMetadata.submissionUrl } : {}),
         purpose: sourceMetadata.purpose,
         verification: "verified",
         definitions: sourceMetadata.definitions,
@@ -502,11 +514,43 @@ export async function acceptOfficialCandidates({
   };
 }
 
-/** Rebuild every derived Dataset file from immutable canonical source and publish atomically. */
+/** Copy one complete Dataset snapshot into a new, timestamped local backup directory. */
+export async function preserveDatasetSnapshot(
+  snapshot,
+  backupRoot,
+  parentCommit,
+  now = new Date(),
+) {
+  const root = path.resolve(backupRoot);
+  await mkdir(root, { recursive: true });
+  const timestamp = now.toISOString().replace(/[:.]/gu, "-");
+  const baseName = `${timestamp}-${parentCommit.slice(0, 12)}`;
+  let backup;
+  for (let copyNumber = 1; ; copyNumber += 1) {
+    backup = path.join(root, copyNumber === 1 ? baseName : `${baseName}-${copyNumber}`);
+    try {
+      await mkdir(backup);
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+  }
+  for (const entry of await readdir(snapshot))
+    await cp(path.join(snapshot, entry), path.join(backup, entry), {
+      recursive: true,
+      dereference: true,
+    });
+  return backup;
+}
+
+/** Rebuild views atomically; verifyModelProjection also guards source bytes and non-model run facts. */
 export async function rebuildOfficialDataset({
   repository,
   accessToken,
   workspaceDirectory,
+  backupDirectory,
+  backupRootDirectory,
+  verifyModelProjection = false,
   hub = defaultHub,
 }) {
   if (!REPOSITORY.test(repository ?? "")) throw Error("Dataset repository must be owner/name");
@@ -517,17 +561,28 @@ export async function rebuildOfficialDataset({
   const workspace = path.resolve(workspaceDirectory);
   await rm(workspace, { recursive: true, force: true });
   await mkdir(workspace, { recursive: true });
-  const snapshot = await hub.snapshotDownload({
+  const snapshot = await downloadSnapshotWithRetry(hub, {
     repo,
     revision: parentCommit,
     accessToken: token,
     cacheDir: path.join(workspace, "cache"),
   });
+  let preservedBackup = null;
+  if (backupRootDirectory) {
+    preservedBackup = await preserveDatasetSnapshot(snapshot, backupRootDirectory, parentCommit);
+  } else if (backupDirectory) {
+    await rm(backupDirectory, { recursive: true, force: true });
+    await cp(snapshot, backupDirectory, { recursive: true, dereference: true });
+    preservedBackup = path.resolve(backupDirectory);
+  }
   const store = path.join(workspace, "store");
   const outputDirectory = path.join(workspace, "dataset");
   await cp(path.join(snapshot, "source"), store, { recursive: true, dereference: true });
   const index = await buildPublicDatasetFromStore(outputDirectory, store);
   assertPreserved(await readDatasetIndex(snapshot), index);
+  const projectionAudit = verifyModelProjection
+    ? await auditModelProjectionRebuild(snapshot, outputDirectory)
+    : undefined;
   const commitOid = await publishDirectory({
     hub,
     repo,
@@ -537,6 +592,8 @@ export async function rebuildOfficialDataset({
     title: "Rebuild canonical Dataset views",
   });
   return {
+    backupDirectory: preservedBackup,
+    ...(projectionAudit ? { projectionAudit } : {}),
     changed: commitOid !== parentCommit,
     datasetRevision: commitOid,
     addedRuns: [],
@@ -556,7 +613,11 @@ export async function listOpenOfficialCandidates(repository, fetchImpl = fetch) 
   if (!response.ok) throw Error(`Hugging Face candidate listing failed (${response.status})`);
   const body = await response.json();
   const prefix = "Contribute official benchmark execution ";
-  return body.discussions
-    .filter((item) => item.isPullRequest && item.status === "open" && item.title.startsWith(prefix))
-    .map((item) => ({ number: item.num, executionId: item.title.slice(prefix.length) }));
+  const candidates = body.discussions.filter(
+    (item) => item.isPullRequest && item.status === "open" && item.title.startsWith(prefix),
+  );
+  return (await automaticPullRequests(repository, candidates, fetchImpl)).map((item) => ({
+    number: item.num,
+    executionId: item.title.slice(prefix.length),
+  }));
 }

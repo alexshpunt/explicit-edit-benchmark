@@ -60,6 +60,7 @@ test("official candidate listing keeps the execution identity for durable duplic
   const candidates = await listOpenOfficialCandidates("owner/dataset", async () => ({
     ok: true,
     json: async () => ({
+      events: [],
       discussions: [
         {
           num: 45,

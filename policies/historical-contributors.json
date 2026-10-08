@@ -1,0 +1,176 @@
+{
+  "bb-pi-luna-low-full": {
+    "platform": "huggingface",
+    "accountId": "user2221",
+    "profileUrl": "https://huggingface.co/user2221",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/75"
+  },
+  "explicit-edit-2026-09-20T02-43-26.111Z": {
+    "platform": "huggingface",
+    "accountId": "TreyThomasCodes",
+    "profileUrl": "https://huggingface.co/TreyThomasCodes",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/77"
+  },
+  "explicit-edit-2026-09-20T02-53-36.347Z": {
+    "platform": "huggingface",
+    "accountId": "TreyThomasCodes",
+    "profileUrl": "https://huggingface.co/TreyThomasCodes",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/78"
+  },
+  "explicit-edit-2026-09-20T03-11-52.803Z": {
+    "platform": "huggingface",
+    "accountId": "TreyThomasCodes",
+    "profileUrl": "https://huggingface.co/TreyThomasCodes",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/79"
+  },
+  "bb-pi-routerai-deepseek-v4-1-flash-low-full": {
+    "platform": "huggingface",
+    "accountId": "user2221",
+    "profileUrl": "https://huggingface.co/user2221",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/80"
+  },
+  "bb-pi-routerai-glm-5-3-flash-low-full": {
+    "platform": "huggingface",
+    "accountId": "user2221",
+    "profileUrl": "https://huggingface.co/user2221",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/81"
+  },
+  "bb-pi-routerai-mercury-2-5-low-full": {
+    "platform": "huggingface",
+    "accountId": "user2221",
+    "profileUrl": "https://huggingface.co/user2221",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/82"
+  },
+  "bb-pi-routerai-ling-3-0-flash-vl-low-full": {
+    "platform": "huggingface",
+    "accountId": "user2221",
+    "profileUrl": "https://huggingface.co/user2221",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/83"
+  },
+  "explicit-edit-2026-09-26T16-16-37.553Z": {
+    "platform": "huggingface",
+    "accountId": "ashokkumards",
+    "profileUrl": "https://huggingface.co/ashokkumards",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/84"
+  },
+  "explicit-edit-2026-09-28T03-08-11.330Z": {
+    "platform": "huggingface",
+    "accountId": "TreyThomasCodes",
+    "profileUrl": "https://huggingface.co/TreyThomasCodes",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/85"
+  },
+  "explicit-edit-2026-09-28T03-25-26.588Z": {
+    "platform": "huggingface",
+    "accountId": "TreyThomasCodes",
+    "profileUrl": "https://huggingface.co/TreyThomasCodes",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/86"
+  },
+  "explicit-edit-2026-09-28T03-45-15.389Z": {
+    "platform": "huggingface",
+    "accountId": "TreyThomasCodes",
+    "profileUrl": "https://huggingface.co/TreyThomasCodes",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/87"
+  },
+  "explicit-edit-2026-09-28T08-00-39.296Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/91"
+  },
+  "explicit-edit-2026-09-28T08-15-14.138Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/92"
+  },
+  "explicit-edit-2026-09-28T08-24-59.752Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/93"
+  },
+  "explicit-edit-2026-09-28T08-33-36.414Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/94"
+  },
+  "explicit-edit-2026-09-28T10-41-41.735Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/95"
+  },
+  "explicit-edit-2026-09-28T10-59-53.875Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/96"
+  },
+  "explicit-edit-2026-09-28T12-12-18.899Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/98"
+  },
+  "explicit-edit-2026-09-28T12-47-22.067Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/100"
+  },
+  "explicit-edit-2026-09-28T13-51-58.173Z": {
+    "platform": "huggingface",
+    "accountId": "xuankunv1",
+    "profileUrl": "https://huggingface.co/xuankunv1",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/104"
+  },
+  "explicit-edit-2026-09-28T16-48-09.195Z": {
+    "platform": "huggingface",
+    "accountId": "xuankunv1",
+    "profileUrl": "https://huggingface.co/xuankunv1",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/105"
+  },
+  "explicit-edit-2026-09-28T17-40-09.938Z": {
+    "platform": "huggingface",
+    "accountId": "xuankunv1",
+    "profileUrl": "https://huggingface.co/xuankunv1",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/106"
+  },
+  "explicit-edit-2026-09-28T17-55-45.431Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/108"
+  },
+  "explicit-edit-2026-09-28T17-57-33.549Z": {
+    "platform": "huggingface",
+    "accountId": "xuankunv1",
+    "profileUrl": "https://huggingface.co/xuankunv1",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/109"
+  },
+  "explicit-edit-2026-09-28T18-10-03.429Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/110"
+  },
+  "explicit-edit-2026-09-28T18-50-46.143Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/111"
+  },
+  "explicit-edit-2026-09-28T22-47-01.143Z": {
+    "platform": "huggingface",
+    "accountId": "TreyThomasCodes",
+    "profileUrl": "https://huggingface.co/TreyThomasCodes",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/112"
+  },
+  "explicit-edit-2026-09-29T02-29-37.330Z": {
+    "platform": "huggingface",
+    "accountId": "Yugimob",
+    "profileUrl": "https://huggingface.co/Yugimob",
+    "submissionUrl": "https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/discussions/113"
+  }
+}

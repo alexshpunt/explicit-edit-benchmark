@@ -37,24 +37,45 @@ async function runtime(root, adapter) {
     await mkdir(path.join(root, "node_modules", definition.extensionPackage), { recursive: true });
 }
 
-test("Oh My Pi passes API-key providers through their native environment variable", async () => {
+for (const provider of ["opencode-go", "opencode"]) {
+  test(`Oh My Pi passes ${provider} through the shared OpenCode environment variable`, async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "execution-route-"));
+    await runtime(root, "oh-my-pi-default");
+    const args = await prepareExecution({
+      plan: {
+        adapter: "oh-my-pi-default",
+        provider,
+        model: `${provider}/deepseek-v4.1-flash`,
+        reasoning: "low",
+        packages: [{ role: "agent", version: "18.2.6" }],
+      },
+      credentialStore: { [provider]: { type: "api_key", key: "opencode-secret" } },
+      runtime: root,
+      directory: path.join(root, "private"),
+    });
+    assert.equal(args.includes("--auth-file"), false);
+    const environment = JSON.parse(await readFile(args[args.indexOf("--env-file") + 1], "utf8"));
+    assert.equal(environment.OPENCODE_API_KEY, "opencode-secret");
+  });
+}
+
+test("Pi receives the trusted GPT-6.1 Sol catalog seed", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "execution-route-"));
-  await runtime(root, "oh-my-pi-default");
+  await runtime(root, "pi-default");
   const args = await prepareExecution({
     plan: {
-      adapter: "oh-my-pi-default",
-      provider: "opencode-go",
-      model: "opencode-go/deepseek-v4.1-flash",
+      adapter: "pi-default",
+      provider: "openai-codex",
+      model: "openai-codex/gpt-6.1-sol",
       reasoning: "low",
-      packages: [{ role: "agent", version: "18.2.6" }],
+      packages: [{ role: "agent", version: "0.87.1" }],
     },
-    credentialStore: { "opencode-go": { type: "api_key", key: "opencode-secret" } },
+    credentialStore: credential,
     runtime: root,
     directory: path.join(root, "private"),
   });
-  assert.equal(args.includes("--auth-file"), false);
-  const environment = JSON.parse(await readFile(args[args.indexOf("--env-file") + 1], "utf8"));
-  assert.equal(environment.OPENCODE_API_KEY, "opencode-secret");
+  const models = JSON.parse(await readFile(args[args.indexOf("--model-file") + 1], "utf8"));
+  assert.equal(models.providers["openai-codex"].models[0].id, "gpt-6.1-sol");
 });
 
 for (const adapter of Object.keys(ADAPTERS)) {

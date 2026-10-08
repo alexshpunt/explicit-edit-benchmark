@@ -58,6 +58,7 @@ test("community acceptance downloads only one immutable candidate bundle", async
       isPullRequest: true,
       status: "open",
       title: `Contribute benchmark observation ${runId}`,
+      author: { name: "alice", type: "user" },
       events: [{ type: "commit", data: { oid: candidateCommit } }],
     }),
   });
@@ -73,7 +74,16 @@ test("community acceptance downloads only one immutable candidate bundle", async
       fetchImpl,
     });
 
-    assert.deepEqual(result, { candidateCommit, runId });
+    assert.deepEqual(result, {
+      candidateCommit,
+      runId,
+      submittedBy: {
+        platform: "huggingface",
+        accountId: "alice",
+        profileUrl: "https://huggingface.co/alice",
+      },
+      submissionUrl: "https://huggingface.co/datasets/owner/dataset/discussions/78",
+    });
     assert.deepEqual(
       downloads.map((item) => item.path),
       candidateFiles.map((name) => `candidates/${runId}/${name}`),

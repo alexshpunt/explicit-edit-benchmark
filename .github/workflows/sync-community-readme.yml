@@ -1,0 +1,51 @@
+---
+name: Sync community README tables
+
+"on":
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-community-readme
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+      - run: npm ci
+      - run: node scripts/sync-readme-community.mjs
+      - run: npm exec oxfmt --write README.md badges.json
+      - name: Open or update the generated README pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- README.md badges.json; then
+            echo "README community tables are current." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          branch=automation/community-readme
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git checkout -B "$branch"
+          git add README.md badges.json
+          git commit -m "docs: refresh community tables"
+          git push --force origin "$branch"
+          open_prs=$(gh pr list --head "$branch" --state open --json number --jq length)
+          if [[ "$open_prs" = "0" ]]; then
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "docs: refresh community tables" \
+              --body "Refreshes the generated contributor and accepted-harness tables from the published Dataset projection."
+          fi

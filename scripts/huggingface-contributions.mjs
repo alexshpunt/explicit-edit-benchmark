@@ -120,12 +120,16 @@ async function validateCandidateMetadata(metadata) {
   return metadata;
 }
 
-async function ingestCandidate(storeDirectory, candidateDirectory) {
+async function ingestCandidate(storeDirectory, candidateDirectory, attribution) {
   const metadata = await validateCandidateMetadata(
     JSON.parse(await readFile(path.join(candidateDirectory, "submission.json"), "utf8")),
   );
   const submission = await buildSubmission(candidateDirectory, metadata);
-  const result = await ingestSubmission(storeDirectory, { ownerId: metadata.ownerId }, submission);
+  const result = await ingestSubmission(
+    storeDirectory,
+    { ownerId: metadata.ownerId, ...attribution },
+    submission,
+  );
   if (!result.created) throw Error("Candidate observation already exists on main");
   return { result, runId: submission.bundle.manifest.runId };
 }
@@ -276,7 +280,19 @@ export async function downloadHuggingFaceCandidate({
       flag: "wx",
     });
   }
-  return { candidateCommit, runId };
+  const author = discussion.author?.name ?? discussion.author;
+  if (typeof author !== "string" || !SAFE_SEGMENT.test(author) || author === "deleted")
+    throw Error("Candidate has no verifiable Hugging Face author");
+  return {
+    candidateCommit,
+    runId,
+    submittedBy: {
+      platform: "huggingface",
+      accountId: author,
+      profileUrl: `https://huggingface.co/${author}`,
+    },
+    submissionUrl: `https://huggingface.co/datasets/${repository}/discussions/${candidateNumber}`,
+  };
 }
 
 /** Post the acceptance receipt and close a materialized Dataset candidate. */
@@ -355,7 +371,12 @@ export async function acceptHuggingFaceCandidate({
 
   const outputDirectory = path.join(workspace, "dataset");
   const candidate = path.join(workspace, "candidate");
-  const { candidateCommit, runId: candidateRunId } = await downloadHuggingFaceCandidate({
+  const {
+    candidateCommit,
+    runId: candidateRunId,
+    submittedBy,
+    submissionUrl,
+  } = await downloadHuggingFaceCandidate({
     hub,
     repo,
     repository,
@@ -413,7 +434,12 @@ export async function acceptHuggingFaceCandidate({
   await mkdir(store, { recursive: true });
   await writeFile(path.join(store, "index.json"), JSON.stringify(sourceIndex, null, 2) + "\n");
   const previousSourceIndex = structuredClone(sourceIndex);
-  const accepted = await ingestCandidate(store, candidate);
+  const candidateMetadata = JSON.parse(
+    await readFile(path.join(candidate, "submission.json"), "utf8"),
+  );
+  if (candidateMetadata.ownerId !== submittedBy.accountId)
+    throw Error("Candidate ownerId does not match the Hugging Face pull request author");
+  const accepted = await ingestCandidate(store, candidate, { submittedBy, submissionUrl });
   if (accepted.runId !== candidateRunId)
     throw Error("Candidate title does not match the normalized run ID");
 
@@ -424,6 +450,11 @@ export async function acceptHuggingFaceCandidate({
     ...single.runs[0],
     submissionId: sourceMetadata.submissionId,
     ownerId: sourceMetadata.ownerId,
+    ...(sourceMetadata.submittedBy ? { submittedBy: sourceMetadata.submittedBy } : {}),
+    ...(sourceMetadata.sourceRepository
+      ? { sourceRepository: sourceMetadata.sourceRepository }
+      : {}),
+    ...(sourceMetadata.submissionUrl ? { submissionUrl: sourceMetadata.submissionUrl } : {}),
     purpose: sourceMetadata.purpose,
     verification: sourceMetadata.verification ?? "unverified",
     definitions: sourceMetadata.definitions,

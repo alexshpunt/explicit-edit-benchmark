@@ -40,6 +40,29 @@ export function canonicalModelProvider(registry, modelFamily, observedProvider) 
   );
 }
 
+/** Project a registered alias without changing wire selectors or explicit historical identities. */
+export function canonicalModelRow(registry, row) {
+  const provider = canonicalModelProvider(
+    registry,
+    row.modelFamily ?? row.model,
+    row.provider ?? null,
+  );
+  const projected = { ...row, provider };
+  if (typeof row.model !== "string") return projected;
+  const qualified = row.model.includes("/");
+  if (qualified && !row.model.startsWith(`${row.provider}/`)) return projected;
+  const selector = qualified ? row.model.slice(row.model.indexOf("/") + 1) : row.model;
+  const match = registry.models.find((model) =>
+    model.routes?.some((route) => route.provider === row.provider && route.selector === selector),
+  );
+  if (!match || row.modelFamily !== selector) return projected;
+  return {
+    ...projected,
+    modelFamily: match.id,
+    ...(row.modelVersion === selector ? { modelVersion: match.id } : {}),
+  };
+}
+
 /** Resolve a provider selector while preserving the exact selector used on the wire. */
 export async function resolveCanonicalModel(provider, selector) {
   const registry = await loadModelRegistry();
