@@ -258,5 +258,5 @@ These are instructions that a coding agent loads on its own rather than document
 | `configure-codex-account`       | Run Codex on a ChatGPT subscription, an API-key route, or a Chinese provider such as Z.AI or DeepSeek |
 | `configure-copilot-account`     | Run Copilot on its own GitHub account, a provider key, or an OAuth-only plan through a local bridge   |
 | `add-benchmark-harness`         | Add an adapter for another agent CLI                                                                  |
-| `publish-benchmark-observation` | Run a full observation and open the Dataset pull request                                              |
+| `publish-benchmark-observation` | Run a full observation, open the Dataset pull request, and report grades and usage                    |
 | `review-benchmark-candidate`    | Review, validate, and accept a contributed result                                                     |

@@ -1,0 +1,172 @@
+{
+  "synthetic": true,
+  "runId": "example-full",
+  "submissionUrl": "https://example.org/submissions/example-full",
+  "acceptanceStatus": "accepted",
+  "configuration": {
+    "modelFamily": "example-model",
+    "modelVersion": "1",
+    "provider": "example-provider",
+    "transport": "example-api",
+    "harnessFamily": "example-harness",
+    "harnessVersion": "1.0",
+    "reasoning": "low"
+  },
+  "benchmark": {
+    "taskCount": 226,
+    "contract": "explicit-edit-v1",
+    "oracleRecoveries": 5,
+    "timeoutSeconds": 120
+  },
+  "observation": {
+    "trials": 226,
+    "firstExactPasses": 221,
+    "finalExactPasses": 226,
+    "distinctTasks": 226,
+    "recoveredTasks": 5,
+    "extraRounds": 5,
+    "totalRounds": 231
+  },
+  "usage": {
+    "costUsd": {
+      "sum": 0.236,
+      "observedRounds": 231
+    },
+    "totalTokens": {
+      "sum": 228000,
+      "observedRounds": 231
+    },
+    "smoke": {
+      "costUsd": 0.01,
+      "totalTokens": 1000
+    }
+  },
+  "firstAttemptMisses": [
+    {
+      "taskId": "replace-a",
+      "infrastructureFailure": null,
+      "timedOut": false,
+      "exitCode": 0,
+      "eventErrors": 0,
+      "failedToolCalls": 0,
+      "invalidToolCalls": 0,
+      "providerFailure": null,
+      "byteMismatch": true
+    },
+    {
+      "taskId": "insert-b",
+      "infrastructureFailure": null,
+      "timedOut": false,
+      "exitCode": 0,
+      "eventErrors": 0,
+      "failedToolCalls": 0,
+      "invalidToolCalls": 0,
+      "providerFailure": null,
+      "byteMismatch": true
+    },
+    {
+      "taskId": "move-c",
+      "infrastructureFailure": null,
+      "timedOut": true,
+      "exitCode": null,
+      "eventErrors": 0,
+      "failedToolCalls": 0,
+      "invalidToolCalls": 0,
+      "providerFailure": null,
+      "byteMismatch": false
+    },
+    {
+      "taskId": "copy-d",
+      "infrastructureFailure": null,
+      "timedOut": false,
+      "exitCode": 1,
+      "eventErrors": 1,
+      "failedToolCalls": 0,
+      "invalidToolCalls": 0,
+      "providerFailure": "rate-limit",
+      "byteMismatch": false
+    },
+    {
+      "taskId": "delete-e",
+      "infrastructureFailure": null,
+      "timedOut": true,
+      "exitCode": null,
+      "eventErrors": 0,
+      "failedToolCalls": 1,
+      "invalidToolCalls": 0,
+      "providerFailure": null,
+      "byteMismatch": true
+    }
+  ],
+  "datasetSnapshot": {
+    "revision": "example-revision-1",
+    "includesNewObservation": true,
+    "filters": {
+      "modelFamily": "example-model",
+      "modelVersion": "1",
+      "provider": "example-provider",
+      "transport": "example-api",
+      "reasoning": "low",
+      "contract": "explicit-edit-v1",
+      "oracleRecoveries": 5,
+      "timeoutSeconds": 120
+    },
+    "configurations": [
+      {
+        "harnessFamily": "example-best",
+        "harnessVersion": "1",
+        "firstExactRate": 0.995,
+        "finalExactRate": 1,
+        "qualityScore": 0.99625,
+        "score": 0.99625,
+        "coverage": 1,
+        "rankingEligible": true
+      },
+      {
+        "modelFamily": "example-model",
+        "modelVersion": "1",
+        "provider": "example-provider",
+        "transport": "example-api",
+        "harnessFamily": "example-harness",
+        "harnessVersion": "1.0",
+        "reasoning": "low",
+        "firstExactRate": 0.98,
+        "finalExactRate": 1,
+        "qualityScore": 0.985,
+        "score": 0.985,
+        "coverage": 1,
+        "rankingEligible": true
+      },
+      {
+        "harnessFamily": "example-tied",
+        "harnessVersion": "1",
+        "firstExactRate": 0.98,
+        "finalExactRate": 1,
+        "qualityScore": 0.985,
+        "score": 0.985,
+        "coverage": 1,
+        "rankingEligible": true
+      },
+      {
+        "harnessFamily": "example-partial",
+        "harnessVersion": "1",
+        "firstExactRate": 1,
+        "finalExactRate": 1,
+        "qualityScore": 1,
+        "score": 0.1,
+        "coverage": 0.1,
+        "rankingEligible": true
+      },
+      {
+        "harnessFamily": "example-quarantined",
+        "harnessVersion": "1",
+        "firstExactRate": 1,
+        "finalExactRate": 1,
+        "qualityScore": 1,
+        "score": 1,
+        "coverage": 1,
+        "rankingEligible": false
+      }
+    ]
+  }
+}
