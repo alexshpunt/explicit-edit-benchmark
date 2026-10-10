@@ -91,6 +91,27 @@ Thank you to everyone who shares benchmark observations. Your work makes this pu
 
 <!-- benchmark-community:end -->
 
+## Separate Multi-Agent benchmark candidate
+
+[**Explicit Edit — Multi-Agent**](docs/multi-agent.md) measures parallel editing
+of one large shared project: 71 coherent restoration goals, persistent agents
+and graph-derived scheduling. It has its own completion measure and results,
+separate from the 226 exact-edit tasks described in this README.
+
+```sh
+npm run benchmark:multi-agent -- --help
+```
+
+See the [run guide](docs/multi-agent.md), [result format](docs/multi-agent-results.md)
+and [calibration observations](docs/multi-agent-calibration.md). The candidate does
+not publish to the current Dataset or mix results into its leaderboard.
+
+## Project and personal skills
+
+Public skills for working on this repository live in `.agents/skills/`.
+The whole `.pi/` directory is ignored: it holds personal skills, settings and
+runtime data. Do not force-add its files to Git.
+
 ## What you need
 
 - Linux or WSL2

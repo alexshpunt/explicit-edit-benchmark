@@ -12,3 +12,5 @@ __pycache__/
 .playwright-mcp/
 .linear-project
 .agents/tmp/
+.pi/
+/.renderer-worker.local.json
