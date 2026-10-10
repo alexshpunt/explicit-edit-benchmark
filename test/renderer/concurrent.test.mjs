@@ -17,6 +17,8 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
 import { providerFixture } from "./provider-fixture.mjs";
 import { multiAgentResult } from "../../src/suites/explicit-edit-multi-agent/results.mjs";
+import { harnessParticipant } from "../../scripts/harness-participant.mjs";
+import { inspectHarnessOutput } from "../../scripts/harness-runtime.mjs";
 
 const root = process.env.RENDERER_CONCURRENT_OUTPUT;
 assert.ok(root && process.env.RENDERER_PI_RUNTIME);
@@ -192,6 +194,86 @@ with open('/workspace/.fixture-lock','a') as lock:
 PY`;
 }
 
+await test(
+  "the same shared harness runtime delivers rotating tasks concurrently with isolated participant histories",
+  { timeout: 120000 },
+  async () => {
+    const directory = path.join(root, "common-harness");
+    const scripts = Object.fromEntries(
+      tasks.map((task) => [
+        task.id,
+        mutation(edits.get(task.id), { barrier: edits.get(task.id).parameter }),
+      ]),
+    );
+    const script = `
+const fs = require("node:fs");
+const edits = ${JSON.stringify(scripts)};
+let delivered = 0;
+require("node:readline").createInterface({input: process.stdin}).on("line", line => {
+  const { prompt } = JSON.parse(line);
+  const task = /^Task (task-\\d+):/m.exec(prompt)[1];
+  fs.appendFileSync("/state/history", task + "\\n");
+  console.log(JSON.stringify({type: "turn/start"}));
+  console.log(JSON.stringify({type: "tool/call", data: {name: "bash", arguments: {command: edits[task]}}}));
+  require("node:child_process").execFileSync("python3", ["-c", edits[task].split("\\n").slice(1, -1).join("\\n")]);
+  console.log(JSON.stringify({type: "assistant/message", data: {delivered: ++delivered}}));
+  console.log(JSON.stringify({type: "eval/turn-complete", reason: {kind: "completed"}}));
+});`;
+    const adapter = {
+      kind: "custom",
+      command: "/usr/bin/true",
+      args: [],
+      driver: { command: process.execPath, args: ["-e", script], persistent: true },
+      inspectOutput: (file) => inspectHarnessOutput("dsh-standard", file),
+    };
+    let participants = 0;
+    const report = await runConcurrent(preparation, directory, {
+      createDriver: (workspace, state, agent) => {
+        participants++;
+        return harnessParticipant(adapter, {
+          workspace,
+          state,
+          artifacts: path.join(directory, "deliveries", `agent-${agent}`),
+        });
+      },
+    });
+    assert.equal(participants, 4);
+    assert.equal(report.mode, "live");
+    assert.equal(report.status, "pass");
+    assert.equal(report.acceptedTasks, 8);
+    assert.equal(report.executions.length, 8);
+    assert.deepEqual(report.agentsClosed, [true, true, true, true]);
+    for (const item of report.executions) {
+      assert.equal(item.receipt.toolCalls, 1);
+      assert.equal(item.receipt.modelRounds, 1);
+      assert.equal(item.receipt.totalTokens, null);
+    }
+    for (let agent = 0; agent < 4; agent++) {
+      const history = (await readFile(path.join(directory, `agent-${agent}/history`), "utf8"))
+        .trim()
+        .split("\n");
+      assert.deepEqual(
+        history,
+        report.schedule.flatMap((round) =>
+          round.assignments.filter((item) => item.agent === agent).map((item) => item.task),
+        ),
+      );
+      const output = await readFile(
+        path.join(directory, "deliveries", `agent-${agent}`, "round-002-attempt-1/stdout.jsonl"),
+        "utf8",
+      );
+      assert.ok(
+        output.split("\n").some((line) => {
+          try {
+            return JSON.parse(line).data?.delivered === 2;
+          } catch {
+            return false;
+          }
+        }),
+      );
+    }
+  },
+);
 await test(
   "four real Pi sessions overlap, rotate owners, preserve peer edits and keep their own history",
   { timeout: 120000 },

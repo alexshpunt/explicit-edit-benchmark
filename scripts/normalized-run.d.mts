@@ -6,8 +6,37 @@ export interface NormalizedToolEvent {
   commandFeatures: string[];
 }
 
+/** Fixed maximal-team workload and safe per-profile wall-clock observations. */
+export interface NormalizedTeamSuite {
+  id: string;
+  protocol: string;
+  agents: 15;
+  graphWidth: 15;
+  workloadSha256: string;
+  graphSha256: string;
+  scheduleSha256: string;
+  schedule: Array<{
+    id: string;
+    assignments: Array<{ task: string; agent: number; zone?: string; slot?: number }>;
+  }>;
+  observations: Array<{
+    profileId: string;
+    status:
+      | "pass"
+      | "blocked"
+      | "provider_failure"
+      | "driver_exit"
+      | "infrastructure"
+      | "cancelled"
+      | "timeout";
+    elapsedMs: number;
+    terminalCategory: string | null;
+  }>;
+}
+
 export interface NormalizedRunManifest {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2 | 3;
+  suite?: NormalizedTeamSuite;
   runId: string;
   contract: unknown;
   taskSetSha256: string;

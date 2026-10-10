@@ -1,215 +1,177 @@
 # Explicit Edit — Multi-Agent
 
-Multi-Agent is a separate benchmark candidate in the Explicit Edit repository.
-It measures reliable editing of an existing large project by agents working
-concurrently in one shared workspace. It is not a collection of unrelated coding
-problems, and it does not use the original 226-task benchmark's Score.
+Multi-Agent measures reliable editing of one large existing project by agents
+working concurrently in a shared workspace. It uses the common benchmark CLI,
+harness adapters, normalized statistics and submission store. Its tasks and
+ranking stay separate from the original 226-task suite.
 
-The workload starts with a shuffled C++ renderer monolith. Agents extract working
-modules, then restore specified names using current owners and signatures. They
-must preserve the other code, literals, macros and inactive branches. A successful
-run restores all 71 goals while keeping the rendered output exactly unchanged.
+The input is a shuffled C++ renderer monolith. Agents extract working modules,
+then restore names using current owners and signatures. They must preserve the
+other code, literals, macros and inactive branches. All 71 goals must leave the
+rendered output unchanged.
 
-## What is measured
+## Run policy and Score
 
-The primary result is **jointly accepted tasks / total tasks**. Only complete
-passing barriers earn progress; a partly completed failed barrier earns none.
-There is no individual-agent score. Duration and correction deliveries are
-separate measurements, not hidden score weights.
-
-The current dependency graph has width 15. That is the default persistent team
-size, not the number actively editing in every round. The default schedule has
-28 rounds. Only agents with ready assignments work in a round; others wait.
-Ownership rotates between agents. Every assignment and correction tells an agent
-how many peers share the project and how many agents are assigned in that round.
-A solo run omits that notice and retains the original task order.
+A scored run always uses **15 agents and all 71 tasks**. The dependency graph has
+width 15 and the schedule has 28 barriers. Only agents assigned ready tasks work
+at a barrier; the others wait. Assignments rotate between agents. Every assignment
+and correction discloses the total team size and the number currently assigned.
 
 The graph follows code dependencies and selector readiness, not task numbering.
-Independent monolith extractions can run together even though they edit the same
-file. Only the final monolith cleanup waits for all required module moves.
+Independent monolith extractions can run together even when they edit the same
+file. Final monolith cleanup waits for the required module moves.
 
-Each agent keeps its own process and conversation. There are no separate answer
-worktrees to merge later. Agents see their current assignment and shared source,
-not future tasks, private contracts, reference source or expected pixels.
+Agents share the writable project, but have separate state and histories. They
+see the current assignment, not future tasks, private contracts, reference source
+or expected pixels. Existing harness adapters own their native continuation.
+The benchmark does not replace a selected harness with Baseline Agent.
 
-After all assigned agents settle, the verifier checks cumulative editing
-obligations, builds a fresh isolated project and renders two scenes twice. All
-four outputs must match the pinned pixel hashes. Earlier accepted edits remain
-obligations, and source must not change after the barrier.
+After assigned agents settle, the verifier checks cumulative obligations, builds
+a fresh isolated project and renders two scenes twice. All four outputs must
+match the pinned pixels. Earlier accepted edits remain obligations, and source
+must not change after the barrier.
 
-A failed barrier allows three additional corrections with coarse feedback:
-requirements not met, build failed, or images differ. Failed edits and histories
-are retained. Nothing resets automatically. Exhausting corrections stops the
-jointly accepted prefix. Provider, driver, infrastructure and cancellation stops
-are recorded separately from editing blocks.
+A failed barrier allows three corrections with coarse feedback: requirements not
+met, build failed, or images differ. Failed edits and histories remain. There is
+no reset or fresh retry. Exhausting corrections stops the accepted prefix.
+Provider, driver, infrastructure and cancellation stops are recorded separately.
 
-**There is no default overall or per-attempt time limit.** A live run can continue
-indefinitely and spend model credit. Cancel with Ctrl+C or SIGTERM. Agent processes
-are closed, and the private evidence is retained. There is no automatic restart.
+**Score is jointly accepted tasks / 71.** A partly completed failed barrier earns
+no task credit. There is no individual-agent score. Duration, cost and correction
+counts do not weight Score. The original suite keeps its existing Score.
+
+**Local team runs have no overall or delivery deadline.** They can continue
+indefinitely and spend model credit. Cancel with Ctrl+C or SIGTERM. Owned agent
+processes close and private evidence remains. Official GitHub-hosted jobs are
+subject to GitHub's six-hour platform limit, not a benchmark task deadline.
 
 ## Requirements
 
 - Linux x64 or x64 WSL2, Node.js 24 or newer, Python 3 and Bubblewrap.
-- Clang 18 available as `clang++`, with the normal C++17 standard library.
-- The repository's locked dependencies: `npm ci`.
-- For live runs only, an isolated Pi 1.0.1 runtime and explicitly selected model
-  credentials. No personal Pi settings or project extensions are loaded.
+- Clang 18 available as `clang++`, Clangd and the normal C++17 standard library.
+- Locked repository dependencies: `npm ci`.
+- For model runs, the selected agent CLI, model access and explicit credentials,
+  using the same configuration rules as the original suite.
 
-Run heavy preparation and verification in a Linux environment with enough CPU
-and memory. Keep one heavy renderer job at a time under a shared project lock.
-Deployment-specific settings belong in your private operator instructions, not
-the public recipe.
+Use enough CPU and memory for preparation and fresh builds. Keep one heavy
+renderer job at a time under a shared project lock. Machine-specific settings
+belong in private operator instructions, not this guide.
 
 The bundled fixture has its own [provenance and licenses](../fixtures/explicit-edit-multi-agent/PROVENANCE.md).
-Keep generated `notices/` when distributing generated code. The candidate's code
-and input attribution are separate from an agent's hidden verification environment.
+Keep generated `notices/` when distributing generated code.
 
-## Source layout
+## Common run and submission
 
-Both suites live under `src/suites/`: `explicit-edit/` and
-`explicit-edit-multi-agent/`. Use `scripts/multi-agent.mjs`, through
-`npm run benchmark:multi-agent`, for supported runs. The suite root contains
-`prepare.mjs` and `results.mjs`; implementation is grouped by responsibility:
+The following command **calls a model and submits the result**. Confirm that
+both actions are intended before running it:
 
-| Directory     | Responsibility                                                         |
-| ------------- | ---------------------------------------------------------------------- |
-| `generation/` | Pack, rename and shuffle the pinned project; build the input           |
-| `tasks/`      | Prepare goals and current selectors; derive dependencies and schedules |
-| `execution/`  | Run persistent agents, corrections and cancellation                    |
-| `grading/`    | Check cumulative obligations, fresh builds and exact pixels            |
-| `reference/`  | Isolated scripted editors and shared compare-and-commit                |
-| `cpp/`        | Tokens, structure, compiler AST and binding-aware name helpers         |
+```sh
+npm run benchmark -- run --local --suite explicit-edit-multi-agent \
+  --harness pi-default --model PROVIDER/MODEL --thinking high
+```
 
-Earlier pilot, slice and grouped commands live in
-[`scripts/multi-agent/experiments/`](../scripts/multi-agent/experiments/README.md).
-They are not alternative candidate entry points. The full and coherent reference
-routes still used by clean preparation remain in the working suite. Reference
-workers receive only an explicit editing-code allowlist, not these whole directories.
+Choose any existing ready adapter listed in the root README. A custom harness
+or model-harness matrix uses the existing configuration API:
 
-The original suite generates its small input files and expected output in code.
-Multi-Agent instead starts from the pinned C++ project in
-`fixtures/explicit-edit-multi-agent/`, including its provenance and licenses.
-Generated workspaces and run evidence belong in ignored output directories.
+```sh
+npm run benchmark -- run --local --suite explicit-edit-multi-agent \
+  --config PRIVATE_BENCHMARK_CONFIG
+```
 
-## From a clean checkout
+The common flow checks the adapter, performs a one-task model/auth smoke check,
+prepares the workload and requires a matching 15-agent scripted proof before
+starting the measured team. Teams for different configurations run sequentially;
+each measured team has its own project and participant state.
 
-All output paths must be new. Preparation and scripted proof use no models, but
-perform many compiler and render checks and can take hours. Preparation time is
-not a model's benchmark duration.
+There is no scored `--task`, smaller team, fresh retry or finite timeout option
+for this suite. `--concurrency 15` is accepted but is already the default.
+
+For runs without automatic submission, use the common `raw-run`, `export` and
+`inspect` commands described in [benchmark automation](benchmark-automation.md).
+`raw-run` accepts `--suite explicit-edit-multi-agent` and an explicit
+`--preparation PREPARATION` with a matching completed 15-agent proof. It still
+requires the same model/auth smoke readiness; preparation is not a substitute.
+
+## Model-free preparation and proof
+
+Preparation performs many compiler and render checks and can take hours. It
+uses no models. Preparation time is not a model's benchmark duration. All output
+paths must be new:
 
 ```sh
 npm ci
-npm run benchmark:multi-agent -- --help
 npm run benchmark:multi-agent -- prepare .tmp/multi-agent-input
 npm run benchmark:multi-agent -- verify \
   .tmp/multi-agent-input/preparation .tmp/multi-agent-reference
 ```
 
-`prepare` generates the named, shuffled monolith from the bundled fixture,
-verifies the full restoration route, prepares and proves the coherent goals,
-then checks the concurrent graph's routes. `verify` executes the actual shared
-parallel schedule, with isolated scripted editors using only public tasks.
+These are developer/reference commands, not a second model-result protocol.
+`prepare` generates the named, shuffled monolith, proves the full restoration
+route and coherent goals, then checks the concurrent graph. `verify` executes
+the real parallel schedule with isolated scripted editors using public tasks.
 A graph check alone is not a parallel execution proof.
 
-If you already have a matching completed coherent preparation and scripted proof,
-you may explicitly reuse it instead of regenerating it:
+An explicitly selected, matching coherent preparation can be reused:
 
 ```sh
 npm run benchmark:multi-agent -- prepare .tmp/multi-agent-input \
   --from-coherent AUDITED_COHERENT_PREPARATION
 ```
 
-The preparation still checks source, task and contract identities. It does not
-trust a folder name or silently use a local reference answer.
+Smaller scripted teams remain available for development. They are not scored
+observations and cannot enter the common 15-agent result protocol.
 
-To select a smaller team, use `--agents N` during both verification and the live
-run. Values range from one to the graph width. Each exact schedule needs its own
-passing scripted proof. For example:
+## Results and privacy
 
-```sh
-npm run benchmark:multi-agent -- verify \
-  .tmp/multi-agent-input/preparation .tmp/multi-agent-solo-reference --agents 1
-```
-
-## Live execution
-
-The candidate currently supports Baseline Agent: pinned Pi 1.0.1, bash only and
-an empty system prompt. Other harnesses are not implemented by this entry point.
-A provider/model selector is not a harness; OpenCode Go can supply the model while
-Pi remains the agent runtime.
-
-Install a separate runtime outside the preparation and candidate workspace:
+Raw run directories contain source, commands, prose, sessions and private paths.
+**Never upload or commit them.** Use the same safe bundle as the original suite:
 
 ```sh
-mkdir -p .tmp/multi-agent-runtime
-npm install --prefix .tmp/multi-agent-runtime --no-save --ignore-scripts \
-  @earendil-works/pi-coding-agent@1.0.1
+npm run benchmark -- export results/RUN_ID
+npm run benchmark -- inspect results/RUN_ID/normalized
 ```
 
-Create a private configuration, outside Git. Replace the example paths with
-worker-local paths. The model must be available through your selected account:
+Schema 3 adds task/barrier/participant links to the common five tables. Tool
+calls, model rounds, errors, usage and cost come from the selected harness's
+native events. Missing facts stay null. Every delivery is counted once, even
+when its assignment contains several tasks. Team time is wall-clock time, not
+summed parallel process time. See the [result contract](multi-agent-results.md).
 
-```json
-{
-  "runtime": "RUNTIME_INSTALL_DIRECTORY",
-  "model": "PROVIDER/MODEL",
-  "thinking": "high",
-  "authFile": "PRIVATE_SELECTED_PROVIDER_AUTH_JSON"
-}
-```
+A valid local bundle is not authenticated evidence. Ordinary submissions use
+the existing unverified contribution path. Official submissions use the existing
+signed archive and attestation path, with an explicitly approved suite registry.
 
-Paths are resolved from the working directory. The auth file uses Pi's native
-auth format. Supply only the provider needed for the run, not your whole account
-collection. Optional `modelsFile` supplies explicit provider definitions;
-optional `envFile` is a private JSON map of selected provider environment values.
-There is no ambient credential fallback. The runner deletes its copied agent auth
-files when closing; it does not delete your original credential files.
+## Official release gate
 
-The following command spends model credit. The explicit acknowledgement is
-required, and the exact team's scripted proof is checked before agents start:
+The producer and validator support suite selection, but the currently deployed
+policy and external caller template do not yet authorize this suite. Maintainers
+must approve canonical workload, graph, schedule, fixture and verifier identities,
+release the pinned workflow and update the caller's suite input before official
+Multi-Agent runs can be used. Unapproved runs must stop before model calls; old
+release pins do not silently authorize a new benchmark. Nothing in this guide
+performs that release or publishes a reference proof as a model observation.
 
-```sh
-npm run benchmark:multi-agent -- run \
-  .tmp/multi-agent-input/preparation .tmp/multi-agent-live \
-  --config PRIVATE_CONFIG_JSON --allow-model-calls
-```
+## Source layout
 
-Do not add an IDE package to this recipe and call it Baseline Agent. Tooling and
-harness comparisons need separately implemented, recorded configurations.
+Both suites live under `src/suites/`. Multi-Agent keeps orchestration and result
+identity at its root, with these clusters:
 
-## Export and compare
+| Directory     | Responsibility                                        |
+| ------------- | ----------------------------------------------------- |
+| `generation/` | Pack, rename and shuffle the pinned input             |
+| `tasks/`      | Goals, current selectors, dependencies and schedules  |
+| `execution/`  | Participants, corrections and cancellation            |
+| `grading/`    | Cumulative obligations, fresh builds and exact pixels |
+| `reference/`  | Isolated scripted editors and compare-and-commit      |
+| `cpp/`        | Tokens, structure, compiler AST and binding helpers   |
 
-Raw run directories contain source snapshots, commands, model prose, sessions
-and private paths. **Never upload or commit them.** Export only safe facts:
+Input files are in `fixtures/explicit-edit-multi-agent/`. The original suite
+instead generates its small inputs and expected output in code. Older pilot,
+slice and grouped commands live in [the experimental scripts](../scripts/multi-agent/experiments/README.md).
+The full and coherent reference routes remain preparation dependencies. Workers
+receive an explicit editing-code allowlist, never the whole trusted suite.
 
-```sh
-npm run benchmark:multi-agent -- export \
-  .tmp/multi-agent-live .tmp/multi-agent-result.json
-npm run benchmark:multi-agent -- validate .tmp/multi-agent-result.json
-```
-
-Export and validation are offline. They do not compile, authenticate, call models
-or upload anything. Export requires a finished run and creates a new file without
-modifying raw evidence. It checks schedule identity, accepted barriers, deliveries
-and correction exhaustion. Unknown usage and cost remain null. Cost, when present,
-comes from runtime price metadata, not a provider billing receipt.
-
-The [result format](multi-agent-results.md) keeps this benchmark separate from
-old Exact Edit results. Compare runs with the same protocol, workload, schedule,
-team and harness/runtime. The compatibility key deliberately excludes model and
-reasoning, which are the variables being compared. Passing local validation does
-not authenticate a submitted run; public acceptance is a later integration step.
-
-Old experimental reports lack the candidate's explicit protocol metadata. They
-cannot be silently relabelled by the exporter. Their reviewed observations are
-retained in the [calibration notes](multi-agent-calibration.md).
-
-## Status
-
-This is a runnable candidate, not yet a Dataset submission format or Explorer
-track. No command here publishes automatically. The old benchmark's commands,
-Score, Dataset and accepted observations remain unchanged.
-
-Implementation detail and the scripted editor's compare-and-commit technique are
-in [Rotating concurrent editing](renderer-concurrent.md).
-Live agents are not required to use the reference editor's locking technique.
+[Calibration observations](multi-agent-calibration.md) are historical evidence,
+not relabelled common-protocol submissions. The reference editor's locking
+technique is described in [rotating concurrent editing](renderer-concurrent.md);
+measured agents are not required to use that technique.

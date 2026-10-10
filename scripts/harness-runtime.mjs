@@ -7,6 +7,26 @@ import readline from "node:readline";
 
 const persistentHarnesses = new Map();
 
+function terminateHarness(child) {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+}
+
+function watchDelivery(timeoutMs, signal, stop) {
+  const abort = () => stop(false);
+  signal?.addEventListener("abort", abort, { once: true });
+  const timer = timeoutMs === null ? undefined : setTimeout(() => stop(true), timeoutMs);
+  if (signal?.aborted) abort();
+  return () => {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  };
+}
+
 function addReadOnlyMount(args, mount, createdDirectories) {
   const absolute = path.resolve(mount);
   if (!absolute.startsWith("/usr/") && !absolute.startsWith("/etc/")) {
@@ -70,7 +90,20 @@ async function copyStateArtifacts(adapter, state, artifacts) {
   }
 }
 
-async function runPersistentHarness(adapter, { state, artifacts, prompt, timeoutMs, args, env }) {
+function deliveryResult(signal, result) {
+  if (signal?.aborted) {
+    // Each participant needs its own receipt, not mutable fields on a shared abort reason.
+    const error = Error("Harness delivery cancelled", { cause: signal.reason });
+    error.name = "AbortError";
+    error.execution = result;
+    throw error;
+  }
+  return result;
+}
+async function runPersistentHarness(
+  adapter,
+  { state, artifacts, prompt, timeoutMs, signal, args, env },
+) {
   const key = path.resolve(state);
   let process = persistentHarnesses.get(key);
   if (!process) {
@@ -103,13 +136,16 @@ async function runPersistentHarness(adapter, { state, artifacts, prompt, timeout
       }
     });
     child.stderr.on("data", (chunk) => process.current?.errors.write(chunk));
-    process.closed.then(({ code, signal }) => {
-      if (!process.closing) {
-        process.current?.reject(
-          new Error(`Persistent harness exited before turn completion (${code ?? signal})`),
-        );
-      }
-    });
+    process.closed.then(
+      ({ code, signal }) => {
+        if (!process.closing) {
+          process.current?.reject(
+            new Error(`Persistent harness exited before turn completion (${code ?? signal})`),
+          );
+        }
+      },
+      (error) => process.current?.reject(error),
+    );
     child.stdin.on("error", () => {});
     persistentHarnesses.set(key, process);
   }
@@ -121,36 +157,35 @@ async function runPersistentHarness(adapter, { state, artifacts, prompt, timeout
   const turn = new Promise((resolve, reject) => {
     process.current = { resolve, reject, output, errors, reason: undefined };
   });
-  process.child.stdin.write(`${JSON.stringify({ prompt })}\n`);
-  let timer;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      try {
-        if (process.child.pid) globalThis.process.kill(-process.child.pid, "SIGKILL");
-      } catch (error) {
-        if (error.code !== "ESRCH") throw error;
-      }
-      resolve();
-    }, timeoutMs);
+  const stopping = { requested: false };
+  const unwatch = watchDelivery(timeoutMs, signal, (expired) => {
+    timedOut = expired;
+    stopping.requested = true;
+    process.closing = true;
+    persistentHarnesses.delete(key);
+    terminateHarness(process.child);
+    process.current?.resolve();
   });
+  process.child.stdin.write(`${JSON.stringify({ prompt })}\n`);
+  let reason;
   try {
-    await Promise.race([turn, timeout]);
+    await turn;
+    reason = process.current?.reason;
   } finally {
-    clearTimeout(timer);
+    unwatch();
+    if (stopping.requested) await process.closed;
+    process.current = null;
     output.end();
     errors.end();
     await Promise.all([finished(output), finished(errors)]);
+    await copyStateArtifacts(adapter, state, artifacts);
   }
-  const reason = process.current?.reason;
-  process.current = null;
-  await copyStateArtifacts(adapter, state, artifacts);
-  return {
-    exitCode: reason?.kind === "completed" ? 0 : 1,
+  return deliveryResult(signal, {
+    exitCode: signal?.aborted ? null : reason?.kind === "completed" ? 0 : 1,
     signal: null,
     timedOut,
     processSeconds: (performance.now() - started) / 1000,
-  };
+  });
 }
 
 /** Close one persistent adapter after its trial and flush its durable state. */
@@ -161,9 +196,7 @@ export async function closeHarness(state) {
   persistentHarnesses.delete(key);
   process.closing = true;
   process.child.stdin.end();
-  const timer = setTimeout(() => {
-    if (process.child.pid) globalThis.process.kill(-process.child.pid, "SIGKILL");
-  }, 10000);
+  const timer = setTimeout(() => terminateHarness(process.child), 10000);
   try {
     await process.closed;
   } finally {
@@ -171,7 +204,18 @@ export async function closeHarness(state) {
   }
 }
 
-export async function runHarness(adapter, { workspace, state, artifacts, prompt, timeoutMs }) {
+/** Deliver a prompt using shared workspace and isolated durable harness state.
+ * A null timeout has no deadline. Cancellation waits for the isolated process to close,
+ * keeps partial evidence, then rejects with an AbortError carrying execution facts
+ * and the signal's reason as its cause.
+ */
+export async function runHarness(
+  adapter,
+  { workspace, state, artifacts, prompt, timeoutMs, signal },
+) {
+  signal?.throwIfAborted();
+  if (timeoutMs !== null && (!Number.isFinite(timeoutMs) || timeoutMs <= 0))
+    throw Error("Harness timeout must be positive or null");
   await mkdir(state, { recursive: true });
   await mkdir(path.join(state, "home"), { recursive: true });
   await mkdir(artifacts, { recursive: true });
@@ -268,6 +312,7 @@ export async function runHarness(adapter, { workspace, state, artifacts, prompt,
       artifacts,
       prompt,
       timeoutMs,
+      signal,
       args,
       env: environment,
     });
@@ -283,32 +328,30 @@ export async function runHarness(adapter, { workspace, state, artifacts, prompt,
   child.stdout.pipe(output);
   child.stderr.pipe(errors);
   child.stdin.on("error", () => {});
-  child.stdin.end(adapter.promptStdin ? prompt : undefined);
-  const terminate = () => {
-    if (child.pid === undefined) return;
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch (e) {
-      if (e.code !== "ESRCH") throw e;
-    }
-  };
-  const timer = setTimeout(() => {
-    timedOut = true;
-    terminate();
-  }, timeoutMs);
-  let exitCode, signal;
+  const unwatch = watchDelivery(timeoutMs, signal, (expired) => {
+    timedOut = expired;
+    terminateHarness(child);
+  });
+  let exitCode, exitSignal;
   try {
-    [exitCode, signal] = await new Promise((resolve, reject) => {
+    const closed = new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code, sig) => resolve([code, sig]));
     });
+    child.stdin.end(adapter.promptStdin ? prompt : undefined);
+    [exitCode, exitSignal] = await closed;
   } finally {
-    clearTimeout(timer);
-    if (child.pid) terminate();
+    unwatch();
+    terminateHarness(child);
+    await Promise.all([finished(output), finished(errors)]);
+    await copyStateArtifacts(adapter, state, artifacts);
   }
-  await Promise.all([finished(output), finished(errors)]);
-  await copyStateArtifacts(adapter, state, artifacts);
-  return { exitCode, signal, timedOut, processSeconds: (performance.now() - started) / 1000 };
+  return deliveryResult(signal, {
+    exitCode,
+    signal: exitSignal,
+    timedOut,
+    processSeconds: (performance.now() - started) / 1000,
+  });
 }
 
 function sumUsage(records, fields) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import {
@@ -13,6 +13,66 @@ import {
   writeTree,
 } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
 
+await test(
+  "reference workers keep the first request sent immediately at startup",
+  { timeout: 30_000 },
+  async (t) => {
+    await mkdir(".tmp", { recursive: true });
+    const root = await mkdtemp(path.resolve(".tmp/concurrent-startup-"));
+    const tools = path.join(root, "executor");
+    const workers = [];
+    try {
+      await prepareConcurrentExecutor(tools);
+      const workerFile = path.join(tools, "reference/full-worker.mjs");
+      const source = await readFile(workerFile, "utf8");
+      const initialization = 'await mkdir("/tmp/current-analysis");';
+      assert.ok(source.includes(initialization));
+      // Slow real startup without replacing any filesystem or stream implementation.
+      await writeFile(
+        workerFile,
+        source.replace(
+          initialization,
+          `await new Promise((resolve) => setTimeout(resolve, 100)); ${initialization}`,
+        ),
+      );
+      const input = {
+        "main.cpp": "int FnRun() { return 1; } int main() { return FnRun() - 1; }\n",
+      };
+      const workspaces = await Promise.all(
+        Array.from({ length: 8 }, async (_, index) => {
+          const workspace = path.join(root, `workspace-${index}`);
+          await writeTree(workspace, input);
+          return workspace;
+        }),
+      );
+      await Promise.all(
+        workspaces.map(async (workspace) => {
+          const executor = concurrentExecutor(workspace, tools, { signal: t.signal });
+          workers.push(executor);
+          const receipt = await executor.execute({
+            id: "first-request",
+            operations: [
+              {
+                id: "rename",
+                phase: "names",
+                category: "functions-types",
+                mapping: [{ from: "FnRun", to: "run" }],
+                selectors: [{ kind: "function", scope: "FnRun" }],
+              },
+            ],
+          });
+          assert.equal(receipt.delivered, 1);
+          assert.deepEqual(await readTree(workspace), {
+            "main.cpp": input["main.cpp"].replaceAll("FnRun", "run"),
+          });
+        }),
+      );
+    } finally {
+      for (const worker of workers) worker.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 await test("global current-owner renames cross real translation units without merging equal private helpers or skipping missing owners", async () => {
   await mkdir(".tmp", { recursive: true });
   const root = await mkdtemp(path.resolve(".tmp/concurrent-units-"));

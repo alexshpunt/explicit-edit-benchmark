@@ -1,8 +1,70 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  MULTI_AGENT_BENCHMARK,
+  MULTI_AGENT_PROTOCOL,
+} from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
+
+function validateRunner(runner, label) {
+  exactKeys(runner, ["contract", "taskSetSha256", "verifierSha256", "tasks"], label);
+  if (!SHA256.test(runner.taskSetSha256) || !SHA256.test(runner.verifierSha256))
+    throw Error(`${label}: invalid identity hash`);
+  if (typeof runner.contract !== "string" || !runner.contract)
+    throw Error(`${label}: invalid contract`);
+  if (!Array.isArray(runner.tasks) || !runner.tasks.length)
+    throw Error(`${label}.tasks: empty task registry`);
+  const ids = new Set();
+  for (const [index, task] of runner.tasks.entries()) {
+    exactKeys(task, ["id", "fixtureSha256"], `${label}.tasks[${index}]`);
+    if (
+      typeof task.id !== "string" ||
+      !task.id ||
+      !SHA256.test(task.fixtureSha256) ||
+      ids.has(task.id)
+    )
+      throw Error(`${label}.tasks[${index}]: invalid task identity`);
+    ids.add(task.id);
+  }
+}
+
+function validateTeamRelease(suites) {
+  exactKeys(suites, [MULTI_AGENT_BENCHMARK], "policy.suites");
+  const suite = suites[MULTI_AGENT_BENCHMARK];
+  exactKeys(
+    suite,
+    ["runner", "graphSha256", "scheduleSha256", "runPolicy"],
+    "policy.suites.multi-agent",
+  );
+  validateRunner(suite.runner, "policy.suites.multi-agent.runner");
+  if (
+    suite.runner.contract !== MULTI_AGENT_PROTOCOL ||
+    !SHA256.test(suite.graphSha256) ||
+    !SHA256.test(suite.scheduleSha256)
+  )
+    throw Error("policy.suites.multi-agent: invalid protocol or graph identity");
+  const expected = Array.from(
+    { length: 71 },
+    (_, index) => `task-${String(index + 1).padStart(3, "0")}`,
+  );
+  if (JSON.stringify(suite.runner.tasks.map((task) => task.id).sort()) !== JSON.stringify(expected))
+    throw Error("policy.suites.multi-agent: expected the full 71-task registry");
+  exactKeys(
+    suite.runPolicy,
+    ["partialRuns", "oracleRecoveries", "retryFailures", "concurrency", "timeoutMs"],
+    "policy.suites.multi-agent.runPolicy",
+  );
+  if (
+    suite.runPolicy.partialRuns !== true ||
+    suite.runPolicy.oracleRecoveries !== 3 ||
+    suite.runPolicy.retryFailures !== 0 ||
+    suite.runPolicy.concurrency !== 15 ||
+    suite.runPolicy.timeoutMs !== null
+  )
+    throw Error("policy.suites.multi-agent: expected 15 agents, three corrections and no deadline");
+}
 
 function exactKeys(value, keys, label) {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -30,6 +92,7 @@ export async function loadOfficialPolicy(file) {
       "normalizedSchemas",
       "runPolicy",
       "fullRunPolicy",
+      ...(Object.hasOwn(policy, "suites") ? ["suites"] : []),
     ],
     "policy",
   );
@@ -65,29 +128,8 @@ export async function loadOfficialPolicy(file) {
     !SHA256.test(policy.modelRegistry.sha256)
   )
     throw Error("policy.modelRegistry: invalid identity");
-  exactKeys(
-    policy.runner,
-    ["contract", "taskSetSha256", "verifierSha256", "tasks"],
-    "policy.runner",
-  );
-  if (!SHA256.test(policy.runner.taskSetSha256) || !SHA256.test(policy.runner.verifierSha256))
-    throw Error("policy.runner: invalid identity hash");
-  if (typeof policy.runner.contract !== "string" || !policy.runner.contract)
-    throw Error("policy.runner: invalid contract");
-  if (!Array.isArray(policy.runner.tasks) || !policy.runner.tasks.length)
-    throw Error("policy.runner.tasks: empty task registry");
-  const ids = new Set();
-  for (const [index, task] of policy.runner.tasks.entries()) {
-    exactKeys(task, ["id", "fixtureSha256"], `policy.runner.tasks[${index}]`);
-    if (
-      typeof task.id !== "string" ||
-      !task.id ||
-      !SHA256.test(task.fixtureSha256) ||
-      ids.has(task.id)
-    )
-      throw Error(`policy.runner.tasks[${index}]: invalid task identity`);
-    ids.add(task.id);
-  }
+  validateRunner(policy.runner, "policy.runner");
+  if (Object.hasOwn(policy, "suites")) validateTeamRelease(policy.suites);
   if (
     !Array.isArray(policy.normalizedSchemas) ||
     !policy.normalizedSchemas.length ||

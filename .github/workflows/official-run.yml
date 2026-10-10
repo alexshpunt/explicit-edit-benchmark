@@ -12,15 +12,20 @@ name: Official benchmark run
         description: Pi reasoning level
         required: true
         type: string
+      suite:
+        description: Benchmark suite (explicit-edit or explicit-edit-multi-agent)
+        required: false
+        default: explicit-edit
+        type: string
       task:
         description: Optional single task; empty runs the full canonical task set
         required: false
         default: ""
         type: string
       concurrency:
-        description: Concurrency for a full canonical run
+        description: Concurrency for a full run; empty uses the suite default
         required: false
-        default: "10"
+        default: ""
         type: string
       adapter:
         description: Registered official adapter id
@@ -94,8 +99,9 @@ jobs:
     needs: resolve
     permissions:
       contents: read
-    runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    runs-on: ${{ inputs.suite == 'explicit-edit-multi-agent' && 'ubuntu-24.04' || 'ubuntu-22.04' }}
+    # GitHub-hosted jobs have a six-hour platform limit; local team runs are untimed.
+    timeout-minutes: ${{ inputs.suite == 'explicit-edit-multi-agent' && 360 || 180 }}
     outputs:
       artifact-id: ${{ steps.producer-artifact.outputs.artifact-id }}
       archive-sha256: ${{ steps.bundle.outputs.sha256 }}
@@ -115,11 +121,44 @@ jobs:
           package-manager-cache: false
 
       - name: Install pinned benchmark prerequisites
+        env:
+          SUITE: ${{ inputs.suite }}
         run: |
           set -euo pipefail
           npm ci
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
+          if [[ "$SUITE" == "explicit-edit-multi-agent" ]]; then
+            sudo apt-get install --yes clang clangd build-essential
+            /usr/bin/clang++ --version | grep 'clang version 18\.'
+          fi
+
+      - name: Checkout pinned release policy for preflight
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: alexshpunt/explicit-edit-benchmark
+          ref: ${{ inputs.policy_sha }}
+          path: .tmp/approved-policy
+          persist-credentials: false
+      - name: Validate benchmark scope before selecting credentials
+        env:
+          SUITE: ${{ inputs.suite }}
+          TASK: ${{ inputs.task }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          RUNNER_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          node --import tsx --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import { officialSuiteRunOptions } from "./scripts/benchmark-suites.mjs";
+          import { loadOfficialPolicy } from "./scripts/official-policy.mjs";
+          const policy = await loadOfficialPolicy(".tmp/approved-policy/policies/official-runs/v1.json");
+          const scope = await officialSuiteRunOptions(policy, process.env.SUITE, {
+            runnerSha: process.env.RUNNER_SHA,
+            task: process.env.TASK || undefined,
+            concurrency: process.env.CONCURRENCY || undefined,
+          });
+          appendFileSync(process.env.GITHUB_ENV, `BENCHMARK_CONCURRENCY=${scope.concurrency}\n`);
+          NODE
 
       - name: Resolve plan, install packages, and select credentials
         env:
@@ -184,7 +223,8 @@ jobs:
           MODEL: ${{ inputs.model }}
           THINKING: ${{ inputs.thinking }}
           TASK: ${{ inputs.task }}
-          CONCURRENCY: ${{ inputs.concurrency }}
+          SUITE: ${{ inputs.suite }}
+          CONCURRENCY: ${{ env.BENCHMARK_CONCURRENCY }}
           RUNNER_SHA: ${{ needs.resolve.outputs.sha }}
         run: |
           set -euo pipefail
@@ -236,13 +276,23 @@ jobs:
           }
           if (failed.length > 0) throw new Error(`Smoke failed for: ${failed.join(", ")}`);
           NODE
-            echo "Running full canonical task set with concurrency $CONCURRENCY"
-            EXPLICIT_EDIT_SMOKE_PASSED=1 npm run benchmark -- raw-run \
-              --config "$config" \
-              --oracle-recoveries 5 \
-              --concurrency "$CONCURRENCY" \
-              --timeout-seconds 120 \
-              --run-id "$run_id"
+            if [[ "$SUITE" == "explicit-edit-multi-agent" ]]; then
+              echo "Running all 71 tasks with the fixed 15-agent shared team"
+              EXPLICIT_EDIT_SMOKE_PASSED=1 npm run benchmark -- raw-run \
+                --suite "$SUITE" \
+                --config "$config" \
+                --oracle-recoveries 3 \
+                --concurrency 15 \
+                --run-id "$run_id"
+            else
+              echo "Running full canonical task set with concurrency $CONCURRENCY"
+              EXPLICIT_EDIT_SMOKE_PASSED=1 npm run benchmark -- raw-run \
+                --config "$config" \
+                --oracle-recoveries 5 \
+                --concurrency "$CONCURRENCY" \
+                --timeout-seconds 120 \
+                --run-id "$run_id"
+            fi
           fi
 
           npm run benchmark -- export "results/$run_id"

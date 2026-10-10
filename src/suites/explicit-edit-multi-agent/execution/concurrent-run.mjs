@@ -33,13 +33,20 @@ function feedback(category) {
  * per-agent score. Live trials require an exact matching scripted team proof.
  * Reference CAS conflict counts are observable; live counts stay unknown unless
  * the harness supplies them. Reports and trusted contracts are not agent mounts.
+ * createDriver(workspace, state, agent) binds a common harness participant with
+ * execute(prompt, { signal, round, attempt }), close() and a closed getter.
  */
 export async function runConcurrent(
   preparationPath,
   outputPath,
-  { agents, configPath, signal: externalSignal, log = console.log } = {},
+  { agents, configPath, createDriver, signal: externalSignal, log = console.log } = {},
 ) {
   const started = performance.now();
+  const live = Boolean(configPath || createDriver);
+  assert.ok(
+    !(configPath && createDriver),
+    "Choose a private baseline config or the common harness driver",
+  );
   const controller = new AbortController();
   const abort = () => controller.abort(externalSignal.reason);
   if (externalSignal?.aborted) abort();
@@ -85,7 +92,7 @@ export async function runConcurrent(
     const contractHashes = Object.fromEntries(
       [...contracts].map(([id, contract]) => [id, digest(JSON.stringify(contract))]),
     );
-    if (configPath) {
+    if (live) {
       const proof = await json(path.join(preparation, `verification-${agents}.json`));
       assert.equal(proof.status, "pass", "Concurrent live runs need a matched scripted proof");
       assert.equal(proof.workloadSha256, manifest.workloadSha256);
@@ -106,7 +113,7 @@ export async function runConcurrent(
       protocol: MULTI_AGENT_PROTOCOL,
       runtime: null,
       status: "running",
-      mode: configPath ? "live" : "scripted",
+      mode: live ? "live" : "scripted",
       agents,
       workloadSha256: manifest.workloadSha256,
       graphSha256: manifest.graphSha256,
@@ -124,8 +131,8 @@ export async function runConcurrent(
       repairs: 0,
       checks: [],
       executions: [],
-      conflicts: configPath ? null : 0,
-      referencePlannerSlots: configPath ? null : REFERENCE_PLANNER_SLOTS,
+      conflicts: live ? null : 0,
+      referencePlannerSlots: live ? null : REFERENCE_PLANNER_SLOTS,
       regressedAcceptedObligations: [],
       overwrittenPeerChanges: null,
       usage: null,
@@ -222,16 +229,18 @@ export async function runConcurrent(
         platform: process.platform,
         architecture: process.arch,
       };
-    } else await prepareConcurrentExecutor(path.join(output, "executor"));
+    } else if (!live) await prepareConcurrentExecutor(path.join(output, "executor"));
     for (let agent = 0; agent < agents; agent++) {
       signal.throwIfAborted();
       drivers.push(
-        config
-          ? await startBaseline(workspace, path.join(output, `agent-${agent}`), config, {
-              eventsFile: path.join(output, `agent-${agent}-events.jsonl`),
-              signal,
-            })
-          : concurrentExecutor(workspace, path.join(output, "executor"), { signal }),
+        createDriver
+          ? await createDriver(workspace, path.join(output, `agent-${agent}`), agent)
+          : config
+            ? await startBaseline(workspace, path.join(output, `agent-${agent}`), config, {
+                eventsFile: path.join(output, `agent-${agent}-events.jsonl`),
+                signal,
+              })
+            : concurrentExecutor(workspace, path.join(output, "executor"), { signal }),
       );
     }
     const tasks = new Map(taskList.map((task) => [task.id, task]));
@@ -271,7 +280,12 @@ export async function runConcurrent(
               ? `${current}${guidance}\n\n${feedback(failure.category)}\nCorrect the current workspace. Keep earlier changes and satisfy the current request.`
               : current + guidance;
           try {
-            if (config) item.receipt = await drivers[agent].execute(prompt, { signal });
+            if (live)
+              item.receipt = await drivers[agent].execute(prompt, {
+                signal,
+                round: round.id,
+                attempt,
+              });
             else {
               if (attempt > 1)
                 throw Error("Reference editor has no repair policy; failed state retained");
@@ -289,6 +303,7 @@ export async function runConcurrent(
               category: error.category ?? "infrastructure",
               message: error.message,
             });
+            if (error.receipt) item.receipt = error.receipt;
             controller.abort(error);
             throw error;
           } finally {
@@ -333,9 +348,11 @@ export async function runConcurrent(
   } finally {
     await Promise.allSettled(drivers.map((driver) => driver.close()));
     if (report) {
-      if (configPath) {
+      if (live) {
         report.agentsClosed = drivers.map((driver) => driver.closed);
-        const usage = drivers.map((driver) => finalizedUsage(driver.events));
+        const usage = drivers.map((driver) =>
+          Array.isArray(driver.events) ? finalizedUsage(driver.events) : null,
+        );
         report.usage =
           usage.length === agents && usage.every(Boolean)
             ? Object.fromEntries(
@@ -363,7 +380,7 @@ export async function runConcurrent(
     }
     externalSignal?.removeEventListener("abort", abort);
   }
-  if (!configPath && report.status === "pass") {
+  if (!live && report.status === "pass") {
     const proof = {
       status: "pass",
       agents,

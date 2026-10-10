@@ -68,6 +68,9 @@ function compileRuns({ run, profiles, trials, rounds, toolCalls }) {
         return {
           trial,
           observedRounds: trialRounds.length,
+          ...(trial.taskIds
+            ? { barrierAttempts: trialRounds.map((row) => row.barrierAttempt) }
+            : {}),
           timeouts: trialRounds.filter((row) => row.timedOut === true).length,
           providerFailures: trialRounds.filter((row) => typeof row.providerFailure === "string")
             .length,
@@ -145,6 +148,7 @@ function syntheticRounds(fact) {
       runId: fact.trial.runId,
       trialId: fact.trial.trialId,
       roundId: `aggregate-${fact.trial.trialId}-${index + 1}`,
+      ...(fact.barrierAttempts ? { barrierAttempt: fact.barrierAttempts[index] } : {}),
       timedOut: index < fact.timeouts,
       providerFailure: index < (fact.providerFailures ?? 0) ? "rate-limit" : null,
     };

@@ -1,63 +1,76 @@
-# Multi-Agent result format
+# Multi-Agent results in the common protocol
 
-The candidate exports one JSON object, separate from the original Exact Edit
-schema and Score. The schema version is `explicit-edit-multi-agent-result-v1`;
-the benchmark id is `explicit-edit-multi-agent`; the protocol is
-`shared-project-rotating-v1`.
+Multi-Agent uses normalized schema **3**, the same five public tables and the
+same submission/store/report machinery as Explicit Edit. The original suite
+keeps schemas 1/2 and its existing scoring rules. Benchmark id is
+`explicit-edit-multi-agent`; execution contract is `shared-project-rotating-v1`.
 
-`src/suites/explicit-edit-multi-agent/results.mjs` owns validation and the safe projection. The exporter
-uses an explicit field allowlist, never spreads a raw report into public output.
-The public validator rejects extra fields. A valid local file is not authenticated
-evidence and does not enter the existing Dataset acceptance pipeline.
+## Tables and joint credit
 
-## Fields
+- `profiles.jsonl` records the selected model, reasoning, harness and agent identity.
+- `configurations.jsonl` records the same configuration facts and hashes as the
+  original suite. Tooling is not inferred from the provider or model name.
+- `trials.jsonl` has one row per joint barrier. `taskIds` lists that barrier's tasks.
+- `rounds.jsonl` has one row per participant delivery, with `agent`, zero-based
+  `barrierAttempt` and the participant's assigned `taskIds`.
+- `tool-calls.jsonl` contains the same safe native tool facts, linked to deliveries.
 
-| Field                                    | Meaning                                                                                                                                                            |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `schemaVersion`, `benchmark`, `protocol` | Independent format, benchmark and execution-policy identities.                                                                                                     |
-| `mode`                                   | `scripted` or `live`; reference execution is not a model result.                                                                                                   |
-| `status`                                 | `pass`, `blocked`, `provider_failure`, `driver_exit`, `infrastructure`, `cancelled` or `timeout`.                                                                  |
-| `identity`                               | SHA256 identities for workload, graph, schedule, ordered checkpoint contracts and initial source.                                                                  |
-| `configuration`                          | Team size, graph width, observed model/reasoning/harness and pinned runtime. Unknown values are null.                                                              |
-| `policy`                                 | No default deadlines, three coarse corrections, shared live workspace, ready-task barriers and rotating assignment.                                                |
-| `progress`                               | Jointly accepted and total task/round counts, plus completion as a fraction from zero to one.                                                                      |
-| `execution`                              | Original and correction agent deliveries together, correction deliveries separately, total wall time in milliseconds, and whether all agents closed when observed. |
-| `terminal`                               | Null for a pass; otherwise only round id and safe category enums. No exception prose.                                                                              |
-| `usage`                                  | Available input/output/cache/total token and configured-cost totals; null means unknown, never zero.                                                               |
-| `comparisonKey`                          | SHA256 of the protocol, input/contract identities, team, harness/runtime and policy. Model and reasoning are excluded.                                             |
+There are 28 barriers and 71 tasks. A passing barrier earns credit for all its
+tasks; a failed barrier earns none. Score is **accepted task count / 71**, not
+passed barriers / 28. No individual-agent success is invented.
 
-Progress is derived from whole passing barriers. The primary measure is
-`progress.acceptedTasks / progress.totalTasks`, also stored as
-`progress.completion`. An editing block requires all four attempts at the next
-barrier to have failed. Provider and infrastructure errors are not renamed as
-editing failures, and no partial obligation count becomes task credit.
+The manifest's `suite` binds the workload, graph, schedule and fixed 15-agent
+policy. Its per-profile `observations` preserve execution status, wall-clock
+milliseconds and terminal category. Raw failure prose is not exported.
 
-`execution.repairs` counts correction blocks delivered to agents, not failed
-barriers. A six-participant barrier corrected three times contributes 18 repair
-blocks. Agents waiting in that round contribute no deliveries. Wall time includes
-startup, editing, grading and closure; it is not a sum of parallel agent times.
+## Statistics
 
-Configurations with different team schedules are different experiments. A shared
-compatibility key makes comparisons structurally compatible, not statistically
-stable or causally controlled. Keep provider and model selectors visible when
-comparing reasoning levels or harnesses.
+Native cost, tokens, tool calls, model rounds and errors are counted once per
+delivery. An assignment with several tasks does not multiply its usage.
+Unknown observations remain null, not zero. Costs are observed harness/runtime
+metadata, not a provider billing receipt.
 
-## Privacy and evidence
+A correction is an additional barrier attempt. Six participants making three
+corrections produce 18 correction deliveries but **three barrier corrections**.
+Both delivery count and correction count remain available without confusing them.
 
-Export omits prompts, tasks, source, receipts, commands, command output, session
-ids, account details, runtime paths and free-form failure messages. Unknown raw
-fields are not copied. Model selectors must be public identifiers, not account
-names or private labels. Validation rejects paths and common credential prefixes;
-it cannot detect every secret hidden in an otherwise valid name. Review the model
-selector before sharing a result. Runtime fields contain pinned environment facts.
+Team duration includes startup, editing, grading and closure. It is wall-clock
+time, not the sum of simultaneous participant durations. Native delivery seconds
+remain available for tool/harness analysis; they do not replace team duration.
+Reference execution has no model usage and must not be presented as model performance.
 
-Export reads a finished `report.json` and writes a new JSON file. It leaves raw
-reports, checkpoints and sessions untouched. It refuses existing destinations,
-inconsistent progress, mismatched schedules, duplicate task assignments and
-reports without the candidate protocol label. It cannot establish the truth of
-hand-edited local evidence; future submission acceptance must check provenance
-separately.
+## Stops
 
-Historical calibration notes are reviewed facts, not retroactively exported
-candidate observations. No missing runtime metadata, token totals or private
-execution traces are invented to fit this format.
+An editing `blocked` result must exhaust the initial attempt and three corrections
+at its next barrier. Its accepted prefix retains credit. Later barriers remain
+`not-reached`, not infrastructure failures or fabricated model deliveries.
+
+Provider, driver, infrastructure, cancellation and timeout stops are distinct.
+An unsettled barrier earns no task credit. Flushed native events and usage are
+retained when available. After cancellation, configurations that never started
+are absent from the public bundle rather than counted as tested models.
+
+## Validation and publication
+
+The shared validator checks all ordinary table links and identities, plus exact
+71-task membership, the 15-agent policy, schedule hashes, assigned participants,
+contiguous corrections and joint grades. There is no EOF-only success for C++
+restoration. Different benchmark identities do not share a ranking group.
+
+Ordinary contributions use the existing ingestion path. Official acceptance
+also requires an approved repository-owned suite registry: canonical workload,
+graph, schedule, verifier and fixture hashes, fixed policy and trusted signer
+and runner revisions. A self-consistent submitted schedule is not proof that it
+is the approved schedule. Old policies do not authorize Multi-Agent by default.
+
+Public output omits source, prompts, commands, stdout/stderr, sessions, account
+facts, host paths and free-form terminal messages. Review public identity labels
+before sharing: no pattern scanner can recognize every secret hidden in a name.
+Raw evidence and private configuration stay outside Git and Dataset uploads.
+
+## Earlier candidate exports
+
+`explicit-edit-multi-agent-result-v1` is the earlier standalone diagnostic JSON.
+Its developer exporter remains for inspecting historical candidate runs. It is
+not the common submission bundle and must not be silently converted into an
+authenticated observation. Historical calibration evidence stays unchanged.

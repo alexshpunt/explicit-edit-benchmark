@@ -46,9 +46,10 @@ export async function buildNormalizedReport(bundleDirectory, outputDirectory) {
   for (const trial of trials) {
     const row = byProfile.get(trial.profileId);
     if (!row) throw Error(`${trial.trialId}: unknown profile`);
-    row.trials += 1;
-    row.firstExact += Number(trial.firstExactPassed);
-    row.finalExact += Number(trial.finalExactPassed);
+    const tasks = trial.taskIds?.length ?? 1;
+    row.trials += tasks;
+    row.firstExact += tasks * Number(trial.firstExactPassed);
+    row.finalExact += tasks * Number(trial.finalExactPassed);
     trialProfile.set(trial.trialId, trial.profileId);
   }
   const roundProfile = new Map();
@@ -63,7 +64,8 @@ export async function buildNormalizedReport(bundleDirectory, outputDirectory) {
   }
   for (const trial of trials) {
     const terminal = terminalByTrial.get(trial.trialId);
-    if (terminal?.normalizedPassed) byProfile.get(trial.profileId).finalNormalized += 1;
+    if (terminal?.normalizedPassed)
+      byProfile.get(trial.profileId).finalNormalized += trial.taskIds?.length ?? 1;
   }
   for (const call of calls) {
     const profileId = roundProfile.get(call.roundId);

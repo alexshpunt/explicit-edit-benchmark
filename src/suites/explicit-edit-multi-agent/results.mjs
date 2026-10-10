@@ -7,6 +7,8 @@ import path from "node:path";
 export const MULTI_AGENT_BENCHMARK = "explicit-edit-multi-agent";
 /** Execution protocol, including explicit participant disclosure. */
 export const MULTI_AGENT_PROTOCOL = "shared-project-rotating-v1";
+/** Public version of the fixed 71-task maximal-team benchmark. */
+export const MULTI_AGENT_VERSION = "1";
 /** Version of the safe, standalone result format. */
 export const MULTI_AGENT_RESULT_VERSION = "explicit-edit-multi-agent-result-v1";
 /** Fixed candidate policy; changed policies need a new protocol. */

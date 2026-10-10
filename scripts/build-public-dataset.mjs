@@ -533,6 +533,7 @@ export async function buildPublicDataset(outputDirectory, bundleDirectories) {
       taskSetSha256: manifest.taskSetSha256,
       verifierSha256: manifest.verifierSha256 ?? null,
       policy: manifest.policy,
+      ...(manifest.suite ? { suite: manifest.suite } : {}),
       ...(manifest.sourceRuns ? { sourceRuns: manifest.sourceRuns } : {}),
       counts: manifest.counts,
       completeness: manifest.completeness,
@@ -554,17 +555,18 @@ export async function buildPublicDataset(outputDirectory, bundleDirectories) {
 function summarizeTrials(trials) {
   const byTask = new Map();
   const byProfile = new Map();
-  for (const trial of trials) {
-    for (const [map, key] of [
-      [byTask, trial.taskId],
-      [byProfile, trial.profileId],
-    ]) {
-      const item = map.get(key) ?? { id: key, observations: 0, exactPasses: 0 };
-      item.observations += 1;
-      item.exactPasses += Number(trial.finalExactPassed);
-      map.set(key, item);
+  for (const trial of trials)
+    for (const taskId of trial.taskIds ?? [trial.taskId]) {
+      for (const [map, key] of [
+        [byTask, taskId],
+        [byProfile, trial.profileId],
+      ]) {
+        const item = map.get(key) ?? { id: key, observations: 0, exactPasses: 0 };
+        item.observations += 1;
+        item.exactPasses += Number(trial.finalExactPassed);
+        map.set(key, item);
+      }
     }
-  }
   const tasks = [...byTask.values()].map((item) => ({
     ...item,
     exactRate: item.observations ? item.exactPasses / item.observations : null,
@@ -574,7 +576,7 @@ function summarizeTrials(trials) {
     exactRate: item.observations ? item.exactPasses / item.observations : null,
   }));
   return {
-    observations: trials.length,
+    observations: trials.reduce((sum, trial) => sum + (trial.taskIds?.length ?? 1), 0),
     tasks,
     profiles,
     macroTaskExactRate: tasks.length
@@ -582,21 +584,11 @@ function summarizeTrials(trials) {
       : null,
   };
 }
-function summarizeEfficiency(trials, rounds) {
-  const profileByTrial = new Map(
-    trials.map((trial) => [
-      `${trial.runId}::${trial.trialId}`,
-      { runId: trial.runId, profileId: trial.profileId },
-    ]),
-  );
-  const profiles = new Map();
-  for (const round of rounds) {
-    const identity = profileByTrial.get(`${round.runId}::${round.trialId}`);
-    if (!identity) continue;
-    const key = `${identity.runId}::${identity.profileId}`;
-    const item = profiles.get(key) ?? {
-      runId: identity.runId,
-      profileId: identity.profileId,
+function summarizeEfficiency(trials, rounds, runs) {
+  function emptyProfile(runId, profileId) {
+    return {
+      runId,
+      profileId,
       rounds: 0,
       durationSeconds: 0,
       durationObservedRounds: 0,
@@ -613,6 +605,26 @@ function summarizeEfficiency(trials, rounds) {
       invalidToolCalls: 0,
       invalidToolCallObservedRounds: 0,
     };
+  }
+  const profileByTrial = new Map(
+    trials.map((trial) => [
+      `${trial.runId}::${trial.trialId}`,
+      { runId: trial.runId, profileId: trial.profileId },
+    ]),
+  );
+  const profiles = new Map();
+  // An observed startup failure still has team wall time, but no native usage.
+  for (const run of runs)
+    for (const observation of run.suite?.observations ?? [])
+      profiles.set(
+        `${run.runId}::${observation.profileId}`,
+        emptyProfile(run.runId, observation.profileId),
+      );
+  for (const round of rounds) {
+    const identity = profileByTrial.get(`${round.runId}::${round.trialId}`);
+    if (!identity) continue;
+    const key = `${identity.runId}::${identity.profileId}`;
+    const item = profiles.get(key) ?? emptyProfile(identity.runId, identity.profileId);
     item.rounds += 1;
     for (const [field, total, coverage] of [
       ["seconds", "durationSeconds", "durationObservedRounds"],
@@ -631,6 +643,13 @@ function summarizeEfficiency(trials, rounds) {
     profiles.set(key, item);
   }
   return [...profiles.values()].map((item) => {
+    const observation = runs
+      .find((run) => run.runId === item.runId)
+      ?.suite?.observations.find((row) => row.profileId === item.profileId);
+    if (observation) {
+      item.durationSeconds = observation.elapsedMs / 1000;
+      item.durationBasis = "team-wall-clock";
+    }
     for (const [total, coverage] of [
       ["durationSeconds", "durationObservedRounds"],
       ["costUsd", "costObservedRounds"],
@@ -640,7 +659,7 @@ function summarizeEfficiency(trials, rounds) {
       ["failedToolCalls", "failedToolCallObservedRounds"],
       ["invalidToolCalls", "invalidToolCallObservedRounds"],
     ])
-      if (!item[coverage]) item[total] = null;
+      if (!item[coverage] && !(observation && total === "durationSeconds")) item[total] = null;
     return item;
   });
 }
@@ -915,7 +934,7 @@ export async function buildDerivedDatasetFromAggregateState(
     ...summarizeTrials(evidence.trials),
     models: models.length,
     configurations: leaderboardRows.length,
-    efficiency: summarizeEfficiency(evidence.trials, evidence.rounds),
+    efficiency: summarizeEfficiency(evidence.trials, evidence.rounds, index.runs),
   };
   const summaryContent = JSON.stringify(summary, null, 2) + "\n";
   await writeFile(path.join(outputDirectory, "summary.json"), summaryContent);
@@ -1197,7 +1216,7 @@ export async function buildPublicDatasetFromStore(
     ...summarizeTrials(allTrials),
     models: models.length,
     configurations: leaderboardRows.length,
-    efficiency: summarizeEfficiency(allTrials, allRounds),
+    efficiency: summarizeEfficiency(allTrials, allRounds, index.runs),
   };
   const summaryContent = JSON.stringify(summary, null, 2) + "\n";
   await writeFile(path.join(outputDirectory, "summary.json"), summaryContent);

@@ -40,14 +40,14 @@ async function run(command, args) {
   });
 }
 
-async function verifyAttestation({ artifact, attestation, signerSha, repository }) {
+async function verifyAttestation({ artifact, attestation, signerSha, repository, policyFile }) {
   try {
     await run(process.execPath, [
       "scripts/verify-official-attestation.mjs",
       artifact,
       attestation,
       repository,
-      "policies/official-runs/v1.json",
+      policyFile,
       signerSha,
     ]);
   } catch (error) {
@@ -61,8 +61,16 @@ async function verifyAttestation({ artifact, attestation, signerSha, repository 
   }
 }
 
-async function downloadOfficialCandidate(hub, repo, repository, candidateNumber, token, directory) {
-  const response = await fetch(
+async function downloadOfficialCandidate(
+  hub,
+  repo,
+  repository,
+  candidateNumber,
+  token,
+  directory,
+  fetchImpl,
+) {
+  const response = await fetchImpl(
     `https://huggingface.co/api/datasets/${repository}/discussions/${candidateNumber}`,
     { headers: { authorization: `Bearer ${token}` } },
   );
@@ -201,6 +209,8 @@ async function prepareVerifiedCandidate({
   token,
   workspace,
   attestationVerifier,
+  policyFile,
+  fetchImpl,
 }) {
   const candidateRoot = path.join(workspace, `candidate-${candidateNumber}`);
   const candidateDirectory = path.join(candidateRoot, "candidates", "official", "execution");
@@ -211,6 +221,7 @@ async function prepareVerifiedCandidate({
     candidateNumber,
     token,
     candidateDirectory,
+    fetchImpl,
   );
   const candidate = await findOfficialCandidate(candidateRoot);
   const transport = JSON.parse(await readFile(path.join(candidate, "transport.json"), "utf8"));
@@ -218,7 +229,7 @@ async function prepareVerifiedCandidate({
   const verdict = await officialVerdict({
     candidateDirectory: candidate,
     extractedDirectory: extracted,
-    policyFile: "policies/official-runs/v1.json",
+    policyFile,
     signerSha: transport.signerWorkflowSha,
     verifyAttestation: attestationVerifier,
   });
@@ -230,6 +241,7 @@ async function prepareVerifiedCandidate({
 /**
  * Verify a bounded group of candidates, append only their new files, and publish one atomic commit.
  * Historical source bundles and historical data shards are never downloaded on this path.
+ * policyFile is the maintainer's trusted local policy, never a candidate-provided path.
  */
 export async function acceptOfficialCandidates({
   repository,
@@ -238,6 +250,8 @@ export async function acceptOfficialCandidates({
   workspaceDirectory,
   discussionAccessToken,
   hub = defaultHub,
+  policyFile = "policies/official-runs/v1.json",
+  fetchImpl = fetch,
   attestationVerifier = verifyAttestation,
   close = closeCandidate,
   dryRun = false,
@@ -308,6 +322,8 @@ export async function acceptOfficialCandidates({
         token,
         workspace,
         attestationVerifier,
+        policyFile,
+        fetchImpl,
       });
       const normalized = path.join(prepared.extracted, "normalized");
       const normalizedManifestFile = path.join(normalized, "manifest.json");

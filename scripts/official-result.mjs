@@ -6,6 +6,7 @@ import { approvedWorkflow, loadOfficialPolicy, runPolicyForLifecycle } from "./o
 import { validateNormalizedRun } from "./validate-normalized-run.mjs";
 import { explicitEditTasks } from "../src/suites/explicit-edit/fixtures.ts";
 import { verifierSha256 } from "./verifier-identity.mjs";
+import { suiteVerifier } from "./run-multi-agent-batch.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
@@ -37,14 +38,21 @@ export async function buildOfficialManifest(normalizedDirectory, options) {
     invocation: options.invocation,
     configurationHashes: hashes,
   });
-  const infrastructureFailures = trials.filter(
-    (trial) => trial.infrastructureFailure !== null,
-  ).length;
-  const selectedTasks = new Set(trials.map((trial) => trial.taskId));
+  const team = normalized.suite;
+  const infrastructureFailures = team
+    ? team.observations.filter((item) => !["pass", "blocked"].includes(item.status)).length
+    : trials.filter((trial) => trial.infrastructureFailure !== null).length;
+  const observedTrials = team
+    ? trials.filter((trial) => trial.rounds > 0).length
+    : trials.length - infrastructureFailures;
+  const tasks = trials.flatMap((trial) =>
+    (trial.taskIds ?? [trial.taskId]).map((id) => ({ id, fixtureSha256: trial.fixtureSha256 })),
+  );
+  const selectedTasks = new Set(tasks.map((task) => task.id));
   const lifecycleState =
-    infrastructureFailures === trials.length
+    observedTrials === 0
       ? "infrastructure-failure"
-      : selectedTasks.size === explicitEditTasks().length
+      : selectedTasks.size === (team ? 71 : explicitEditTasks().length)
         ? "full-measurement"
         : "partial-measurement";
   return {
@@ -63,13 +71,13 @@ export async function buildOfficialManifest(normalizedDirectory, options) {
       selectedTaskSetSha256: normalized.taskSetSha256,
       verifierSha256: normalized.verifierSha256,
       configurationHashes: [...new Set(hashes)].sort(),
-      tasks: trials.map((trial) => ({ id: trial.taskId, fixtureSha256: trial.fixtureSha256 })),
+      tasks,
       runPolicy: normalized.policy,
     },
     lifecycle: {
       state: lifecycleState,
       plannedTrials: trials.length,
-      observedTrials: trials.length - infrastructureFailures,
+      observedTrials,
       infrastructureFailures,
     },
     environment: {
@@ -90,6 +98,21 @@ export async function validateOfficialManifest(
   const manifest = JSON.parse(await readFile(path.resolve(manifestFile), "utf8"));
   const policy = await loadOfficialPolicy(policyFile);
   const workflow = approvedWorkflow(policy, signerSha);
+  const normalized = await validateNormalizedRun(normalizedDirectory);
+  const team = normalized.suite;
+  const release = team ? policy.suites?.[team.id] : null;
+  if (team && !release) throw Error("official manifest: suite has no approved release policy");
+  const runner = release?.runner ?? policy.runner;
+  if (team) {
+    if (
+      runner.taskSetSha256 !== team.workloadSha256 ||
+      release.graphSha256 !== team.graphSha256 ||
+      release.scheduleSha256 !== team.scheduleSha256
+    )
+      throw Error("official manifest: workload, graph or schedule does not match policy");
+    if (runner.verifierSha256 !== (await suiteVerifier()))
+      throw Error("release policy: verifier does not match trusted multi-agent runner");
+  }
   const canonicalTasks = explicitEditTasks();
   const canonicalTaskSetSha256 = createHash("sha256")
     .update(JSON.stringify(canonicalTasks))
@@ -152,22 +175,22 @@ export async function validateOfficialManifest(
   );
   if (!COMMIT.test(manifest.runnerSha) || manifest.runnerSha !== workflow.runnerSha)
     throw Error("official manifest: runner revision does not match signer policy");
-  if (manifest.normalized.contract !== policy.runner.contract)
+  if (manifest.normalized.contract !== runner.contract)
     throw Error("official manifest: contract does not match policy");
-  if (!policy.normalizedSchemas.includes(manifest.normalized.schemaVersion))
+  if (!(team ? [3] : policy.normalizedSchemas).includes(manifest.normalized.schemaVersion))
     throw Error("official manifest: normalized schema is not allowed");
-  if (manifest.normalized.verifierSha256 !== policy.runner.verifierSha256)
+  if (manifest.normalized.verifierSha256 !== runner.verifierSha256)
     throw Error("official manifest: verifier does not match policy");
-  const expectedRunPolicy = runPolicyForLifecycle(policy, manifest.lifecycle.state);
+  const expectedRunPolicy =
+    release?.runPolicy ?? runPolicyForLifecycle(policy, manifest.lifecycle.state);
   for (const key of ["oracleRecoveries", "retryFailures", "concurrency", "timeoutMs"])
     if (manifest.normalized.runPolicy[key] !== expectedRunPolicy[key])
       throw Error(`official manifest: run policy does not match policy: ${key}`);
-  const tasks = new Map(policy.runner.tasks.map((task) => [task.id, task.fixtureSha256]));
+  const tasks = new Map(runner.tasks.map((task) => [task.id, task.fixtureSha256]));
   if (!manifest.normalized.tasks.length) throw Error("official manifest: empty task selection");
   for (const task of manifest.normalized.tasks)
     if (tasks.get(task.id) !== task.fixtureSha256)
       throw Error(`official manifest: task identity does not match policy: ${task.id}`);
-  const normalized = await validateNormalizedRun(normalizedDirectory);
   const configurations = await jsonLines(path.join(normalizedDirectory, "configurations.jsonl"));
   const trials = await jsonLines(path.join(normalizedDirectory, "trials.jsonl"));
   const expected = await buildOfficialManifest(normalizedDirectory, {

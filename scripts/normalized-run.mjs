@@ -7,6 +7,9 @@ import { callData, toolCategory } from "./build-trajectory-analysis.mjs";
 import { inspectHarnessOutput } from "./harness-runtime.mjs";
 import { canonicalModelProvider, loadModelRegistry } from "./model-registry.mjs";
 
+import { MULTI_AGENT_BENCHMARK } from "../src/suites/explicit-edit-multi-agent/results.mjs";
+import { validateTeamSuite, validateTeamTables } from "./normalized-team-protocol.mjs";
+
 export const NORMALIZED_SCHEMA_VERSION = 2;
 
 const COMMAND_FEATURES = [
@@ -60,6 +63,10 @@ async function readCalls(root, result, round) {
   const file = result.recovery?.attempts
     ? path.join(root, "trials", result.id, "rounds", String(round), "tool-calls.json")
     : path.join(root, "trials", result.id, "tool-calls.json");
+  return readCallsFile(file);
+}
+
+async function readCallsFile(file) {
   try {
     const calls = JSON.parse(await readFile(file, "utf8"));
     if (calls === null) return { calls: [], observed: false };
@@ -243,6 +250,134 @@ function safeProfile(profileId, adapter, configuration) {
   };
 }
 
+/** Project a shared team report into the common trial and delivery tables.
+ * A trial is a jointly graded barrier; taskIds carry its task credit. A round is
+ * one participant delivery, so costs and native events are never repeated per task.
+ * Unreached barriers remain visible without claiming inference or editing failures.
+ */
+export function normalizeTeamReport(report, profile, fixtureSha256) {
+  const trials = [];
+  const rounds = [];
+  const scheduledTasks = new Set();
+  const checks = new Map();
+  for (const check of report.checks) {
+    if (checks.has(check.label)) throw Error("Duplicate team grade label");
+    checks.set(check.label, check);
+  }
+  let acceptedTasks = 0;
+  let acceptedRounds = 0;
+  let stopped = false;
+  const barrierIds = new Set();
+  for (const barrier of report.schedule) {
+    if (!/^round-\d{3}$/.test(barrier.id) || barrierIds.has(barrier.id))
+      throw Error("Invalid or duplicate team barrier");
+    barrierIds.add(barrier.id);
+    const taskIds = barrier.assignments.map((item) => item.task);
+    for (const task of taskIds) {
+      if (scheduledTasks.has(task)) throw Error("Duplicate scheduled task");
+      scheduledTasks.add(task);
+    }
+    const deliveries = report.executions
+      .filter((item) => item.round === barrier.id)
+      .sort((left, right) => left.attempt - right.attempt || left.agent - right.agent);
+    const trialId = `${barrier.id}__${profile.profileId}`;
+    const deliveryKeys = new Set();
+    for (const [ordinal, item] of deliveries.entries()) {
+      if (
+        !Number.isInteger(item.attempt) ||
+        item.attempt < 1 ||
+        item.attempt > 4 ||
+        !Number.isInteger(item.agent) ||
+        item.agent < 0 ||
+        item.agent >= report.agents
+      )
+        throw Error("Invalid participant delivery position");
+      const key = `${item.attempt}:${item.agent}`;
+      if (deliveryKeys.has(key)) throw Error("Duplicate participant delivery");
+      deliveryKeys.add(key);
+      const assigned = barrier.assignments
+        .filter((assignment) => assignment.agent === item.agent)
+        .map((assignment) => assignment.task);
+      if (!assigned.length || JSON.stringify(assigned) !== JSON.stringify(item.tasks))
+        throw Error("Participant delivery contradicts scheduled tasks");
+      const grade = checks.get(`${barrier.id}-attempt-${item.attempt}`);
+      const exactPassed = grade?.status === "pass";
+      const receipt = item.receipt ?? {};
+      const tokenFields = [
+        "inputTokens",
+        "outputTokens",
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "totalTokens",
+      ];
+      const tokensObserved = tokenFields.every(
+        (field) => receipt[field] !== null && receipt[field] !== undefined,
+      );
+      rounds.push({
+        roundId: `${trialId}::${ordinal}`,
+        trialId,
+        round: ordinal,
+        agent: item.agent,
+        barrierAttempt: item.attempt - 1,
+        taskIds: item.tasks,
+        exactPassed,
+        normalizedPassed: exactPassed,
+        difference: exactPassed
+          ? "pass"
+          : grade?.status === "fail" && ["structure", "build", "behavior"].includes(grade.category)
+            ? "other"
+            : "unknown",
+        timedOut: Boolean(receipt.timedOut),
+        providerFailure: receipt.providerFailure ?? null,
+        exitCode: receipt.exitCode ?? null,
+        seconds: receipt.processSeconds ?? null,
+        toolCallCount: receipt.toolCalls ?? null,
+        modelRoundCount: receipt.modelRounds ?? null,
+        eventErrors: receipt.eventErrors ?? null,
+        toolCallsObserved: receipt.toolCallsObserved ?? false,
+        costUsd: receipt.costUsd ?? null,
+        ...Object.fromEntries(
+          tokenFields.map((field) => [field, tokensObserved ? receipt[field] : null]),
+        ),
+        failedToolCalls: receipt.failedToolCalls ?? null,
+        invalidToolCalls: receipt.invalidToolCalls ?? null,
+      });
+    }
+    const firstAttempt = deliveries[0]?.attempt;
+    const lastAttempt = deliveries.at(-1)?.attempt;
+    const finalExactPassed = checks.get(`${barrier.id}-attempt-${lastAttempt}`)?.status === "pass";
+    if (finalExactPassed) {
+      if (stopped) throw Error("Joint accepted progress is not a verified prefix");
+      const last = deliveries.filter((item) => item.attempt === lastAttempt);
+      const participants = new Set(barrier.assignments.map((item) => item.agent));
+      if (last.length !== participants.size || last.some((item) => item.status !== "settled"))
+        throw Error("Joint accepted barrier has unsettled participants");
+      acceptedRounds++;
+      acceptedTasks += taskIds.length;
+    } else stopped = true;
+    trials.push({
+      trialId,
+      taskId: barrier.id,
+      taskIds,
+      profileId: profile.profileId,
+      modelId: profile.modelId,
+      harnessId: profile.harnessId,
+      fixtureSha256,
+      firstExactPassed: checks.get(`${barrier.id}-attempt-${firstAttempt}`)?.status === "pass",
+      finalExactPassed,
+      rounds: deliveries.length,
+      infrastructureFailure: deliveries.length ? null : "not-reached",
+    });
+  }
+  if (scheduledTasks.size !== report.totalTasks)
+    throw Error("Scheduled tasks contradict total workload");
+  if (report.executions.length !== rounds.length)
+    throw Error("Delivery has an unknown scheduled barrier");
+  if (acceptedTasks !== report.acceptedTasks || acceptedRounds !== report.acceptedRounds)
+    throw Error("Joint accepted tasks contradict verified progress");
+  return { trials, rounds };
+}
+
 /** Export the minimum normalized facts needed for aggregate and trajectory reports. */
 export async function exportNormalizedRun(rootDirectory, outputDirectory, options = {}) {
   const root = path.resolve(rootDirectory);
@@ -262,108 +397,173 @@ export async function exportNormalizedRun(rootDirectory, outputDirectory, option
       adapter.modelFamily ?? adapter.model,
       adapter.provider ?? null,
     );
-  const schemaVersion = NORMALIZED_SCHEMA_VERSION;
+  const team = manifest.suite?.id === MULTI_AGENT_BENCHMARK;
+  const schemaVersion = team ? 3 : NORMALIZED_SCHEMA_VERSION;
+  const observedProfiles = new Set(summary.results.map((result) => result.profile));
+  if (team && observedProfiles.size !== summary.results.length)
+    throw Error("Duplicate team profile result");
   const configurationsByHash = new Map();
-  const profiles = Object.entries(adapters).map(([id, adapter]) => {
-    const configuration = safeConfiguration(adapter);
-    configurationsByHash.set(configuration.configurationHash, configuration);
-    return safeProfile(id, adapter, configuration);
-  });
+  const profiles = Object.entries(adapters)
+    .filter(([id]) => !team || observedProfiles.has(id))
+    .map(([id, adapter]) => {
+      const configuration = safeConfiguration(adapter);
+      configurationsByHash.set(configuration.configurationHash, configuration);
+      return safeProfile(id, adapter, configuration);
+    });
   const configurations = [...configurationsByHash.values()];
   const differences = await readDifferenceMap(root);
   const trials = [];
   const rounds = [];
   const toolCalls = [];
-  for (const result of summary.results) {
-    const profile = profiles.find((candidate) => candidate.profileId === result.profile);
-    if (!profile) throw Error(`${result.id}: unknown profile ${result.profile}`);
-    const attempts =
-      result.recovery?.attempts ??
-      (Object.hasOwn(result, "exitCode") || Object.hasOwn(result, "timedOut")
-        ? [
-            {
-              attempt: 0,
-              passed: result.passed,
-              execution: {
-                exitCode: result.exitCode,
-                signal: result.signal,
-                timedOut: result.timedOut,
-                providerFailure: result.providerFailure ?? null,
-                processSeconds: result.processSeconds,
-                toolCalls: result.toolCalls,
-                modelRounds: result.modelRounds,
-                errors: result.errors,
-                costUsd: result.costUsd,
-                inputTokens: result.inputTokens,
-                outputTokens: result.outputTokens,
-                cacheReadTokens: result.cacheReadTokens,
-                cacheWriteTokens: result.cacheWriteTokens,
-                totalTokens: result.totalTokens,
-                failedToolCalls: result.failedToolCalls,
-                invalidToolCalls: result.invalidToolCalls,
-              },
-            },
-          ]
-        : []);
-    trials.push({
-      trialId: result.id,
-      taskId: result.taskId,
-      profileId: profile.profileId,
-      modelId: profile.modelId,
-      harnessId: profile.harnessId,
-      fixtureSha256: result.fixtureSha256,
-      firstExactPassed: Boolean(attempts[0]?.passed),
-      finalExactPassed: Boolean(attempts.at(-1)?.passed),
-      rounds: attempts.length,
-      infrastructureFailure: attempts.length
-        ? null
-        : (infrastructureKind(result.error) ?? "missing-rounds"),
-    });
-    for (const attempt of attempts) {
-      const historical = options.historicalMetrics
-        ? await readHistoricalMetrics(root, result, attempt.attempt, profile.harnessKind)
-        : {};
-      const roundId = `${result.id}::${attempt.attempt}`;
-      const exactPassed = Boolean(attempt.passed);
-      const difference =
-        attempt.difference ?? differences.get(roundId) ?? (exactPassed ? "pass" : "unknown");
-      const round = {
-        roundId,
-        trialId: result.id,
-        round: attempt.attempt,
-        exactPassed,
-        normalizedPassed: exactPassed || difference === "eof",
-        difference,
-        timedOut: Boolean(attempt.execution?.timedOut),
-        providerFailure: attempt.execution?.providerFailure ?? historical.providerFailure ?? null,
-        exitCode: attempt.execution?.exitCode ?? null,
-        seconds: attempt.execution?.processSeconds ?? null,
-        toolCallCount: attempt.execution?.toolCalls ?? null,
-        modelRoundCount: attempt.execution?.modelRounds ?? null,
-        eventErrors: Array.isArray(attempt.execution?.errors)
-          ? attempt.execution.errors.length
-          : null,
-      };
-      Object.assign(round, {
-        costUsd: attempt.execution?.costUsd ?? historical.costUsd ?? null,
-        inputTokens: attempt.execution?.inputTokens ?? historical.inputTokens ?? null,
-        outputTokens: attempt.execution?.outputTokens ?? historical.outputTokens ?? null,
-        cacheReadTokens: attempt.execution?.cacheReadTokens ?? historical.cacheReadTokens ?? null,
-        cacheWriteTokens:
-          attempt.execution?.cacheWriteTokens ?? historical.cacheWriteTokens ?? null,
-        totalTokens: attempt.execution?.totalTokens ?? historical.totalTokens ?? null,
-        failedToolCalls: attempt.execution?.failedToolCalls ?? historical.failedToolCalls ?? null,
-        invalidToolCalls:
-          attempt.execution?.invalidToolCalls ?? historical.invalidToolCalls ?? null,
+  let suite;
+  if (team) {
+    suite = { ...manifest.suite, schedule: null, observations: [] };
+    for (const result of summary.results) {
+      const profile = profiles.find((candidate) => candidate.profileId === result.profile);
+      if (!profile) throw Error("Unknown team profile");
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(profile.profileId))
+        throw Error("Invalid team profile ID");
+      const directory = path.join(root, "teams", profile.profileId);
+      const report = JSON.parse(await readFile(path.join(directory, "report.json"), "utf8"));
+      for (const field of [
+        "agents",
+        "graphWidth",
+        "workloadSha256",
+        "graphSha256",
+        "scheduleSha256",
+      ])
+        if (report[field] !== suite[field]) throw Error(`Team report contradicts ${field}`);
+      if (report.totalTasks !== 71 || report.totalRounds !== 28)
+        throw Error("Incomplete team workload");
+      if (suite.schedule && JSON.stringify(suite.schedule) !== JSON.stringify(report.schedule))
+        throw Error("Team profiles have different schedules");
+      suite.schedule = report.schedule;
+      suite.observations.push({
+        profileId: profile.profileId,
+        status: report.status,
+        elapsedMs: report.elapsedMs,
+        terminalCategory: report.terminal?.category ?? null,
       });
-      rounds.push(round);
-      const callData = await readCalls(root, result, attempt.attempt);
-      rounds.at(-1).toolCallsObserved = callData.observed;
-      callData.calls.forEach((raw, ordinal) => {
-        toolCalls.push({ roundId, ...normalizeToolEvent(raw, ordinal) });
-      });
+      const projected = normalizeTeamReport(report, profile, manifest.tasks[0].fixtureSha256);
+      trials.push(...projected.trials);
+      rounds.push(...projected.rounds);
+      for (const round of projected.rounds) {
+        const delivery = path.join(
+          directory,
+          "deliveries",
+          `agent-${round.agent}`,
+          `${projected.trials.find((trial) => trial.trialId === round.trialId).taskId}-attempt-${round.barrierAttempt + 1}`,
+        );
+        const native = await readCallsFile(path.join(delivery, "tool-calls.json"));
+        round.toolCallsObserved = native.observed;
+        native.calls.forEach((raw, ordinal) =>
+          toolCalls.push({ roundId: round.roundId, ...normalizeToolEvent(raw, ordinal) }),
+        );
+      }
     }
-  }
+    validateTeamSuite(suite, manifest.contract, {
+      oracleRecoveries: manifest.oracleRecoveries,
+      retryFailures: manifest.retryFailures,
+      concurrency: manifest.concurrency,
+      timeoutMs: manifest.timeoutMs,
+    });
+    validateTeamTables(suite, profiles, trials, rounds);
+    const scheduled = suite.schedule
+      .flatMap((barrier) => barrier.assignments.map((item) => item.task))
+      .sort();
+    if (JSON.stringify(scheduled) !== JSON.stringify(manifest.tasks.map((task) => task.id).sort()))
+      throw Error("Team raw task manifest contradicts the schedule");
+  } else
+    for (const result of summary.results) {
+      const profile = profiles.find((candidate) => candidate.profileId === result.profile);
+      if (!profile) throw Error(`${result.id}: unknown profile ${result.profile}`);
+      const attempts =
+        result.recovery?.attempts ??
+        (Object.hasOwn(result, "exitCode") || Object.hasOwn(result, "timedOut")
+          ? [
+              {
+                attempt: 0,
+                passed: result.passed,
+                execution: {
+                  exitCode: result.exitCode,
+                  signal: result.signal,
+                  timedOut: result.timedOut,
+                  providerFailure: result.providerFailure ?? null,
+                  processSeconds: result.processSeconds,
+                  toolCalls: result.toolCalls,
+                  modelRounds: result.modelRounds,
+                  errors: result.errors,
+                  costUsd: result.costUsd,
+                  inputTokens: result.inputTokens,
+                  outputTokens: result.outputTokens,
+                  cacheReadTokens: result.cacheReadTokens,
+                  cacheWriteTokens: result.cacheWriteTokens,
+                  totalTokens: result.totalTokens,
+                  failedToolCalls: result.failedToolCalls,
+                  invalidToolCalls: result.invalidToolCalls,
+                },
+              },
+            ]
+          : []);
+      trials.push({
+        trialId: result.id,
+        taskId: result.taskId,
+        profileId: profile.profileId,
+        modelId: profile.modelId,
+        harnessId: profile.harnessId,
+        fixtureSha256: result.fixtureSha256,
+        firstExactPassed: Boolean(attempts[0]?.passed),
+        finalExactPassed: Boolean(attempts.at(-1)?.passed),
+        rounds: attempts.length,
+        infrastructureFailure: attempts.length
+          ? null
+          : (infrastructureKind(result.error) ?? "missing-rounds"),
+      });
+      for (const attempt of attempts) {
+        const historical = options.historicalMetrics
+          ? await readHistoricalMetrics(root, result, attempt.attempt, profile.harnessKind)
+          : {};
+        const roundId = `${result.id}::${attempt.attempt}`;
+        const exactPassed = Boolean(attempt.passed);
+        const difference =
+          attempt.difference ?? differences.get(roundId) ?? (exactPassed ? "pass" : "unknown");
+        const round = {
+          roundId,
+          trialId: result.id,
+          round: attempt.attempt,
+          exactPassed,
+          normalizedPassed: exactPassed || difference === "eof",
+          difference,
+          timedOut: Boolean(attempt.execution?.timedOut),
+          providerFailure: attempt.execution?.providerFailure ?? historical.providerFailure ?? null,
+          exitCode: attempt.execution?.exitCode ?? null,
+          seconds: attempt.execution?.processSeconds ?? null,
+          toolCallCount: attempt.execution?.toolCalls ?? null,
+          modelRoundCount: attempt.execution?.modelRounds ?? null,
+          eventErrors: Array.isArray(attempt.execution?.errors)
+            ? attempt.execution.errors.length
+            : null,
+        };
+        Object.assign(round, {
+          costUsd: attempt.execution?.costUsd ?? historical.costUsd ?? null,
+          inputTokens: attempt.execution?.inputTokens ?? historical.inputTokens ?? null,
+          outputTokens: attempt.execution?.outputTokens ?? historical.outputTokens ?? null,
+          cacheReadTokens: attempt.execution?.cacheReadTokens ?? historical.cacheReadTokens ?? null,
+          cacheWriteTokens:
+            attempt.execution?.cacheWriteTokens ?? historical.cacheWriteTokens ?? null,
+          totalTokens: attempt.execution?.totalTokens ?? historical.totalTokens ?? null,
+          failedToolCalls: attempt.execution?.failedToolCalls ?? historical.failedToolCalls ?? null,
+          invalidToolCalls:
+            attempt.execution?.invalidToolCalls ?? historical.invalidToolCalls ?? null,
+        });
+        rounds.push(round);
+        const callData = await readCalls(root, result, attempt.attempt);
+        rounds.at(-1).toolCallsObserved = callData.observed;
+        callData.calls.forEach((raw, ordinal) => {
+          toolCalls.push({ roundId, ...normalizeToolEvent(raw, ordinal) });
+        });
+      }
+    }
   await mkdir(outputDirectory, { recursive: true });
   const files = {
     "profiles.jsonl": jsonLine(profiles),
@@ -385,7 +585,10 @@ export async function exportNormalizedRun(rootDirectory, outputDirectory, option
     schemaVersion,
     runId: path.basename(root),
     contract: manifest.contract,
-    taskSetSha256: createHash("sha256").update(JSON.stringify(manifest.tasks)).digest("hex"),
+    taskSetSha256: team
+      ? suite.workloadSha256
+      : createHash("sha256").update(JSON.stringify(manifest.tasks)).digest("hex"),
+    ...(team ? { suite } : {}),
     verifierSha256: manifest.verifierSha256 ?? null,
     policy: {
       oracleRecoveries: manifest.oracleRecoveries,

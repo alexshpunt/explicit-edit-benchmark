@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { adapterDefinition } from "./adapter-registry.mjs";
+import { DEFAULT_BENCHMARK_SUITE, suiteRunOptions } from "./benchmark-suites.mjs";
 
 const TEMPLATE = "alexshpunt/explicit-edit-benchmark-run-template";
 const WORKFLOW = "official-run.yml";
@@ -42,12 +43,14 @@ export function parseRunOptions(args) {
     options: {
       official: { type: "boolean", default: false },
       local: { type: "boolean", default: false },
+      suite: { type: "string", default: DEFAULT_BENCHMARK_SUITE },
+      config: { type: "string" },
       harness: { type: "string" },
       model: { type: "string" },
       provider: { type: "string" },
       thinking: { type: "string", default: "low" },
       task: { type: "string" },
-      concurrency: { type: "string", default: "10" },
+      concurrency: { type: "string" },
       "timeout-seconds": { type: "string" },
       "profile-name": { type: "string" },
       command: { type: "string" },
@@ -67,14 +70,20 @@ export function parseRunOptions(args) {
   });
   if (values.official === values.local)
     throw Error("Choose exactly one run mode: --official or --local");
-  if (!values.harness || !values.model) throw Error("Run requires --harness and --model");
-  const modelProvider = values.model.split("/", 1)[0];
-  values.provider ??= modelProvider;
-  if (values.provider !== modelProvider)
-    throw Error("Run provider must match the provider-qualified model id");
-  if (!/^\d+$/.test(values.concurrency) || Number(values.concurrency) < 1)
-    throw Error("Run concurrency must be a positive integer");
-  adapterDefinition(values.harness);
+  Object.assign(values, suiteRunOptions(values.suite, values));
+  if (values.config) {
+    if (values.harness || values.model)
+      throw Error("Use --config or --harness/--model preset options, not both");
+    if (values.official)
+      throw Error("Official mode requires an approved registered harness preset");
+  } else {
+    if (!values.harness || !values.model) throw Error("Run requires --harness and --model");
+    const modelProvider = values.model.split("/", 1)[0];
+    values.provider ??= modelProvider;
+    if (values.provider !== modelProvider)
+      throw Error("Run provider must match the provider-qualified model id");
+    adapterDefinition(values.harness);
+  }
   if (values.official && !values["agent-version"])
     throw Error("Official run requires the exact installed --agent-version");
   if (values.official && values.harness === "pi-agent-ide" && !values["harness-version"])
@@ -101,7 +110,7 @@ export function parseRunOptions(args) {
 
 /** Run and submit an ordinary unverified observation on this machine. */
 export async function runLocal(values, execute = command) {
-  if (values.harness.startsWith("pi-") && values["auth-file"] === undefined) {
+  if (values.harness?.startsWith("pi-") && values["auth-file"] === undefined) {
     const defaultAuth = path.join(os.homedir(), ".pi", "agent", "auth.json");
     if (await exists(defaultAuth)) values = { ...values, "auth-file": defaultAuth };
   }
@@ -109,15 +118,13 @@ export async function runLocal(values, execute = command) {
     "run",
     "benchmark:submit",
     "--",
-    "--harness",
-    values.harness,
-    "--model",
-    values.model,
-    "--thinking",
-    values.thinking,
+    ...(values.config
+      ? ["--config", values.config]
+      : ["--harness", values.harness, "--model", values.model, "--thinking", values.thinking]),
     "--concurrency",
     values.concurrency,
   ];
+  if (values.suite && values.suite !== DEFAULT_BENCHMARK_SUITE) args.push("--suite", values.suite);
   for (const option of [
     "timeout-seconds",
     "profile-name",
@@ -203,6 +210,8 @@ export async function runOfficial(values, execute = command) {
     `runtime_version=${values["runtime-version"]}`,
     `concurrency=${values.concurrency}`,
   ];
+  if (values.suite && values.suite !== DEFAULT_BENCHMARK_SUITE)
+    fields.push(`suite=${values.suite}`);
   if (values.task !== undefined) fields.push(`task=${values.task}`);
   await execute("gh", [
     "workflow",

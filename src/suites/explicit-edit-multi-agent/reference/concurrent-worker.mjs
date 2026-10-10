@@ -13,8 +13,9 @@ async function worker(workspace) {
   process.once("SIGTERM", () => controller.abort());
   process.once("SIGINT", () => controller.abort());
   const lifetime = randomUUID();
-  const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   await mkdir("/tmp/current-analysis");
+  // Start consuming stdin only when the first request can enter the loop.
+  const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   let delivered = 0;
   for await (const line of input) {
     let conflicts = 0,
