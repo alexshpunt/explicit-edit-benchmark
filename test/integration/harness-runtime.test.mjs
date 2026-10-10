@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { tempDirectory } from "../helpers/temp.mjs";
@@ -119,6 +119,67 @@ await test("Pi and Codex metrics use finalized events without double-counting", 
     },
   );
 });
+for (const kind of ["oh-my-pi-default", "pi-default", "baseline-agent", "pi-agent-ide"]) {
+  await test(`${kind} counts either error flag once per completed tool`, async (t) => {
+    /** @type {[string, Record<string, unknown>[], number | null][]} */
+    const cases = [
+      ["no events", [], null],
+      ["unfinished tool", [{ type: "tool_execution_start", toolCallId: "pending" }], null],
+      ["success", [{ type: "tool_execution_end", isError: false }], 0],
+      ["top-level error", [{ type: "tool_execution_end", isError: true }], 1],
+      ["nested error", [{ type: "tool_execution_end", result: { isError: true } }], 1],
+      ["both flags", [{ type: "tool_execution_end", isError: true, result: { isError: true } }], 1],
+      [
+        "top-level error with nested false",
+        [{ type: "tool_execution_end", isError: true, result: { isError: false } }],
+        1,
+      ],
+      [
+        "nested error with top-level false",
+        [{ type: "tool_execution_end", isError: false, result: { isError: true } }],
+        1,
+      ],
+      [
+        "non-boolean flags",
+        [{ type: "tool_execution_end", isError: "true", result: { isError: 1 } }],
+        0,
+      ],
+      [
+        "child and outer failures",
+        [
+          {
+            type: "tool_execution_end",
+            toolCallId: "child",
+            parentToolCallId: "outer",
+            isError: true,
+          },
+          { type: "tool_execution_end", toolCallId: "outer", result: { isError: true } },
+        ],
+        2,
+      ],
+    ];
+    const root = await tempDirectory("pi-completion-errors");
+    t.after(() => rm(root, { recursive: true, force: true }));
+    for (const [label, events, expected] of cases) {
+      await t.test(label, async () => {
+        const output = path.join(root, `${label}.jsonl`);
+        await writeFile(output, events.map(JSON.stringify).join("\n"));
+        const metrics = await inspectHarnessOutput(kind, output);
+        assert.equal(metrics.failedToolCalls, expected);
+        assert.equal(
+          metrics.toolCalls,
+          events.filter((event) => event.type === "tool_execution_start").length,
+        );
+        assert.equal(metrics.modelRounds, 0);
+        assert.equal(metrics.eventCount, events.length);
+        assert.equal(metrics.costUsd, null);
+        assert.equal(metrics.totalTokens, null);
+        assert.deepEqual(metrics.errors, []);
+      });
+    }
+  });
+}
+
 await test("DeepSeek Harness metrics come from its SDK session events", async () => {
   const root = await tempDirectory("dsh-metrics-test");
   const output = path.join(root, "stdout.jsonl");

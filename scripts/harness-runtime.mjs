@@ -388,7 +388,7 @@ export async function inspectHarnessOutput(kind, file) {
     if (costs.length) costUsd = costs.reduce((sum, value) => sum + value, 0);
     const toolEnds = events.filter((event) => event.type === "tool_execution_end");
     failedToolCalls = toolEnds.length
-      ? toolEnds.filter((event) => event.result?.isError === true).length
+      ? toolEnds.filter((event) => event.isError === true || event.result?.isError === true).length
       : null;
     invalidToolCalls = null;
   } else if (kind === "codex-cli-default") {
