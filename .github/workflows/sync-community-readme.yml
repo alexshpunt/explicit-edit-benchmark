@@ -1,5 +1,5 @@
 ---
-name: Sync community README tables
+name: Sync benchmark README counts and community tables
 
 "on":
   workflow_dispatch:
@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           if git diff --quiet -- README.md badges.json; then
-            echo "README community tables are current." >> "$GITHUB_STEP_SUMMARY"
+            echo "README benchmark counts and community tables are current." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           branch=automation/community-readme
@@ -39,13 +39,13 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git checkout -B "$branch"
           git add README.md badges.json
-          git commit -m "docs: refresh community tables"
+          git commit -m "docs: refresh benchmark counts and community tables"
           git push --force origin "$branch"
           open_prs=$(gh pr list --head "$branch" --state open --json number --jq length)
           if [[ "$open_prs" = "0" ]]; then
             gh pr create \
               --base main \
               --head "$branch" \
-              --title "docs: refresh community tables" \
-              --body "Refreshes the generated contributor and accepted-harness tables from the published Dataset projection."
+              --title "docs: refresh benchmark counts and community tables" \
+              --body "Refreshes per-benchmark counts and the generated contributor and accepted-harness tables from the published Dataset projection."
           fi

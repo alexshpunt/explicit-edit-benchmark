@@ -2,28 +2,28 @@
   <img src="assets/logo-multi-agent.png" alt="Explicit Edit — Multi-Agent" width="560">
 </p>
 
-<h1 align="center">Explicit Edit Benchmark</h1>
+<h1 align="center">Explicit Edit Multi-Agent Benchmark</h1>
 
-<p align="center">Two open benchmark suites for measuring how reliably coding agents edit files: exact text changes and concurrent work in a large shared project.</p>
-
-<p align="center">
-  <a href="https://github.com/alexshpunt/explicit-edit-benchmark/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/alexshpunt/explicit-edit-benchmark/ci.yml?branch=main&label=CI%2FCD" alt="CI/CD status"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
-  <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dataset-Hugging%20Face-f0c04a" alt="Hugging Face Dataset"></a>
-  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer"><img src="https://img.shields.io/badge/leaderboard-Explorer-2f6fe4" alt="Benchmark leaderboard"></a>
-</p>
+<p align="center">Precise, concurrent editing in a large shared project.</p>
 
 <p align="center">
-  <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/suites-2-blue" alt="Two benchmark suites"></a>
-  <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2Falexshpunt%2Fexplicit-edit-benchmark%2Fresolve%2Fmain%2Fdataset-index.json&query=%24.runs.length&label=runs&color=blue" alt="Accepted benchmark runs"></a>
-  <a href="https://github.com/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexshpunt%2Fexplicit-edit-benchmark%2Fmain%2Fbadges.json&query=%24.contributors&label=contributors&color=blue" alt="Benchmark contributors"></a>
-  <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2Falexshpunt%2Fexplicit-edit-benchmark%2Fresolve%2Fmain%2Fsummary.json&query=%24.observations&label=observations&color=blue" alt="Accepted benchmark observations"></a>
-  <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2Falexshpunt%2Fexplicit-edit-benchmark%2Fresolve%2Fmain%2Fsummary.json&query=%24.models&label=models&color=blue" alt="Models in the benchmark dataset"></a>
-  <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2Falexshpunt%2Fexplicit-edit-benchmark%2Fresolve%2Fmain%2Fsummary.json&query=%24.configurations&label=configs&color=blue" alt="Configurations in the benchmark dataset"></a>
-  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?view=harness"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2Falexshpunt%2Fexplicit-edit-benchmark%2Fresolve%2Fmain%2Fsummary.json&query=%24.harnesses&label=harnesses&color=blue" alt="Accepted harness families"></a>
+  <a href="https://github.com/alexshpunt/explicit-edit-benchmark/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/alexshpunt/explicit-edit-benchmark/ci.yml?branch=main&label=CI%2FCD" alt="Explicit Edit Multi-Agent Benchmark: CI/CD status"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="Explicit Edit Multi-Agent Benchmark: MIT license"></a>
+  <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dataset-Hugging%20Face-f0c04a" alt="Explicit Edit Multi-Agent Benchmark: Hugging Face Dataset"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit-multi-agent"><img src="https://img.shields.io/badge/leaderboard-Explorer-2f6fe4" alt="Explicit Edit Multi-Agent Benchmark: leaderboard"></a>
 </p>
 
-## Multi Edit
+<!-- benchmark-badges:explicit-edit-multi-agent:start -->
+<p align="center">
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit-multi-agent"><img src="https://img.shields.io/badge/suites-0-blue" alt="explicit-edit-multi-agent: 0 suites"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit-multi-agent"><img src="https://img.shields.io/badge/runs-0-blue" alt="explicit-edit-multi-agent: 0 runs"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit-multi-agent"><img src="https://img.shields.io/badge/contributors-0-blue" alt="explicit-edit-multi-agent: 0 contributors"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit-multi-agent"><img src="https://img.shields.io/badge/observations-0-blue" alt="explicit-edit-multi-agent: 0 observations"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit-multi-agent"><img src="https://img.shields.io/badge/models-0-blue" alt="explicit-edit-multi-agent: 0 models"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit-multi-agent"><img src="https://img.shields.io/badge/configs-0-blue" alt="explicit-edit-multi-agent: 0 configs"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit-multi-agent"><img src="https://img.shields.io/badge/harnesses-0-blue" alt="explicit-edit-multi-agent: 0 harnesses"></a>
+</p>
+<!-- benchmark-badges:explicit-edit-multi-agent:end -->
 
 **One file. 22,743 lines. A team of 15 agents editing the same project concurrently.**
 
@@ -59,7 +59,28 @@ CPU-heavy; read the [run guide](docs/multi-agent.md) before starting.
   <img src="assets/logo.png" alt="Explicit Edit 1.0" width="560">
 </p>
 
-## Explicit Edit 1.0
+<h1 align="center">Explicit Edit Benchmark 1.0</h1>
+
+<p align="center">Exact text changes across 226 deterministic editing tasks.</p>
+
+<p align="center">
+  <a href="https://github.com/alexshpunt/explicit-edit-benchmark/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/alexshpunt/explicit-edit-benchmark/ci.yml?branch=main&label=CI%2FCD" alt="Explicit Edit Benchmark 1.0: CI/CD status"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="Explicit Edit Benchmark 1.0: MIT license"></a>
+  <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dataset-Hugging%20Face-f0c04a" alt="Explicit Edit Benchmark 1.0: Hugging Face Dataset"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit%2Fexplicit-edit"><img src="https://img.shields.io/badge/leaderboard-Explorer-2f6fe4" alt="Explicit Edit Benchmark 1.0: leaderboard"></a>
+</p>
+
+<!-- benchmark-badges:explicit-edit/explicit-edit:start -->
+<p align="center">
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit%2Fexplicit-edit"><img src="https://img.shields.io/badge/suites-1-blue" alt="explicit-edit/explicit-edit: 1 suites"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit%2Fexplicit-edit"><img src="https://img.shields.io/badge/runs-160-blue" alt="explicit-edit/explicit-edit: 160 runs"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit%2Fexplicit-edit"><img src="https://img.shields.io/badge/contributors-6-blue" alt="explicit-edit/explicit-edit: 6 contributors"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit%2Fexplicit-edit"><img src="https://img.shields.io/badge/observations-40249-blue" alt="explicit-edit/explicit-edit: 40249 observations"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit%2Fexplicit-edit"><img src="https://img.shields.io/badge/models-34-blue" alt="explicit-edit/explicit-edit: 34 models"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit%2Fexplicit-edit"><img src="https://img.shields.io/badge/configs-177-blue" alt="explicit-edit/explicit-edit: 177 configs"></a>
+  <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit%2Fexplicit-edit"><img src="https://img.shields.io/badge/harnesses-36-blue" alt="explicit-edit/explicit-edit: 36 harnesses"></a>
+</p>
+<!-- benchmark-badges:explicit-edit/explicit-edit:end -->
 
 Explicit Edit (`explicit-edit`) is an open benchmark for measuring how accurately
 coding agents and agent harnesses edit files across **226 deterministic,
@@ -77,6 +98,11 @@ Both suites use the same CLI, harness adapters, model configuration, normalized
 statistics and publication path. Their Scores and rankings stay separate: a
 percentage from one suite is not interchangeable with a percentage from the other.
 Omitting `--suite` still selects Explicit Edit 1.0.
+
+Each badge block counts only that benchmark's published data. `suites` counts
+published benchmark versions; `contributors` counts attributed Dataset submitters.
+The scheduled Dataset-to-README sync refreshes both blocks; unpublished benchmarks
+stay at zero.
 
 Results live in the [Benchmark Explorer](https://huggingface.co/spaces/alexshpunt/benchmark-explorer)
 and the [Hugging Face Dataset](https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark).

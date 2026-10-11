@@ -51,6 +51,40 @@ export function renderReadmeCommunity(community) {
   ].join("\n");
 }
 
+/** Refresh suite-owned counters without changing surrounding README content or legacy feeds. */
+export function syncBenchmarkBadges(readme, community) {
+  if (!community.benchmarks) return readme;
+  return readme.replace(
+    /<!-- benchmark-badges:([a-z0-9/-]+):start -->[\s\S]*?<!-- benchmark-badges:\1:end -->/gu,
+    (_block, id) => {
+      const counts = community.benchmarks[id] ?? {};
+      const leaderboard = `${EXPLORER}?filter.benchmark=${encodeURIComponent(id)}`;
+      const metrics = [
+        "suites",
+        "runs",
+        "contributors",
+        "observations",
+        "models",
+        "configurations",
+        "harnesses",
+      ];
+      const badges = metrics.map((metric) => {
+        const count = counts[metric] ?? 0;
+        if (!Number.isSafeInteger(count) || count < 0)
+          throw Error(`Invalid benchmark count: ${id}/${metric}`);
+        const label = metric === "configurations" ? "configs" : metric;
+        return `  <a href="${leaderboard}"><img src="https://img.shields.io/badge/${label}-${count}-blue" alt="${id}: ${count} ${label}"></a>`;
+      });
+      return [
+        `<!-- benchmark-badges:${id}:start -->`,
+        '<p align="center">',
+        ...badges,
+        "</p>",
+        `<!-- benchmark-badges:${id}:end -->`,
+      ].join("\n");
+    },
+  );
+}
 /** Replace only the generated community block and preserve the rest of the README. */
 export function syncReadmeCommunity(readme, community) {
   const start = readme.indexOf(START);
@@ -68,7 +102,7 @@ async function main() {
   if (!response.ok) throw Error(`Community projection download failed (${response.status})`);
   const community = await response.json();
   const current = await readFile(readmeFile, "utf8");
-  const next = syncReadmeCommunity(current, community);
+  const next = syncBenchmarkBadges(syncReadmeCommunity(current, community), community);
   if (next !== current) await writeFile(readmeFile, next);
   await writeFile(badgesFile, `${JSON.stringify(contributorBadgeData(community), null, 2)}\n`);
 }
