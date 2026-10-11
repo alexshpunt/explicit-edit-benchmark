@@ -97,15 +97,15 @@ export function prepareCallerTemplate(text, workflowSha, policySha) {
   const concurrency =
     /      concurrency:\n        description: [^\n]+\n        required: false\n        default: "(?:10)?"\n        type: string\n/;
   if (!concurrency.test(updated)) throw Error("Unexpected caller concurrency layout");
+  const taskDescription =
+    '"Explicit Edit: optional task id; empty runs all 226 tasks. Multi-Agent: all 71 tasks; leave empty."';
   return updated
-    .replace(
-      "Optional task id; empty runs all 226 canonical tasks",
-      "Optional Explicit Edit task; Multi-Agent always runs all 71 tasks",
-    )
+    .replace("Optional task id; empty runs all 226 canonical tasks", taskDescription)
+    .replace("Optional Explicit Edit task; Multi-Agent always runs all 71 tasks", taskDescription)
     .replace(
       concurrency,
       `      concurrency:
-        description: Empty uses the suite default (10 or fixed 15 agents)
+        description: "Explicit Edit: full-run concurrency (default 10). Multi-Agent: fixed 15. Empty uses the suite default."
         required: false
         default: ""
         type: string
