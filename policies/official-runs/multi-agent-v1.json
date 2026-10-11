@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "1672aa7daa4629c745ed821a2b48d70fb03dcd77",
+  "sourceCommit": "407313b0f72f81c95c36043d5d03aa774ca2b6cd",
   "fixtureSourcesSha256": "5bc80d99367512195cea89af374db7d90f71206d1e6ed7b0c30d4a9931bddd1e",
   "reference": {
     "status": "pass",
@@ -9,14 +9,14 @@
     "acceptedTasks": 71,
     "acceptedRounds": 28,
     "repairs": 0,
-    "reportSha256": "c4a74a05a7d6bfff662b0867d60b87745d1482dd73e5da557d961a1c0b1c87fc",
-    "normalizedSha256": "9902c56c66446cf4b74990778647d5bf69419aea9f5c871ad7e13173749d8290"
+    "reportSha256": "1f2211ebfb7c5636b52128b1342976a135f1bf9c3ab5472a302f62066cdd0045",
+    "normalizedSha256": "07639c85dfd859b3971294f1ed6fc2fc17209ebe6f126ca7b2e99d93c586b78b"
   },
   "release": {
     "runner": {
       "contract": "shared-project-rotating-v1",
       "taskSetSha256": "4d4800f093714623acd47b0fa2b2deb02d127538bfd0300b0959c90affafda5e",
-      "verifierSha256": "1add6c42c7fa350286922e9dcc589f0c3abbb47778d676a43ae130d503249140",
+      "verifierSha256": "1aa8cb2769634f3ade511a5d657048b98f7b26930deefcbbf6ce17a48c1c2b8e",
       "tasks": [
         {
           "id": "task-001",

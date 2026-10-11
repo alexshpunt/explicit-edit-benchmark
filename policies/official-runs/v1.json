@@ -177,6 +177,11 @@
       "sha": "36f42b57c68566590ae115783610656a4d1fc208",
       "runnerSha": "36f42b57c68566590ae115783610656a4d1fc208",
       "status": "active"
+    },
+    {
+      "sha": "407313b0f72f81c95c36043d5d03aa774ca2b6cd",
+      "runnerSha": "407313b0f72f81c95c36043d5d03aa774ca2b6cd",
+      "status": "active"
     }
   ],
   "benchmark": {
@@ -1102,7 +1107,7 @@
       "runner": {
         "contract": "shared-project-rotating-v1",
         "taskSetSha256": "4d4800f093714623acd47b0fa2b2deb02d127538bfd0300b0959c90affafda5e",
-        "verifierSha256": "1add6c42c7fa350286922e9dcc589f0c3abbb47778d676a43ae130d503249140",
+        "verifierSha256": "1aa8cb2769634f3ade511a5d657048b98f7b26930deefcbbf6ce17a48c1c2b8e",
         "tasks": [
           {
             "id": "task-001",
