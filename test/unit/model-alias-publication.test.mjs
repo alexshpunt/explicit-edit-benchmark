@@ -111,6 +111,11 @@ test("full rebuild and incremental publication normalize aliases while source by
       fullIndex.runs[0].manifestSha256,
       createHash("sha256").update(before["manifest.json"]).digest("hex"),
     );
+    const fullCounts = (await json(path.join(rebuilt, "community.json"))).benchmarks;
+    const incrementalCounts = (await json(path.join(incremental, "community.json"))).benchmarks;
+    assert.deepEqual(incrementalCounts, fullCounts);
+    assert.equal(Object.values(fullCounts)[0].models, 1);
+    assert.equal(Object.values(fullCounts)[0].configurations, 1);
     const fullRows = (await json(path.join(rebuilt, "leaderboard.json"))).rows;
     const incrementalRows = (await json(path.join(incremental, "leaderboard.json"))).rows;
     assert.equal(fullRows[0].modelFamily, "deepseek-v4.1-flash");
