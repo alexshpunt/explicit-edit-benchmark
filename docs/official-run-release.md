@@ -33,11 +33,15 @@ a new reviewed full reference proof; a release never approves new hashes merely
 because a submitted result is self-consistent. Original task identities, schemas
 and time limits stay unchanged.
 
-The same command upgrades both caller workflows with a suite selector and forwards
-it to the reusable producer. Empty concurrency uses the suite default: 10 for
-Explicit Edit and exactly 15 for Multi-Agent. Every caller layout is checked before
-the first policy commit, and all final producer, signer, submit and policy pins
-come from committed revisions.
+The same command upgrades each caller's run and recovery workflows. The run
+workflow forwards a suite selector to the reusable producer. Empty concurrency
+uses the suite default: 10 for Explicit Edit and exactly 15 for Multi-Agent.
+Recovery forwards the original result's signer SHA, defaulting to the new release;
+select the original signer when resending an older result. The trusted policy
+still decides which signers are allowed.
+
+Both layouts in every caller are checked before the first policy commit. All final
+producer, submit and policy pins come from committed revisions.
 
 Release branches and PRs do not activate the route. Activation happens only when
 the approved policy and caller releases merge. Preparing these changes requires

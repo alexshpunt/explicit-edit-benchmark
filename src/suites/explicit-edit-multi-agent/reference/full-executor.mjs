@@ -77,7 +77,11 @@ export function fullExecutor(workspace, executor, { signal } = {}) {
       "/workspace",
       "--chdir",
       "/workspace",
+      // Bind only Node, never its installation directory or nearby host files.
+      "--ro-bind",
       process.execPath,
+      "/renderer-node",
+      "/renderer-node",
       "/executor/reference/full-worker.mjs",
       "/workspace",
     ],

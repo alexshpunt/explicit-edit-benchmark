@@ -147,7 +147,14 @@ export async function inspectCandidate(workspace, evidence, { signal } = {}) {
   );
   await writeFile(path.join(evidence, "compile.log"), compilation.stderr);
   const inspection = await command(
-    [...base, process.execPath, "/inspector/candidate-inspect.mjs"],
+    [
+      ...base,
+      "--ro-bind",
+      process.execPath,
+      "/renderer-node",
+      "/renderer-node",
+      "/inspector/candidate-inspect.mjs",
+    ],
     "build",
     { signal, timeout: 300_000 },
   );

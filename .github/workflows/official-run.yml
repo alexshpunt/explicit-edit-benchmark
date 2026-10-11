@@ -131,7 +131,11 @@ jobs:
           if [[ "$SUITE" == "explicit-edit-multi-agent" ]]; then
             sudo apt-get install --yes clang clangd build-essential
             /usr/bin/clang++ --version | grep 'clang version 18\.'
+            clangd-18 --version
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+          bwrap --ro-bind / / -- true
 
       - name: Checkout pinned release policy for preflight
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803

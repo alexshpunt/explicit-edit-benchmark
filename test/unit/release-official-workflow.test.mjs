@@ -59,6 +59,32 @@ jobs:
     /caller.*layout/i,
   );
 });
+test("submit-only recovery upgrades legacy pins and keeps the original signer selectable", async () => {
+  const { prepareResubmitTemplate } = await import("../../scripts/release-official-workflow.mjs");
+  const legacy = await readFile("test/fixtures/official-resubmit.yml", "utf8");
+  const result = prepareResubmitTemplate(legacy, current, policy);
+  assert.ok(result.includes(`official-submit.yml@${policy}`));
+  assert.ok(result.includes(`      policy_sha: ${policy}\n`));
+  assert.ok(result.includes(`        default: "${current}"\n`));
+  assert.ok(result.includes("      signer_sha: ${{ inputs.signer_sha }}\n"));
+  assert.ok(!result.includes(`      signer_sha: ${current}\n`));
+  assert.equal(prepareResubmitTemplate(result, current, policy), result);
+  const next = prepareResubmitTemplate(result, old, current);
+  assert.ok(next.includes(`        default: "${old}"\n`));
+  assert.ok(next.includes(`official-submit.yml@${current}`));
+  assert.ok(next.includes(`      policy_sha: ${current}\n`));
+  assert.ok(next.includes("      signer_sha: ${{ inputs.signer_sha }}\n"));
+  for (const malformed of [
+    legacy.replace("      producer_attempt:\n", "      unknown_attempt:\n"),
+    legacy.replace(/      signer_sha: [0-9a-f]{40}/u, "      signer_sha: ${{ inputs.other }}"),
+    result.replace("      signer_sha: ${{ inputs.signer_sha }}", `      signer_sha: ${old}`),
+    result + `      policy_sha: ${policy}\n`,
+    result.replace(`      policy_sha: ${policy}`, "      policy_sha: ${{ inputs.policy_sha }}"),
+    result.replace(`official-submit.yml@${policy}`, "official-submit.yml@main"),
+  ])
+    assert.throws(() => prepareResubmitTemplate(malformed, current, policy), /recovery.*layout/i);
+  assert.throws(() => prepareResubmitTemplate(legacy, "main", policy), /full.*SHAs/);
+});
 test("release pinning fails when the caller template layout drifts", () => {
   assert.throws(() => pinCallerTemplate(`signer_sha: ${old}\n`, current, policy), /pin layout/);
 });

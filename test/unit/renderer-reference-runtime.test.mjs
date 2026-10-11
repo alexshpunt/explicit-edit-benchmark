@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { test } from "node:test";
-import {
-  fullExecutor,
-  prepareFullExecutor,
-} from "../../src/suites/explicit-edit-multi-agent/reference/full-executor.mjs";
+import { prepareFullExecutor } from "../../src/suites/explicit-edit-multi-agent/reference/full-executor.mjs";
 import { prepareCoherentExecutor } from "../../src/suites/explicit-edit-multi-agent/reference/coherent-executor.mjs";
 import { prepareConcurrentExecutor } from "../../src/suites/explicit-edit-multi-agent/reference/concurrent-executor.mjs";
 
@@ -60,6 +60,12 @@ await test("clustered reference runtimes stage only editing dependencies and can
   try {
     const trusted = path.join(root, "trusted.json");
     await writeFile(trusted, "private future tasks and answers");
+    const runtime = path.join(root, "hosted-runtime");
+    await mkdir(runtime);
+    const node = path.join(runtime, "node");
+    const adjacent = path.join(runtime, "credentials.json");
+    await copyFile(process.execPath, node);
+    await writeFile(adjacent, "private runtime neighbor");
     for (const item of cases) {
       const tools = path.join(root, item.entry);
       const workspace = path.join(root, item.entry + "-workspace");
@@ -79,7 +85,7 @@ import { createInterface } from "node:readline";
 import { treeIdentity } from "../generation/generator.mjs";
 for await (const line of createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
-  for (const file of [request.trusted, "/executor/prepare.mjs", "/executor/tasks/coherent-tasks.mjs", "/executor/grading/coherent-grade.mjs", "/executor/generation/run.mjs", "/executor/fixtures", "/workspace/../trusted.json"])
+  for (const file of [request.trusted, request.adjacent, "/executor/prepare.mjs", "/executor/tasks/coherent-tasks.mjs", "/executor/grading/coherent-grade.mjs", "/executor/generation/run.mjs", "/executor/fixtures", "/workspace/../trusted.json"])
     await assert.rejects(readFile(file));
   await assert.rejects(writeFile("/executor/late-write", "forbidden"));
   await writeFile("/workspace/current.txt", request.id);
@@ -87,14 +93,30 @@ for await (const line of createInterface({ input: process.stdin })) {
 }
 `,
       );
-      const worker = fullExecutor(workspace, tools);
-      try {
-        await worker.deliver({ id: "first", trusted });
-        await worker.deliver({ id: "second", trusted });
-        assert.equal(await readFile(path.join(workspace, "current.txt"), "utf8"), "second");
-      } finally {
-        worker.close();
-      }
+      // Hosted Node lives outside /usr. Only its executable, not neighboring
+      // files or its installation directory, may enter the worker namespace.
+      await promisify(execFile)(
+        node,
+        [
+          "--input-type=module",
+          "-e",
+          `const { fullExecutor } = await import(process.argv[1]);
+const worker = fullExecutor(process.argv[2], process.argv[3]);
+try {
+  await worker.deliver({ id: "first", trusted: process.argv[4], adjacent: process.argv[5] });
+  await worker.deliver({ id: "second", trusted: process.argv[4], adjacent: process.argv[5] });
+} finally { worker.close(); }`,
+          pathToFileURL(
+            path.resolve("src/suites/explicit-edit-multi-agent/reference/full-executor.mjs"),
+          ).href,
+          workspace,
+          tools,
+          trusted,
+          adjacent,
+        ],
+        { timeout: 30_000 },
+      );
+      assert.equal(await readFile(path.join(workspace, "current.txt"), "utf8"), "second");
     }
   } finally {
     await rm(root, { recursive: true, force: true });
