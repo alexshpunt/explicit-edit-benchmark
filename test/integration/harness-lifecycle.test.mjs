@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdir, readFile, access, rm } from "node:fs/promises";
+import { copyFile, mkdir, readFile, access, rm } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { tempDirectory } from "../helpers/temp.mjs";
@@ -16,7 +16,11 @@ async function fixture(t, script, persistent) {
     await closeHarness(state);
     await rm(root, { recursive: true, force: true });
   });
-  const command = { command: process.execPath, args: ["-e", script] };
+  // A hosted Node installation can be outside /usr. Require the same explicit
+  // executable mount as a real custom adapter, without exposing its neighbors.
+  const node = path.join(root, "node");
+  await copyFile(process.execPath, node);
+  const command = { command: node, args: ["-e", script] };
   return {
     workspace,
     state,
@@ -26,9 +30,10 @@ async function fixture(t, script, persistent) {
           kind: "custom",
           command: "/usr/bin/true",
           args: [],
+          readOnly: [node],
           driver: { ...command, persistent: true },
         }
-      : { kind: "custom", ...command, promptStdin: true },
+      : { kind: "custom", ...command, readOnly: [node], promptStdin: true },
   };
 }
 
