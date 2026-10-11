@@ -248,18 +248,19 @@ export function providerFailureEligibility(observations, providerFailureTrials) 
 
 function configurationTaskCells(samples) {
   const tasks = new Map();
-  for (const sample of samples) {
-    const task = tasks.get(sample.taskId) ?? {
-      taskId: sample.taskId,
-      observations: 0,
-      firstPasses: 0,
-      finalPasses: 0,
-    };
-    task.observations += 1;
-    task.firstPasses += Number(sample.firstExactPassed);
-    task.finalPasses += Number(sample.finalExactPassed);
-    tasks.set(sample.taskId, task);
-  }
+  for (const sample of samples)
+    for (const taskId of sample.taskIds ?? [sample.taskId]) {
+      const task = tasks.get(taskId) ?? {
+        taskId,
+        observations: 0,
+        firstPasses: 0,
+        finalPasses: 0,
+      };
+      task.observations += 1;
+      task.firstPasses += Number(sample.firstExactPassed);
+      task.finalPasses += Number(sample.finalExactPassed);
+      tasks.set(taskId, task);
+    }
   return [...tasks.values()].map((task) => ({
     taskId: task.taskId,
     observations: task.observations,
@@ -403,10 +404,15 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
       timeouts: 0,
       duration: metricState(),
       providerFailure: false,
+      correctionAttempt: 0,
       cost: metricState(),
       tokens: metricState(),
     };
     stats.rounds += 1;
+    stats.correctionAttempt = Math.max(
+      stats.correctionAttempt,
+      round.barrierAttempt ?? round.round,
+    );
     stats.timeouts += Number(round.timedOut === true);
     stats.providerFailure ||= typeof round.providerFailure === "string";
     for (const [name, field] of [
@@ -451,21 +457,27 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
       concurrencies: new Set(),
       configurationHashes: new Set(),
       recoveryRounds: 0,
+      wallClockObservations: new Set(),
       timeouts: 0,
       infrastructureFailures: 0,
       duration: metricState(),
+      observedTrials: 0,
       providerFailureTrials: 0,
       cost: metricState(),
       tokens: metricState(),
     };
-    group.observations += 1;
-    group.firstExactPasses += Number(trial.firstExactPassed === true);
-    group.finalExactPasses += Number(trial.finalExactPassed === true);
-    const task = group.tasks.get(trial.taskId) ?? taskResult();
-    task.observations += 1;
-    task.firstExactPasses += Number(trial.firstExactPassed === true);
-    task.finalExactPasses += Number(trial.finalExactPassed === true);
-    group.tasks.set(trial.taskId, task);
+    const taskIds = trial.taskIds ?? [trial.taskId];
+    group.observations += taskIds.length;
+    group.firstExactPasses += taskIds.length * Number(trial.firstExactPassed === true);
+    group.finalExactPasses += taskIds.length * Number(trial.finalExactPassed === true);
+    const taskResults = taskIds.map((taskId) => {
+      const task = group.tasks.get(taskId) ?? taskResult();
+      task.observations += 1;
+      task.firstExactPasses += Number(trial.firstExactPassed === true);
+      task.finalExactPasses += Number(trial.finalExactPassed === true);
+      group.tasks.set(taskId, task);
+      return task;
+    });
     group.taskFamilies.add(family);
     group.runIds.add(trial.runId);
     group.sourceProfiles.add(profile.profileId);
@@ -475,30 +487,48 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
     if (identity.runnerVersion) group.runnerVersions.add(identity.runnerVersion);
     if (identity.concurrency != null) group.concurrencies.add(identity.concurrency);
     if (identity.configurationHash) group.configurationHashes.add(identity.configurationHash);
-    group.recoveryRounds += Math.max(0, trial.rounds - 1);
-    group.infrastructureFailures += Number(Boolean(trial.infrastructureFailure));
+    const stats = roundStats.get(`${trial.runId}::${trial.trialId}`);
+    group.recoveryRounds += trial.taskIds
+      ? (stats?.correctionAttempt ?? 0)
+      : Math.max(0, trial.rounds - 1);
+    if (!trial.taskIds)
+      group.infrastructureFailures += Number(
+        Boolean(trial.infrastructureFailure) && trial.infrastructureFailure !== "not-reached",
+      );
+    group.observedTrials += Number(!trial.taskIds || (stats?.rounds ?? 0) > 0);
+    const observation = run.suite?.observations.find(
+      (item) => item.profileId === profile.profileId,
+    );
+    const observationId = `${trial.runId}::${profile.profileId}`;
+    if (observation && !group.wallClockObservations.has(observationId)) {
+      group.wallClockObservations.add(observationId);
+      group.infrastructureFailures += Number(!["pass", "blocked"].includes(observation.status));
+      group.duration.total += observation.elapsedMs / 1000;
+      group.duration.observations += 1;
+    }
 
     // One honest per-trial record: it explains pass rates, spread and efficiency.
     const sample = {
       taskId: trial.taskId,
+      ...(trial.taskIds ? { taskIds } : {}),
       firstExactPassed: trial.firstExactPassed === true,
       finalExactPassed: trial.finalExactPassed === true,
       seconds: null,
       costUsd: null,
       tokens: null,
     };
-    const stats = roundStats.get(`${trial.runId}::${trial.trialId}`);
     if (stats && stats.rounds === trial.rounds) {
       group.timeouts += stats.timeouts;
       group.providerFailureTrials += Number(stats.providerFailure);
       for (const name of metricNames) {
+        if (name === "duration" && trial.taskIds) continue;
         if (stats[name].observations === stats.rounds) {
           group[name].total += stats[name].total;
           group[name].observations += 1;
           sample[SAMPLE_FIELDS[name]] = stats[name].total;
           if (name === "duration") {
-            task.duration.total += stats[name].total;
-            task.duration.observations += 1;
+            taskResults[0].duration.total += stats[name].total;
+            taskResults[0].duration.observations += 1;
           }
         }
       }
@@ -527,12 +557,15 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
       const qualityScore =
         firstExactRate == null || finalExactRate == null
           ? null
-          : 0.75 * firstExactRate + 0.25 * finalExactRate;
+          : group.wallClockObservations.size
+            ? finalExactRate
+            : 0.75 * firstExactRate + 0.25 * finalExactRate;
       const coverage = benchmarkTaskCount ? taskCount / benchmarkTaskCount : null;
-      const ranking = providerFailureEligibility(group.observations, group.providerFailureTrials);
+      const ranking = providerFailureEligibility(group.observedTrials, group.providerFailureTrials);
       return {
         ...group,
         tasks: undefined,
+        wallClockObservations: undefined,
         taskSetSha256: group.taskSetSha256s.size === 1 ? [...group.taskSetSha256s][0] : null,
         taskSetSha256s: [...group.taskSetSha256s].sort(),
         policy: group.policies.size === 1 ? [...group.policies][0] : null,
@@ -559,9 +592,10 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
         providerFailureTrials: ranking.providerFailureTrials,
         providerFailureRate: ranking.providerFailureRate,
         durationSummary: {
-          averageCase: metricAverage(group, "duration"),
-          coveredRun:
-            durationByTask.length === taskCount
+          averageCase: group.wallClockObservations.size ? null : metricAverage(group, "duration"),
+          coveredRun: group.wallClockObservations.size
+            ? metricAverage(group, "duration")
+            : durationByTask.length === taskCount
               ? durationByTask.reduce((total, value) => total + value, 0)
               : null,
           totalObserved: group.duration.observations ? group.duration.total : null,

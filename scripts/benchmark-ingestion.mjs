@@ -217,7 +217,23 @@ export async function ingestSubmission(storeDirectory, account, rawSubmission) {
       throw Error("task-set definition contradicts manifest");
     const trials = parseRows(submission.bundle.tables["trials.jsonl"]);
     const taskIds = new Set(submission.definitions.taskSet.taskIds);
-    if (trials.some((trial) => !taskIds.has(trial.taskId)))
+    if (manifest.schemaVersion === 3) {
+      if (
+        submission.definitions.benchmark.id !== manifest.suite.id ||
+        submission.definitions.benchmark.hash !== manifest.taskSetSha256
+      )
+        throw Error("Team benchmark definition contradicts normalized workload");
+      const scheduled = manifest.suite.schedule
+        .flatMap((barrier) => barrier.assignments.map((item) => item.task))
+        .sort();
+      if (JSON.stringify([...taskIds].sort()) !== JSON.stringify(scheduled))
+        throw Error("Team task-set definition contradicts full workload");
+    }
+    if (
+      trials.some((trial) =>
+        (trial.taskIds ?? [trial.taskId]).some((taskId) => !taskIds.has(taskId)),
+      )
+    )
       throw Error("trial references a task outside the declared task set");
     const profiles = parseRows(submission.bundle.tables["profiles.jsonl"]);
     assertDeclaredHarnessVersions(submission.definitions.harnesses, profiles);

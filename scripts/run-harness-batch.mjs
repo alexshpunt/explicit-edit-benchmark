@@ -20,11 +20,12 @@ import { retryBudget, nextRetry, retrySummary } from "./retry-failures.mjs";
 import { selectedTasks } from "./focused-selection.mjs";
 import { loadBenchmarkProfiles } from "./benchmark-config.mjs";
 import { assertConfigurationMetadata } from "./normalized-run.mjs";
+import { DEFAULT_BENCHMARK_SUITE, suiteRunOptions } from "./benchmark-suites.mjs";
 
 const args = process.argv.slice(2);
 if (args.includes("--help")) {
   console.log(
-    "Usage: npm run bench:run -- --config FILE [--harnesses LIST] [--task ID | --task-manifest FILE] [--smoke] [--oracle-recoveries N | --retry-failures N] [--concurrency N] [--timeout-seconds N] [--results DIR] [--run-id ID]. Model and thinking are explicit in the adapter config.",
+    "Usage: npm run benchmark -- raw-run --config FILE [--suite explicit-edit|explicit-edit-multi-agent] [--preparation MULTI_AGENT_PREPARATION] [--harnesses LIST] [--task ID | --task-manifest FILE] [--smoke] [--oracle-recoveries N | --retry-failures N] [--concurrency N] [--timeout-seconds N] [--results DIR] [--run-id ID]. Model and thinking are explicit in the adapter config.",
   );
   process.exit(0);
 }
@@ -32,8 +33,23 @@ const option = (name, fallback) => {
   const i = args.indexOf("--" + name);
   return i < 0 ? fallback : args[i + 1];
 };
+const selectedSuite = option("suite", DEFAULT_BENCHMARK_SUITE);
+const scheduling = suiteRunOptions(selectedSuite, {
+  concurrency: option("concurrency", selectedSuite === DEFAULT_BENCHMARK_SUITE ? "4" : undefined),
+  task: option("task"),
+});
+const multiAgent = scheduling.suite !== DEFAULT_BENCHMARK_SUITE;
+if (
+  multiAgent &&
+  (args.includes("--smoke") || option("task-manifest") || option("timeout-seconds"))
+)
+  throw Error(
+    "Multi-Agent requires the full untimed workload; smoke and partial selection use the original suite",
+  );
 const retryFailures = retryBudget(option("retry-failures", "0"));
-const oracleRecoveries = retryBudget(option("oracle-recoveries", "0"));
+const oracleRecoveries = retryBudget(option("oracle-recoveries", multiAgent ? "3" : "0"));
+if (multiAgent && (retryFailures !== 0 || oracleRecoveries !== 3))
+  throw Error("Multi-Agent uses three retained-state corrections and no fresh retries");
 if (oracleRecoveries && retryFailures)
   throw Error("Choose fresh retries or oracle recovery, not both");
 const configFile = option("config");
@@ -41,12 +57,12 @@ if (!configFile) throw Error("--config is required");
 const configSource = await readFile(configFile, "utf8");
 const config = { harnesses: await loadBenchmarkProfiles(configFile) };
 const names = option("harnesses", Object.keys(config.harnesses).join(",")).split(",");
-const concurrency = Number(option("concurrency", "4"));
-const timeoutMs = Number(option("timeout-seconds", "120")) * 1000;
+const concurrency = Number(scheduling.concurrency);
+const timeoutMs = multiAgent ? null : Number(option("timeout-seconds", "120")) * 1000;
 if (
   !Number.isInteger(concurrency) ||
   concurrency < 1 ||
-  !(timeoutMs > 0 && Number.isFinite(timeoutMs))
+  (!multiAgent && !(timeoutMs > 0 && Number.isFinite(timeoutMs)))
 )
   throw Error("Invalid concurrency or timeout");
 if (
@@ -71,10 +87,12 @@ if (option("task") && option("task-manifest"))
 const selectionText = option("task-manifest")
   ? await readFile(option("task-manifest"), "utf8")
   : null;
-const tasks = selectionText
-  ? selectedTasks(explicitEditTasks(), JSON.parse(selectionText))
-  : explicitEditTasks().filter((t) => !option("task") || t.id === option("task"));
-if (!tasks.length) throw Error("No tasks selected");
+const tasks = multiAgent
+  ? []
+  : selectionText
+    ? selectedTasks(explicitEditTasks(), JSON.parse(selectionText))
+    : explicitEditTasks().filter((t) => !option("task") || t.id === option("task"));
+if (!multiAgent && !tasks.length) throw Error("No tasks selected");
 if (smoke && !option("task")) throw Error("Smoke requires one --task");
 const root = path.resolve(
   option("results", "results"),
@@ -144,6 +162,28 @@ const safeAdapters = Object.fromEntries(
 );
 for (const name of names) assertRecordedIdentity(name, config.harnesses[name], safeAdapters[name]);
 
+if (multiAgent) {
+  const { runMultiAgentBatch } = await import("./run-multi-agent-batch.mjs");
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  process.once("SIGINT", cancel);
+  process.once("SIGTERM", cancel);
+  try {
+    const summary = await runMultiAgentBatch({
+      root,
+      preparation: option("preparation"),
+      profiles: Object.fromEntries(names.map((name) => [name, config.harnesses[name]])),
+      safeAdapters,
+      configSha256: createHash("sha256").update(configSource).digest("hex"),
+      signal: controller.signal,
+    });
+    process.exitCode = summary.results.some((result) => result.status === "cancelled") ? 130 : 0;
+  } finally {
+    process.removeListener("SIGINT", cancel);
+    process.removeListener("SIGTERM", cancel);
+  }
+  process.exit();
+}
 const schedule = tasks.flatMap((t, i) =>
   (i % 2 ? [...names].reverse() : names).map((n) => ({
     taskId: t.id,

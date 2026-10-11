@@ -1,0 +1,31 @@
+---
+# yamllint disable rule:line-length
+name: Resubmit existing official result
+
+"on":
+  workflow_dispatch:
+    inputs:
+      producer_run_id:
+        description: Original Run official benchmark workflow run id
+        required: true
+        type: string
+      producer_attempt:
+        description: Original workflow attempt
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  submit:
+    uses: alexshpunt/explicit-edit-benchmark/.github/workflows/official-submit.yml@640c173ae64e220b768273d6930675f6e0a22c8c
+    with:
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
+      signer_sha: ba82ac048ca50491b1d074a0e42481d4605c9a8f
+      dataset_repository: alexshpunt/explicit-edit-benchmark
+    secrets:
+      hf_token: ${{ secrets.HF_TOKEN }}

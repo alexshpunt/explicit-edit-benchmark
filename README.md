@@ -93,6 +93,29 @@ Thank you to everyone who shares benchmark observations. Your work makes this pu
 
 <!-- benchmark-community:end -->
 
+## Multi-Agent suite
+
+[**Explicit Edit — Multi-Agent**](docs/multi-agent.md) measures concurrent editing
+of one large shared project: 71 restoration goals and a fixed 15-agent team.
+It uses the common CLI, harness configuration, normalized statistics and submission
+path, but has its own ranking: Score is jointly accepted tasks / 71.
+
+```sh
+npm run benchmark -- run --local --suite explicit-edit-multi-agent \
+  --harness pi-default --model PROVIDER/MODEL --thinking high
+```
+
+This command calls the model and submits a result. Read the [run guide](docs/multi-agent.md)
+first for compiler requirements, costs, model-free preparation and the pending
+official release gate. See the [result contract](docs/multi-agent-results.md) and
+[historical calibration observations](docs/multi-agent-calibration.md).
+
+## Project and personal skills
+
+Public skills for working on this repository live in `.agents/skills/`.
+The whole `.pi/` directory is ignored: it holds personal skills, settings and
+runtime data. Do not force-add its files to Git.
+
 ## What you need
 
 - Linux or WSL2

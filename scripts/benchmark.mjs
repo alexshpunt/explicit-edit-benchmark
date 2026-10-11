@@ -168,9 +168,13 @@ async function accept(args) {
 }
 
 const [command, ...args] = process.argv.slice(2);
-if (!command || ["-h", "--help", "help"].includes(command)) {
+if (
+  !command ||
+  ["-h", "--help", "help"].includes(command) ||
+  (command === "run" && args.some((argument) => ["-h", "--help"].includes(argument)))
+) {
   console.log(
-    `Usage: npm run benchmark -- COMMAND\n\nCommands:\n  init [--output FILE]\n  check --config FILE\n  run (--official | --local) --harness ID --model ID [OPTIONS]\n  raw-run RUNNER_OPTIONS...\n  export RUN_DIRECTORY [--output DIRECTORY]\n  inspect NORMALIZED_DIRECTORY\n  report NORMALIZED_DIRECTORY [--output DIRECTORY]\n  dataset --output DIRECTORY NORMALIZED_DIRECTORY [...]\n  submit NORMALIZED_DIRECTORY --repository OWNER/DATASET --metadata FILE\n  accept --repository OWNER/DATASET --candidate PR_NUMBER [--workspace DIRECTORY] [--dry-run]`,
+    `Usage: npm run benchmark -- COMMAND\n\nCommands:\n  init [--output FILE]\n  check --config FILE\n  run (--official | --local) [--suite ID] (--harness ID --model ID | --config FILE) [OPTIONS]\n  raw-run RUNNER_OPTIONS...\n  export RUN_DIRECTORY [--output DIRECTORY]\n  inspect NORMALIZED_DIRECTORY\n  report NORMALIZED_DIRECTORY [--output DIRECTORY]\n  dataset --output DIRECTORY NORMALIZED_DIRECTORY [...]\n  submit NORMALIZED_DIRECTORY --repository OWNER/DATASET --metadata FILE\n  accept --repository OWNER/DATASET --candidate PR_NUMBER [--workspace DIRECTORY] [--dry-run]`,
   );
 } else if (command === "init") await init(args);
 else if (command === "check") await check(args);

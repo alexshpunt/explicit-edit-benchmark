@@ -4,6 +4,8 @@ import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+import { validateTeamSuite, validateTeamTables } from "./normalized-team-protocol.mjs";
+
 const TABLES = {
   "profiles.jsonl": ["profiles", "profileId"],
   "configurations.jsonl": ["configurations", "configurationHash"],
@@ -183,7 +185,27 @@ function parseJsonLines(content, name, schemaVersion) {
         schemaVersion >= 2 && name === "rounds.jsonl"
           ? [...SCHEMA_FIELDS[name], "providerFailure"]
           : SCHEMA_FIELDS[name];
-      exactKeys(row, fields, label);
+      const teamFields =
+        schemaVersion === 3
+          ? name === "trials.jsonl"
+            ? ["taskIds"]
+            : name === "rounds.jsonl"
+              ? ["agent", "barrierAttempt", "taskIds"]
+              : []
+          : [];
+      exactKeys(row, [...fields, ...teamFields], label);
+      if (teamFields.length) {
+        if (
+          !Array.isArray(row.taskIds) ||
+          !row.taskIds.length ||
+          row.taskIds.some((task) => typeof task !== "string")
+        )
+          throw Error(`${label}: invalid taskIds`);
+        if (name === "rounds.jsonl") {
+          integer(row, "agent", label);
+          integer(row, "barrierAttempt", label);
+        }
+      }
       return row;
     });
 }
@@ -391,11 +413,12 @@ function validateManifest(manifest) {
   if (Object.hasOwn(manifest, "sourceRuns")) manifestFields.push("sourceRuns");
   // Recorded from the first bundle that carried it; older archives predate it.
   if (Object.hasOwn(manifest, "verifierSha256")) manifestFields.push("verifierSha256");
+  if (manifest.schemaVersion === 3) manifestFields.push("suite");
   exactKeys(manifest, manifestFields, "manifest");
   if (typeof manifest.runId !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(manifest.runId))
     throw Error(`Invalid runId: ${manifest.runId}`);
-  if (![1, 2].includes(manifest.schemaVersion))
-    throw Error(`Unsupported schemaVersion: ${manifest.schemaVersion}; expected 1 or 2`);
+  if (![1, 2, 3].includes(manifest.schemaVersion))
+    throw Error(`Unsupported schemaVersion: ${manifest.schemaVersion}; expected 1, 2 or 3`);
   if (manifest.sourceRuns !== undefined) {
     if (!Array.isArray(manifest.sourceRuns) || !manifest.sourceRuns.length)
       throw Error("manifest.sourceRuns: invalid value");
@@ -416,8 +439,13 @@ function validateManifest(manifest) {
     ["oracleRecoveries", "retryFailures", "concurrency", "timeoutMs"],
     "manifest.policy",
   );
-  for (const key of ["oracleRecoveries", "retryFailures", "concurrency", "timeoutMs"])
-    integer(manifest.policy, key, "manifest.policy");
+  if (manifest.schemaVersion === 3) {
+    validateTeamSuite(manifest.suite, manifest.contract, manifest.policy);
+    if (manifest.taskSetSha256 !== manifest.suite.workloadSha256)
+      throw Error("Team task set digest contradicts workload");
+  } else
+    for (const key of ["oracleRecoveries", "retryFailures", "concurrency", "timeoutMs"])
+      integer(manifest.policy, key, "manifest.policy");
   exactKeys(
     manifest.counts,
     ["profiles", "configurations", "trials", "rounds", "toolCalls"],
@@ -507,6 +535,14 @@ export async function validateNormalizedRun(directory) {
     if ((trial.infrastructureFailure === null) !== trialRounds.length > 0)
       throw Error(`${trial.trialId}: infrastructure status contradicts rounds`);
   }
+
+  if (manifest.schemaVersion === 3)
+    validateTeamTables(
+      manifest.suite,
+      rows["profiles.jsonl"],
+      rows["trials.jsonl"],
+      rows["rounds.jsonl"],
+    );
 
   const callsByRound = new Map([...roundIds].map((roundId) => [roundId, []]));
   for (const call of rows["tool-calls.jsonl"]) {

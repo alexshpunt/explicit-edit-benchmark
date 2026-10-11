@@ -5,12 +5,19 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { loadBenchmarkProfiles } from "./benchmark-config.mjs";
+import { DEFAULT_BENCHMARK_SUITE, suiteRunOptions } from "./benchmark-suites.mjs";
 import {
   explicitEditBenchmarkId,
   explicitEditContract,
   explicitEditRunner,
   explicitEditVersion,
 } from "../src/suites/explicit-edit/version.ts";
+
+import {
+  MULTI_AGENT_BENCHMARK,
+  MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_VERSION,
+} from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const benchmark = path.join(root, "scripts", "benchmark.mjs");
@@ -32,16 +39,25 @@ const PRESET_FLAGS = [
   "--runtime",
 ];
 const REPEATABLE_FLAGS = new Set(["--runtime"]);
-const OPTIONS = new Set(["--concurrency", "--timeout-seconds", "--config", ...PRESET_FLAGS]);
+const OPTIONS = new Set([
+  "--suite",
+  "--concurrency",
+  "--timeout-seconds",
+  "--config",
+  ...PRESET_FLAGS,
+]);
 
 export const usage = `Usage:
-  npm run benchmark:submit -- --harness NAME --model MODEL --thinking LEVEL [--concurrency N] [--timeout-seconds N]
-  npm run benchmark:submit -- --config FILE [--concurrency N] [--timeout-seconds N]
+  npm run benchmark:submit -- --harness NAME --model MODEL --thinking LEVEL [--suite SUITE] [--concurrency N] [--timeout-seconds N]
+  npm run benchmark:submit -- --config FILE [--suite SUITE] [--concurrency N] [--timeout-seconds N]
 
 Ready adapters: pi-default, baseline-agent, pi-agent-ide, codex-cli-default, opencode-default, oh-my-pi-default, github-copilot-cli-default, dsh-standard, dsh-code.
 
 Run policy:
-  --concurrency N       parallel trials, default 10
+  --suite SUITE         explicit-edit (default) or explicit-edit-multi-agent
+                       Multi-Agent always uses all 71 tasks, 15 agents, three retained-state
+                       corrections and no deadline. No partial, smaller-team or fresh retry run.
+  --concurrency N       original-suite parallel trials, default 10
   --timeout-seconds N   per-attempt limit, default 120. A harness that starts a server or a
                         workspace of its own needs more, for example 900.
 
@@ -68,13 +84,20 @@ export function submitOptions(args) {
     values.set(flag, [...(values.get(flag) ?? []), value]);
   }
   const single = (flag) => values.get(flag)?.[0];
-  const concurrency = Number(single("--concurrency") ?? 10);
-  if (!Number.isInteger(concurrency) || concurrency < 1)
-    throw Error("concurrency must be a positive integer");
-  const timeoutSeconds = Number(single("--timeout-seconds") ?? 120);
-  if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0)
+  const scheduling = suiteRunOptions(single("--suite"), { concurrency: single("--concurrency") });
+  const multiAgent = scheduling.suite !== DEFAULT_BENCHMARK_SUITE;
+  const concurrency = Number(scheduling.concurrency);
+  if (multiAgent && values.has("--timeout-seconds"))
+    throw Error("Multi-Agent runs have no delivery deadline");
+  const timeoutSeconds = multiAgent ? null : Number(single("--timeout-seconds") ?? 120);
+  if (!multiAgent && (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0))
     throw Error("timeout-seconds must be a positive integer");
-  const policy = { concurrency, oracleRecoveries: 5, timeoutSeconds };
+  const policy = {
+    concurrency,
+    oracleRecoveries: multiAgent ? 3 : 5,
+    timeoutSeconds,
+    ...(multiAgent ? { suite: scheduling.suite } : {}),
+  };
   const config = single("--config");
   if (config) {
     const conflicting = PRESET_FLAGS.filter((flag) => values.has(flag));
@@ -87,7 +110,7 @@ export function submitOptions(args) {
     ...policy,
     config: null,
     prepareArgs: [...values]
-      .filter(([flag]) => flag !== "--concurrency")
+      .filter(([flag]) => !["--concurrency", "--suite"].includes(flag))
       .flatMap(([flag, list]) => list.flatMap((value) => [flag, value])),
   };
 }
@@ -167,21 +190,23 @@ export async function submissionMetadata(normalized, runId) {
   const manifest = JSON.parse(await readFile(path.join(normalized, "manifest.json"), "utf8"));
   const profiles = lines(await readFile(path.join(normalized, "profiles.jsonl"), "utf8"));
   const trials = lines(await readFile(path.join(normalized, "trials.jsonl"), "utf8"));
+  if (manifest.suite && manifest.suite.id !== MULTI_AGENT_BENCHMARK)
+    throw Error("Unsupported benchmark suite");
   return {
     clientRunId: runId,
     purpose: "exploratory",
     definitions: {
       runner: { ...explicitEditRunner, version: explicitEditVersion },
       benchmark: {
-        id: explicitEditBenchmarkId,
-        version: explicitEditVersion,
-        contract: explicitEditContract,
+        id: manifest.suite?.id ?? explicitEditBenchmarkId,
+        version: manifest.suite ? MULTI_AGENT_VERSION : explicitEditVersion,
+        contract: manifest.suite ? MULTI_AGENT_PROTOCOL : explicitEditContract,
         kind: "official",
         hash: manifest.taskSetSha256,
       },
       taskSet: {
         hash: manifest.taskSetSha256,
-        taskIds: [...new Set(trials.map((trial) => trial.taskId))].sort(),
+        taskIds: [...new Set(trials.flatMap((trial) => trial.taskIds ?? [trial.taskId]))].sort(),
       },
       harnesses: declaredHarnesses(profiles),
     },
@@ -212,7 +237,7 @@ async function main(args) {
     await run("hf", ["auth", "whoami"]);
     await benchmarkCommand(["check", "--config", config]);
 
-    const runId = `explicit-edit-${new Date().toISOString().replaceAll(":", "-")}`;
+    const runId = `${options.suite ?? DEFAULT_BENCHMARK_SUITE}-${new Date().toISOString().replaceAll(":", "-")}`;
     const smokeRunId = `${runId}-smoke`;
     console.log("Running an automatic smoke task for every selected profile…");
     await benchmarkCommand([
@@ -225,7 +250,7 @@ async function main(args) {
       "--concurrency",
       String(options.concurrency),
       "--timeout-seconds",
-      String(options.timeoutSeconds),
+      String(options.timeoutSeconds ?? 180),
       "--run-id",
       smokeRunId,
     ]);
@@ -250,8 +275,10 @@ async function main(args) {
         String(options.oracleRecoveries),
         "--concurrency",
         String(options.concurrency),
-        "--timeout-seconds",
-        String(options.timeoutSeconds),
+        ...(options.suite ? ["--suite", options.suite] : []),
+        ...(options.timeoutSeconds === null
+          ? []
+          : ["--timeout-seconds", String(options.timeoutSeconds)]),
         "--run-id",
         runId,
       ],

@@ -207,6 +207,7 @@ export async function verifyOfficialCandidate({
     attestation,
     signerSha,
     repository: transport.producer.repository,
+    policyFile,
   });
   await extractOfficialArchive(artifact, extractedDirectory);
   const validated = await validateOfficialManifest(
