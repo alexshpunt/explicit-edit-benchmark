@@ -4,7 +4,7 @@
 
 <h1 align="center">Explicit Edit Benchmark: Multi-Agent</h1>
 
-<p align="center">Precise, concurrent editing in a large shared project.</p>
+<p align="center">One file. 22,743 lines. A team of 15 agents editing the same project concurrently.</p>
 
 <p align="center">
   <a href="https://github.com/alexshpunt/explicit-edit-benchmark/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/alexshpunt/explicit-edit-benchmark/ci.yml?branch=main&label=CI%2FCD" alt="Explicit Edit Multi-Agent Benchmark: CI/CD status"></a>
@@ -24,8 +24,6 @@
   <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?filter.benchmark=explicit-edit-multi-agent"><img src="https://img.shields.io/badge/harnesses-0-blue" alt="explicit-edit-multi-agent: 0 harnesses"></a>
 </p>
 <!-- benchmark-badges:explicit-edit-multi-agent:end -->
-
-**One file. 22,743 lines. A team of 15 agents editing the same project concurrently.**
 
 Multi Edit ([Explicit Edit — Multi-Agent](docs/multi-agent.md),
 `explicit-edit-multi-agent`) tests whether agents can make precise, atomic edits
