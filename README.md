@@ -2,7 +2,7 @@
   <img src="assets/logo-multi-agent.png" alt="Explicit Edit — Multi-Agent" width="560">
 </p>
 
-<h1 align="center">Explicit Edit Multi-Agent Benchmark</h1>
+<h1 align="center">Explicit Edit Benchmark: Multi-Agent</h1>
 
 <p align="center">Precise, concurrent editing in a large shared project.</p>
 
@@ -59,7 +59,7 @@ CPU-heavy; read the [run guide](docs/multi-agent.md) before starting.
   <img src="assets/logo.png" alt="Explicit Edit 1.0" width="560">
 </p>
 
-<h1 align="center">Explicit Edit Benchmark 1.0</h1>
+<h1 align="center">Explicit Edit Benchmark</h1>
 
 <p align="center">Exact text changes across 226 deterministic editing tasks.</p>
 
