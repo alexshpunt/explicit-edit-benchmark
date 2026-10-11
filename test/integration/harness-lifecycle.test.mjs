@@ -37,6 +37,14 @@ async function fixture(t, script, persistent) {
   };
 }
 
+function seedPrivateState(context) {
+  context.adapter.stateFiles = {
+    "codex/auth.json": '{"access_token":"synthetic-private-token"}',
+    "data/opencode/auth.json": '{"key":"synthetic-private-token"}',
+    "omp/agent.db": "synthetic-private-database",
+    "copilot/config.json": '{"token":"synthetic-private-token"}',
+  };
+}
 async function waitForStarted(workspace) {
   for (let attempt = 0; attempt < 200; attempt++) {
     try {
@@ -235,6 +243,7 @@ function start() {
           ? 'require("node:readline").createInterface({input:process.stdin}).on("line", start);'
           : 'process.stdin.resume(); process.stdin.on("end", start);');
       const context = await fixture(t, script, persistent);
+      seedPrivateState(context);
       context.adapter.inspectOutput = (file) => inspectHarnessOutput("pi-default", file);
       const artifacts = context.artifact("participant");
       const participant = harnessParticipant(context.adapter, {
@@ -262,6 +271,10 @@ function start() {
       await waitForStarted(context.workspace);
       controller.abort();
       await rejected;
+      await participant.close();
+      await participant.close();
+      assert.equal(participant.closed, true);
+      await assert.rejects(access(context.state), { code: "ENOENT" });
       const directory = path.join(artifacts, "round-001-attempt-1");
       const receipt = JSON.parse(await readFile(path.join(directory, "execution.json"), "utf8"));
       assert.equal(receipt.totalTokens, 14);
@@ -276,6 +289,113 @@ function start() {
   );
 }
 
+for (const persistent of [false, true]) {
+  await test(
+    `closing a successful ${persistent ? "persistent" : "one-shot"} participant removes private state after process closure and keeps evidence`,
+    { timeout: 5000 },
+    async (t) => {
+      const start = `
+const fs = require("node:fs");
+function markClosed() {
+  fs.readFileSync("/state/codex/auth.json");
+  fs.writeFileSync("/workspace/closed", "yes");
+}
+function start() {
+  fs.writeFileSync("/state/session-summary.json", '{"completed":true}');
+  console.log(JSON.stringify({type:"message_end", message:{role:"assistant", usage:{input:8, output:2, cacheRead:4, cacheWrite:0, totalTokens:14, cost:{total:0.25}}}}));
+  ${persistent ? 'console.log(JSON.stringify({type:"eval/turn-complete", reason:{kind:"completed"}}));' : "markClosed();"}
+}`;
+      const script =
+        start +
+        (persistent
+          ? 'require("node:readline").createInterface({input:process.stdin}).on("line", start); process.stdin.on("end", markClosed);'
+          : 'process.stdin.resume(); process.stdin.on("end", start);');
+      const context = await fixture(t, script, persistent);
+      seedPrivateState(context);
+      context.adapter.stateArtifacts = { "session-summary.json": "session-summary.json" };
+      context.adapter.inspectOutput = (file) => inspectHarnessOutput("pi-default", file);
+      const artifacts = context.artifact("participant");
+      const participant = harnessParticipant(context.adapter, {
+        workspace: context.workspace,
+        state: context.state,
+        artifacts,
+      });
+      t.after(() => participant.close());
+      const receipt = await participant.execute("start", { round: "round-001", attempt: 1 });
+      assert.equal(receipt.exitCode, 0);
+      await access(path.join(context.state, "codex/auth.json"));
+      await Promise.all([participant.close(), participant.close()]);
+      await participant.close();
+      assert.equal(participant.closed, true);
+      assert.equal(await readFile(path.join(context.workspace, "closed"), "utf8"), "yes");
+      await assert.rejects(access(context.state), { code: "ENOENT" });
+      const directory = path.join(artifacts, "round-001-attempt-1");
+      assert.deepEqual(
+        JSON.parse(await readFile(path.join(directory, "execution.json"), "utf8")),
+        receipt,
+      );
+      assert.deepEqual(
+        JSON.parse(await readFile(path.join(directory, "session-summary.json"), "utf8")),
+        { completed: true },
+      );
+      await assert.rejects(
+        participant.execute("again", { round: "round-002", attempt: 1 }),
+        /closed/,
+      );
+    },
+  );
+  await test(
+    `a zero-exit native failed turn rejects a ${persistent ? "persistent" : "one-shot"} participant and keeps its receipt`,
+    { timeout: 5000 },
+    async (t) => {
+      const start = `
+function start() {
+  console.log(JSON.stringify({type:"item.completed", item:{type:"command_execution", status:"completed", exit_code:0, command:"private-command-marker"}}));
+  console.log(JSON.stringify({type:"turn.completed", usage:{input_tokens:12, cached_input_tokens:4, cache_write_input_tokens:0, output_tokens:2}}));
+  console.log(JSON.stringify({type:"turn.failed", error:{message:"private-native-error-marker"}}));
+  ${persistent ? 'console.log(JSON.stringify({type:"eval/turn-complete", reason:{kind:"completed"}}));' : ""}
+}`;
+      const script =
+        start +
+        (persistent
+          ? 'require("node:readline").createInterface({input:process.stdin}).on("line", start);'
+          : 'process.stdin.resume(); process.stdin.on("end", start);');
+      const context = await fixture(t, script, persistent);
+      seedPrivateState(context);
+      context.adapter.inspectOutput = (file) => inspectHarnessOutput("codex-cli-default", file);
+      const artifacts = context.artifact("participant");
+      const participant = harnessParticipant(context.adapter, {
+        workspace: context.workspace,
+        state: context.state,
+        artifacts,
+      });
+      t.after(() => participant.close());
+      await assert.rejects(
+        participant.execute("start", { round: "round-001", attempt: 1 }),
+        (error) => {
+          assert.equal(error.category, "driver_exit");
+          assert.equal(error.receipt.exitCode, 0);
+          assert.equal(error.receipt.eventErrors, 1);
+          assert.equal(error.receipt.providerFailure, null);
+          assert.equal(error.receipt.totalTokens, 14);
+          assert.equal(error.receipt.toolCalls, 1);
+          return true;
+        },
+      );
+      await participant.close();
+      await assert.rejects(access(context.state), { code: "ENOENT" });
+      const directory = path.join(artifacts, "round-001-attempt-1");
+      const receipt = JSON.parse(await readFile(path.join(directory, "execution.json"), "utf8"));
+      assert.equal(receipt.eventErrors, 1);
+      assert.equal(receipt.totalTokens, 14);
+      assert.ok(!JSON.stringify(receipt).includes("private-native-error-marker"));
+      assert.equal(
+        JSON.parse(await readFile(path.join(directory, "tool-calls.json"), "utf8")).length,
+        1,
+      );
+    },
+  );
+}
 await test(
   "participants sharing an abort signal keep distinct native receipts",
   { timeout: 5000 },
