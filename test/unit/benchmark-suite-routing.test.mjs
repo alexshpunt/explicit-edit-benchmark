@@ -27,6 +27,7 @@ test("official scope validation refuses unapproved teams before credentials or m
   const policy = JSON.parse(
     await readFile(new URL("../../policies/official-runs/v1.json", import.meta.url), "utf8"),
   );
+  delete policy.suites; // Exercise the pre-approval policy, independent of current releases.
   const runnerSha = policy.workflows[0].sha;
   const original = await officialSuiteRunOptions(policy, "explicit-edit", { runnerSha });
   assert.equal(original.concurrency, "10");

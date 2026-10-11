@@ -172,6 +172,11 @@
       "sha": "aa41466d325d9f2fee4e3a2a41b62071b23e00d5",
       "runnerSha": "aa41466d325d9f2fee4e3a2a41b62071b23e00d5",
       "status": "active"
+    },
+    {
+      "sha": "36f42b57c68566590ae115783610656a4d1fc208",
+      "runnerSha": "36f42b57c68566590ae115783610656a4d1fc208",
+      "status": "active"
     }
   ],
   "benchmark": {
@@ -1091,6 +1096,310 @@
         "fixtureSha256": "bf364946459ea55bf154e874def5bd671e581212d4bf2fbb84ac118bbf59f682"
       }
     ]
+  },
+  "suites": {
+    "explicit-edit-multi-agent": {
+      "runner": {
+        "contract": "shared-project-rotating-v1",
+        "taskSetSha256": "4d4800f093714623acd47b0fa2b2deb02d127538bfd0300b0959c90affafda5e",
+        "verifierSha256": "1add6c42c7fa350286922e9dcc589f0c3abbb47778d676a43ae130d503249140",
+        "tasks": [
+          {
+            "id": "task-001",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-002",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-003",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-004",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-005",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-006",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-007",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-008",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-009",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-010",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-011",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-012",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-013",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-014",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-015",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-016",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-017",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-018",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-019",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-020",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-021",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-022",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-023",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-024",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-025",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-026",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-027",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-028",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-029",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-030",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-031",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-032",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-033",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-034",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-035",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-036",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-037",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-038",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-039",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-040",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-041",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-042",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-043",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-044",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-045",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-046",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-047",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-048",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-049",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-050",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-051",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-052",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-053",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-054",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-055",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-056",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-057",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-058",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-059",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-060",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-061",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-062",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-063",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-064",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-065",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-066",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-067",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-068",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-069",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-070",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          },
+          {
+            "id": "task-071",
+            "fixtureSha256": "408742ced7deed6dbe5ff46168af6d525f18f3145b2a221fc85bf29a5dda1938"
+          }
+        ]
+      },
+      "graphSha256": "11c6e786501249535b11797ff237e0cc9d81f17ef8abb7593041ac10eefa81ce",
+      "scheduleSha256": "dd53701bf41352e15a4a0daefe4910b9f1d2804c09229cd285c6c646c4a3b87e",
+      "runPolicy": {
+        "partialRuns": true,
+        "oracleRecoveries": 3,
+        "retryFailures": 0,
+        "concurrency": 15,
+        "timeoutMs": null
+      }
+    }
   },
   "normalizedSchemas": [1, 2],
   "runPolicy": {

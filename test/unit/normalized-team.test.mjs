@@ -293,6 +293,7 @@ await test("the common exporter and validator carry a team bundle without duplic
   const policy = JSON.parse(
     await readFile(new URL("../../policies/official-runs/v1.json", import.meta.url), "utf8"),
   );
+  delete policy.suites; // This scenario starts before the team suite is approved.
   const signing = {
     signerSha: policy.workflows[0].sha,
     runnerSha: policy.workflows[0].runnerSha,
