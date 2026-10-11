@@ -14,8 +14,9 @@ import { verifierSha256 } from "./verifier-identity.mjs";
 /** Identify the trusted suite implementation using portable source-relative names.
  * No private configuration or generated run output is part of the verifier identity.
  */
-export async function suiteVerifier() {
-  const root = new URL("../src/suites/explicit-edit-multi-agent/", import.meta.url);
+export async function suiteVerifier(
+  root = new URL("../src/suites/explicit-edit-multi-agent/", import.meta.url),
+) {
   const sources = [];
   async function visit(directory, relative = "") {
     for (const item of (await readdir(directory, { withFileTypes: true })).sort((a, b) =>

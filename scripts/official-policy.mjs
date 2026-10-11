@@ -78,7 +78,11 @@ function exactKeys(value, keys, label) {
 /** Load and strictly validate a repository-owned official-run release policy. */
 export async function loadOfficialPolicy(file) {
   const source = typeof file === "string" ? path.resolve(file) : file;
-  const policy = JSON.parse(await readFile(source, "utf8"));
+  return validateOfficialPolicy(JSON.parse(await readFile(source, "utf8")));
+}
+
+/** Validate a proposed maintainer policy before changing any release checkout. */
+export function validateOfficialPolicy(policy) {
   exactKeys(
     policy,
     [

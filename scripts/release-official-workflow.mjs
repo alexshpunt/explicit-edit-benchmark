@@ -4,6 +4,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { approvedTeamRelease } from "./official-team-release.mjs";
+import { validateOfficialPolicy } from "./official-policy.mjs";
 
 const SHA = /^[0-9a-f]{40}$/u;
 const WORKFLOW = ".github/workflows/official-run.yml";
@@ -67,6 +69,61 @@ export function pinCallerTemplate(text, workflowSha, policySha) {
   return complete;
 }
 
+/** Upgrade the supported caller layout and bind both suites to one release.
+ * Unknown layouts refuse instead of producing a partly configured workflow.
+ */
+export function prepareCallerTemplate(text, workflowSha, policySha) {
+  let updated = pinCallerTemplate(text, workflowSha, policySha);
+  const input = `      suite:
+        description: Benchmark suite
+        required: true
+        default: explicit-edit
+        type: choice
+        options: [explicit-edit, explicit-edit-multi-agent]
+`;
+  if (!updated.includes(input)) {
+    if (updated.includes("      suite:")) throw Error("Unexpected caller suite layout");
+    const anchor = "      task:\n";
+    if (updated.split(anchor).length !== 2) throw Error("Unexpected caller task input layout");
+    updated = updated.replace(anchor, input + anchor);
+  }
+  const forwarding = "      suite: ${{ inputs.suite }}\n";
+  if (!updated.includes(forwarding)) {
+    const anchor = "      task: ${{ inputs.task }}\n";
+    if (updated.split(anchor).length !== 2) throw Error("Unexpected caller task forwarding layout");
+    updated = updated.replace(anchor, forwarding + anchor);
+  }
+  const concurrency =
+    /      concurrency:\n        description: [^\n]+\n        required: false\n        default: "(?:10)?"\n        type: string\n/;
+  if (!concurrency.test(updated)) throw Error("Unexpected caller concurrency layout");
+  return updated
+    .replace(
+      "Optional task id; empty runs all 226 canonical tasks",
+      "Optional Explicit Edit task; Multi-Agent always runs all 71 tasks",
+    )
+    .replace(
+      concurrency,
+      `      concurrency:
+        description: Empty uses the suite default (10 or fixed 15 agents)
+        required: false
+        default: ""
+        type: string
+`,
+    );
+}
+
+/** Build a policy from committed runner identity and reviewed reference evidence. */
+export async function prepareReleasePolicy(policy, runnerSha, root = process.cwd()) {
+  if (!SHA.test(runnerSha)) throw Error("Release requires a full runner commit SHA");
+  const updated = structuredClone(policy);
+  updated.suites = await approvedTeamRelease(root);
+  const existing = updated.workflows.find(({ sha }) => sha === runnerSha);
+  if (existing) {
+    if (existing.status !== "active" || existing.runnerSha !== runnerSha)
+      throw Error("Release cannot reactivate or replace an existing signer");
+  } else updated.workflows.push({ sha: runnerSha, runnerSha, status: "active" });
+  return validateOfficialPolicy(updated);
+}
 /**
  * Maintainer-only release transaction. It derives every pin from committed Git state.
  */
@@ -87,13 +144,18 @@ export async function releaseOfficialWorkflow({
 
   const runnerSha = commitSha(root);
   const policyFile = path.join(root, POLICY);
-  const policy = JSON.parse(await readFile(policyFile, "utf8"));
-  if (
-    !policy.workflows.some(
-      ({ sha, runnerSha: runner }) => sha === runnerSha && runner === runnerSha,
-    )
-  )
-    policy.workflows.push({ sha: runnerSha, runnerSha, status: "active" });
+  const policy = await prepareReleasePolicy(
+    JSON.parse(await readFile(policyFile, "utf8")),
+    runnerSha,
+    root,
+  );
+  const directories = [templateDirectory, ...callerDirectories];
+  // Validate every layout before the first repository is changed. The real policy
+  // commit does not exist yet; the runner SHA is only a validation placeholder.
+  const callers = await Promise.all(
+    directories.map((directory) => readFile(path.join(directory, WORKFLOW), "utf8")),
+  );
+  for (const caller of callers) prepareCallerTemplate(caller, runnerSha, runnerSha);
   await writeFile(policyFile, `${JSON.stringify(policy, null, 2)}\n`);
   execFileSync("npx", ["--no-install", "oxfmt", POLICY], {
     cwd: root,
@@ -101,26 +163,20 @@ export async function releaseOfficialWorkflow({
   });
   const policySha = commit(root, "Approve official workflow release", [POLICY]);
 
-  const templateFile = path.join(templateDirectory, WORKFLOW);
-  await writeFile(
-    templateFile,
-    pinCallerTemplate(await readFile(templateFile, "utf8"), runnerSha, policySha),
-  );
-  const templateSha = commit(templateDirectory, "Pin official benchmark workflow release", [
-    WORKFLOW,
-  ]);
-
-  const callerShas = [];
-  for (const directory of callerDirectories) {
-    const callerFile = path.join(directory, WORKFLOW);
+  const revisions = [];
+  for (const [index, directory] of directories.entries()) {
     await writeFile(
-      callerFile,
-      pinCallerTemplate(await readFile(callerFile, "utf8"), runnerSha, policySha),
+      path.join(directory, WORKFLOW),
+      prepareCallerTemplate(callers[index], runnerSha, policySha),
     );
-    callerShas.push(commit(directory, "Pin official benchmark workflow release", [WORKFLOW]));
+    revisions.push(commit(directory, "Pin official benchmark workflow release", [WORKFLOW]));
   }
-
-  return { workflowSha: runnerSha, policySha, templateSha, callerShas };
+  return {
+    workflowSha: runnerSha,
+    policySha,
+    templateSha: revisions[0],
+    callerShas: revisions.slice(1),
+  };
 }
 
 async function main() {

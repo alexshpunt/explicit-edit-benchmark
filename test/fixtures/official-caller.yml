@@ -1,0 +1,88 @@
+---
+# yamllint disable rule:line-length
+name: Run official benchmark
+
+"on":
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Exact registered model id
+        required: true
+        default: openai-codex/gpt-5.6-luna
+        type: string
+      provider:
+        description: Provider id matching the model prefix
+        required: true
+        default: openai-codex
+        type: string
+      thinking:
+        description: Reasoning level
+        required: true
+        default: low
+        type: choice
+        options: ["off", low, medium, high, max]
+      task:
+        description: Optional task id; empty runs all 226 canonical tasks
+        required: false
+        default: ""
+        type: string
+      concurrency:
+        description: Concurrency for a full canonical run
+        required: false
+        default: "10"
+        type: string
+      adapter:
+        description: Adapter id from the benchmark registry
+        required: true
+        default: pi-default
+        type: string
+      agent_version:
+        description: Exact published agent package version
+        required: true
+        type: string
+      harness_version:
+        description: Exact extension version; required only for pi-agent-ide
+        required: false
+        default: ""
+        type: string
+      runtime_version:
+        description: Exact auxiliary runtime version when required
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  run:
+    uses: alexshpunt/explicit-edit-benchmark/.github/workflows/official-run.yml@aa41466d325d9f2fee4e3a2a41b62071b23e00d5
+    with:
+      model: ${{ inputs.model }}
+      thinking: ${{ inputs.thinking }}
+      task: ${{ inputs.task }}
+      concurrency: ${{ inputs.concurrency }}
+      adapter: ${{ inputs.adapter }}
+      agent_version: ${{ inputs.agent_version }}
+      harness_version: ${{ inputs.harness_version }}
+      runtime_version: ${{ inputs.runtime_version }}
+      provider: ${{ inputs.provider }}
+      policy_sha: 0f39b97d028e3173042cfc87d72912d952d8603d
+    secrets:
+      pi_auth_json: ${{ secrets.PI_AUTH_JSON }}
+
+  submit:
+    needs: run
+    uses: alexshpunt/explicit-edit-benchmark/.github/workflows/official-submit.yml@0f39b97d028e3173042cfc87d72912d952d8603d
+    with:
+      producer_run_id: ${{ github.run_id }}
+      producer_attempt: ${{ github.run_attempt }}
+      signer_sha: aa41466d325d9f2fee4e3a2a41b62071b23e00d5
+      policy_sha: 0f39b97d028e3173042cfc87d72912d952d8603d
+      dataset_repository: alexshpunt/explicit-edit-benchmark
+    secrets:
+      hf_token: ${{ secrets.HF_TOKEN }}

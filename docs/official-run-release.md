@@ -19,6 +19,30 @@ A caller pins step 2 by full commit SHA. Acceptance uses step 3 from its own tru
 
 To revoke future acceptance, change an approved workflow entry from `active` to `revoked` in a reviewed policy commit. This does not rewrite accepted observations. Removing historical observations from generated comparisons is a separate exclusion decision.
 
+## Multi-Agent release evidence
+
+`policies/official-runs/multi-agent-v1.json` is a reviewed reference-proof record,
+not a contributor observation. It records the tested source commit, exact fixture
+and suite identities, the canonical 71 tasks, graph and 15-agent schedule, and
+hashes of the completed model-free proof. It contains no raw source, prompts,
+credentials or machine paths.
+
+The release command checks the current fixture and suite against that record
+before adding Multi-Agent to the trusted policy. A changed fixture or suite needs
+a new reviewed full reference proof; a release never approves new hashes merely
+because a submitted result is self-consistent. Original task identities, schemas
+and time limits stay unchanged.
+
+The same command upgrades both caller workflows with a suite selector and forwards
+it to the reusable producer. Empty concurrency uses the suite default: 10 for
+Explicit Edit and exactly 15 for Multi-Agent. Every caller layout is checked before
+the first policy commit, and all final producer, signer, submit and policy pins
+come from committed revisions.
+
+Release branches and PRs do not activate the route. Activation happens only when
+the approved policy and caller releases merge. Preparing these changes requires
+no model calls or Dataset writes.
+
 ## Claims and lifecycle
 
 `verified` means that the exact archive was attested by an active workflow in the release policy and its manifest matches the policy and normalized bytes. It does not prove the provider's internal model implementation.
