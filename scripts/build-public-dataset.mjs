@@ -162,6 +162,45 @@ export function datasetCommunityProjection(runs = [], profiles = []) {
   };
 }
 
+/** Count published data separately for each benchmark identity, including team task membership. */
+export function datasetBenchmarkCounts(runs, profiles, trials, rounds) {
+  const groups = new Map();
+  for (const run of runs) {
+    const id = run.definitions?.benchmark?.id ?? run.contract;
+    const group = groups.get(id) ?? [];
+    group.push(run);
+    groups.set(id, group);
+  }
+  return Object.fromEntries(
+    [...groups].map(([id, items]) => {
+      const runIds = new Set(items.map((run) => run.runId));
+      const members = (rows) => rows.filter((row) => runIds.has(row.runId));
+      const memberProfiles = members(profiles);
+      const memberTrials = members(trials);
+      const community = datasetCommunityProjection(items, memberProfiles);
+      const rows = aggregateLeaderboard(
+        { runs: items },
+        memberProfiles,
+        memberTrials,
+        members(rounds),
+      );
+      return [
+        id,
+        {
+          suites: new Set(items.map((run) => run.definitions?.benchmark?.version ?? run.contract))
+            .size,
+          runs: items.length,
+          contributors: community.contributors.length,
+          observations: memberTrials.reduce((sum, trial) => sum + (trial.taskIds?.length ?? 1), 0),
+          models: new Set(rows.map((row) => `${row.modelFamily}\t${row.provider ?? "unknown"}`))
+            .size,
+          configurations: rows.length,
+          harnesses: community.harnesses.length,
+        },
+      ];
+    }),
+  );
+}
 function communityCardSections(community) {
   const lines = [];
   if (community.contributors.length) {
@@ -922,7 +961,15 @@ export async function buildDerivedDatasetFromAggregateState(
   const leaderboardContent = JSON.stringify(leaderboard, null, 2) + "\n";
   await writeFile(path.join(outputDirectory, "leaderboard.json"), leaderboardContent);
   index.leaderboard = fileRecord("leaderboard.json", leaderboardContent);
-  const community = datasetCommunityProjection(index.runs, evidence.profiles);
+  const community = {
+    ...datasetCommunityProjection(index.runs, evidence.profiles),
+    benchmarks: datasetBenchmarkCounts(
+      index.runs,
+      evidence.profiles,
+      evidence.trials,
+      evidence.rounds,
+    ),
+  };
   const communityContent = JSON.stringify({ schemaVersion: 1, ...community }, null, 2) + "\n";
   await writeFile(path.join(outputDirectory, "community.json"), communityContent);
   index.community = fileRecord("community.json", communityContent);
@@ -1200,7 +1247,10 @@ export async function buildPublicDatasetFromStore(
     bytes: Buffer.byteLength(leaderboardContent),
     sha256: createHash("sha256").update(leaderboardContent).digest("hex"),
   };
-  const community = datasetCommunityProjection(index.runs, allProfiles);
+  const community = {
+    ...datasetCommunityProjection(index.runs, allProfiles),
+    benchmarks: datasetBenchmarkCounts(index.runs, allProfiles, allTrials, allRounds),
+  };
   const communityContent = JSON.stringify({ schemaVersion: 1, ...community }, null, 2) + "\n";
   await writeFile(path.join(outputDirectory, "community.json"), communityContent);
   index.community = {
