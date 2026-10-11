@@ -26,7 +26,7 @@ Normal acceptance is append-only:
 
 1. download `source/index.json`, `dataset-index.json`, and `aggregate-state.json` from current `main`;
 2. download only the immutable files belonging to the candidate;
-3. validate the normalized bundle, identity, hashes, foreign keys, safe metadata, and task-set compatibility;
+3. resolve the bundle's suite and validate its schema, identity, hashes, links, safe metadata, task-set compatibility and official suite approval when applicable;
 4. add one retained source bundle and one new shard per table;
 5. append the aggregate state and regenerate only compact views, scores, badges, indexes, and the Dataset card;
 6. publish one parent-checked commit;
@@ -35,6 +35,12 @@ Normal acceptance is append-only:
 The workflow closes the pull request instead of using Hugging Face's merge action. Merging the raw PR would copy the temporary `candidates/` directory into Dataset `main`, which is not the accepted storage layout.
 
 If acceptance succeeds but the receipt or close request fails, keep the Dataset commit. Report the delivery warning and let the next scheduled pass reconcile the already accepted run and close the PR.
+
+The common tables cover different suite contracts. Read the declared suite's
+result guide before interpreting task credit, correction exhaustion or Score.
+For Multi-Agent, check joint barrier acceptance rather than summing participant
+successes. An unreached suffix is not an infrastructure failure. The suite's
+approved identity and fixed policy are distinct from the original 226-task rules.
 
 ### Manual investigation
 
@@ -88,7 +94,7 @@ Report what changed, risks, and verification results. Ask the user before mergin
 For Dataset candidates, report:
 
 - candidate number and contributor;
-- claimed model, provider, harness, versions, and reasoning when available;
+- suite, run policy, accepted progress and claimed model/provider/harness/versions/reasoning when available;
 - whether it was accepted, rejected, or deferred;
 - Dataset commit and workflow URL;
 - whether the acceptance receipt was posted and the pull request was closed.

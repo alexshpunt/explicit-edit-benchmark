@@ -1,34 +1,64 @@
 # Share a result
 
-Submit a run with your own Hugging Face account. You never need a maintainer token.
+Run a registered suite with your own model and Hugging Face account. You never
+need a maintainer token. Choose the suite and local/official mode in the
+[README](../README.md#run-and-publish). This guide covers ordinary local contributions;
+[official community runs](official-community-runs.md) explains verified evidence.
 
-Setup, requirements, and the command itself are in the [README](../README.md). This document covers ordinary local contributions. For an attested GitHub run with automatic acceptance, use [Official community runs](official-community-runs.md).
+## What the common command does
 
-## What happens while it runs
+| Phase           | What happens                                                                                                                                                          |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Configure       | Resolve the selected suite and harness/model profiles; check installed binary, version and public identity                                                            |
+| Account check   | Confirm Hugging Face access before spending model credit                                                                                                              |
+| Smoke           | Call the model on one exact auth/tool smoke task per configuration; stop if any configuration fails                                                                   |
+| Prepare and run | Apply the selected suite's workload, reference prerequisites and run policy                                                                                           |
+| Submit          | Export and validate the common safe bundle, build safe metadata and open a [Dataset](https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark) contribution |
 
-| Phase       | What it does                                                                                                                                                           |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Prepare** | Builds a temporary configuration for the agent, model, and reasoning level you picked, then checks the agent binary and version.                                       |
-| **Check**   | Confirms the Hugging Face login before anything is spent.                                                                                                              |
-| **Smoke**   | Runs one exact task for every selected configuration and compares the resulting files byte for byte.                                                                   |
-| **Run**     | Runs all 226 tasks, with five Oracle recovery attempts and a 120-second timeout per round.                                                                             |
-| **Submit**  | Exports the bundle, validates it, builds safe metadata, and opens a pull request on the [Dataset](https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark). |
+Original Explicit Edit runs 226 independent tasks. Its submit defaults are five
+Oracle recoveries, concurrency 10 and a 120-second delivery timeout. Supported
+overrides are recorded and compared under their matching policy.
 
-A failed smoke stops the command before the full run. That is the point of the phase: a wrong model, a stale binary, or a broken login costs you one task instead of 226.
+Multi-Agent runs all 71 tasks with a fixed 15-agent team. Model-free preparation
+and a matching parallel reference proof precede measured execution. It allows
+three retained-state corrections per failed barrier and has no local overall or
+delivery deadline. It accepts no scored task subset or smaller team. Read the
+[run guide](multi-agent.md) for compiler requirements and costs.
 
-You never run the smoke task yourself, and you never set `ready: true`. That flag only gates the lower-level `npm run benchmark -- run`.
+The automatic smoke is a model/auth check, not proof that a model can solve the
+selected suite. It can lead directly into the full paid run, so approve both
+execution and submission first. Do not add a second smoke or set `ready: true`
+to bypass the gate; readiness applies to the lower-level `raw-run` route.
 
-## What you are responsible for
+## Your responsibilities
 
-- **Keep every failure, timeout, and recovery attempt.** They are observations, not noise to hide.
-- **Never edit exported rows** to improve a result. If the identity is wrong, fix the configuration and rerun.
-- **Send the pull request URL to the maintainers.** The command prints it when it finishes.
-- **Paid model calls are on your account.** The smoke phase is cheap; the full run is not.
+- Keep every failed task, timeout, correction and legitimate early stop.
+- Do not reset state or rerun only failures to improve the recorded observation.
+- Never edit exported rows to improve a result. Fix identity/configuration at its source.
+- Send the run ID and Dataset contribution URL to the maintainers.
+- Keep raw reports, workspaces, configs and credentials private.
 
-The pull request holds benchmark facts only. The [README](../README.md#what-gets-published) lists exactly what is published and what never leaves your machine.
+The [public-data section](../README.md#what-gets-published) describes what leaves
+the machine. Both suites export the same five safe tables. Multi-Agent adds
+task/barrier/participant links, not a second result store. Missing native metrics
+remain unknown.
 
-## Acceptance
+## Acceptance and delivery
 
-Ordinary local candidates are `unverified`. Official candidates from the approved reusable workflow become `verified` after proof validation. Both are accepted automatically when their structure, hashes, identities, and safe metadata pass validation; score never controls admission. Code changes to tasks, adapters, policies, and workflows still require normal pull-request review.
+Ordinary local candidates are `unverified`. Approved GitHub workflow results
+become `verified` after proof validation. Both use automatic structural admission;
+Score never controls acceptance. Code, adapter, task, policy and workflow changes
+still need pull-request review.
 
-The scheduled **Auto-accept benchmark observations** workflow runs four times an hour. Production acceptance never runs from a maintainer workstation. It downloads only the candidate and compact current state, appends evidence to `source/accepted/`, adds one shard per table, updates the aggregate scores and views, posts an acceptance receipt, and closes the candidate pull request. [Benchmark automation and public data](benchmark-automation.md) describes the data format and acceptance internals.
+Scheduled acceptance appends retained evidence and table shards, updates compact
+views in one parent-checked Dataset commit, posts a receipt and closes the candidate.
+It does not use the Hub merge action or rebuild all history on every contribution.
+
+Submitted is not accepted. Check the receipt before reporting publication success.
+A temporary delivery failure is not a reason to repeat model calls. Official
+submit-only recovery reuses the original run ID, attempt, signer and signed
+archive. An unknown upload result needs investigation before retrying, so it does
+not create duplicate candidates.
+
+See [benchmark automation](benchmark-automation.md) for storage/validation and
+[official recovery](official-community-runs.md#operations-and-recovery) for operator steps.

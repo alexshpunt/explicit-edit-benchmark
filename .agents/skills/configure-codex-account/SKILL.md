@@ -7,18 +7,20 @@ compatibility: Linux, Node.js 24+, an installed Codex CLI, and this repository's
 # Run Codex on a chosen account
 
 The adapter measures whatever `codex` is authenticated as, unless a provider route replaces that
-login. `docs/running.md` has the full picture; this is the short version with commands that were run.
+login. Read `docs/running.md` and keep the suite already selected by
+`publish-benchmark-observation`. Account routing does not set the suite's run policy.
+Commands that call a model need approval; `benchmark:submit` also publishes a candidate.
 
 ## A ChatGPT subscription
 
 ```sh
-npm run benchmark:submit -- --harness codex-cli-default --model gpt-5.6-luna --thinking low \
+npm run benchmark:submit -- --suite SUITE --harness codex-cli-default --model gpt-5.6-luna --thinking low \
   --auth-file "$HOME/.codex/auth.json"
 ```
 
 `--auth-file` copies that one file into the sandbox, where the adapter reads it through
 `CODEX_HOME=/state/codex`. Sign in with `codex login` first; the subscription is what pays, and the
-published transport stays `harness-native`. Verified: `gpt-5.6-luna`, PASS in 24 seconds.
+published transport stays `harness-native`. Replace `SUITE` with the selected registered suite.
 
 ## Your own provider key, including Chinese providers
 
@@ -28,7 +30,8 @@ need into a private file and keep the key in a separate env file:
 ```sh
 node scripts/prepare-benchmark.mjs --harness codex-cli-default --model glm-5.3-flash --thinking low \
   --provider-file provider.json --env-file private-env.json --output /tmp/codex-route.json
-npm run benchmark -- run --config /tmp/codex-route.json --smoke --task replace-all-10-plain
+npm run benchmark -- raw-run --config /tmp/codex-route.json --smoke \
+  --task replace-all-10-plain --run-id NEW_SMOKE_ID
 ```
 
 Fields the Codex adapter uses from the provider block:
@@ -38,9 +41,11 @@ Fields the Codex adapter uses from the provider block:
 - `codexReasoningEffort` — whether to send `model_reasoning_effort` with your thinking level;
 - `transport` — the published label, `direct-responses` by default.
 
-Keys for the Chinese providers are already in `<Pi home>/auth.json` under `zai`, `deepseek`, and
-`xiaomi` (field `key`); any other key works the same way. Verified: `glm-5.3-flash` PASS in 29
-seconds, `deepseek-v4-flash` PASS in 13 seconds, both published as `direct-responses`.
+Use the user's approved provider credential and the env name required by that
+provider block. Do not assume a key is already installed in Pi or borrow another
+account. The prepared smoke is a one-task auth check using the original exact-edit
+task, not a scored run of the selected suite. Read its actual exit and report, then
+return to the publishing skill with the same suite and account.
 
 ## Keep the secrets local
 

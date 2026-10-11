@@ -42,7 +42,7 @@ const myHarness = defineHarness({
 });
 ```
 
-`inspectOutput` is optional for an exact one-turn run. `continueSession` is required when a custom harness supports same-session recovery. The benchmark owns the task, the sandbox, the timeout, and the exact verifier. The adapter owns calling the CLI, parsing its output, and continuing a session.
+`inspectOutput` is optional for an exact one-turn run. Adapters own calling the CLI, parsing native events and continuing their own sessions. The suite owns task delivery, grading and run policy. For shared-project teams, verify continuation across assignments and corrections, independent participant state, cancellation and cleanup; a one-turn smoke does not prove these behaviors.
 
 ### A harness that orchestrates another agent
 
@@ -58,6 +58,10 @@ Three details matter when you adapt this:
 - The sandbox mounts the workspace and the state directory, nothing else. bb needs its own dependencies, which npm installs next to the package, so the adapter mounts the directory that holds `node_modules`, and the driver travels in the state directory because the repository is not mounted.
 - The adapter command is Node, so `versionArgs` asks bb for its version instead of asking Node. Without it the runner refuses the mismatched `--version`.
 - bb tells you turn boundaries, tool items, and token usage. It reports no cost and no failed-call count, so those stay `null`. It also totals input, cached input, and output only, so its accounting has no cache-write part.
+
+The following bb example is for the original suite. Its concurrency and timeout
+are not permitted Multi-Agent settings. A team adapter must also support the
+shared-project lifecycle described above.
 
 Run bb one trial at a time:
 
@@ -136,7 +140,7 @@ EOF-normalized correctness is complete only when the run has reviewed failure ev
 
 We do not publish complete `results/` directories. They can hold duplicated workspaces, raw logs, sessions, and credentials. Those bytes are unsafe and add nothing to the public statistics.
 
-The current accepted baseline is one retained source bundle with 9,040 task observations across 40 complete configurations. Generated views are rebuilt from that bundle and stay small enough for a Dataset and a browser.
+Accepted source bundles are retained separately from generated views. Use the Dataset index for current run/configuration counts rather than a fixed number in this guide.
 
 The layers are:
 
@@ -185,20 +189,38 @@ It uploads no prompts, model prose, command text, raw arguments, output, session
 
 ## Accept a candidate
 
-After review and explicit maintainer approval, production acceptance runs through `.github/workflows/accept-huggingface-observation.yml`:
+Scheduled automation accepts structurally valid ordinary and official candidates;
+Score is not an admission gate. Code and policy changes still need review.
+The [candidate review skill](../.agents/skills/review-benchmark-candidate/SKILL.md)
+and [official operations guide](official-community-runs.md#operations-and-recovery)
+describe investigation, queue exclusions and explicit recovery.
+
+For an explicitly requested manual investigation, use a server-side dry run:
 
 ```sh
 gh workflow run accept-huggingface-observation.yml \
   -f dataset_repository=OWNER/DATASET \
-  -f candidate_ref=PR_NUMBER_OR_REF
+  -f candidate_ref=PR_NUMBER_OR_REF \
+  -f dry_run=true
 ```
 
-Maintainers run both review dry-runs and production acceptance through the workflow. Set its `dry_run` input to `true` to validate and rebuild without publishing. Do not download, validate, or publish Dataset candidates from a maintainer workstation. The workflow keeps the token on GitHub, serializes Dataset operations, validates the candidate, rebuilds the generated files, and publishes the parent-checked commit only when `dry_run` is false.
+Production manual dispatch requires separate approval. Do not download or run
+production acceptance from a maintainer workstation.
 
-Acceptance downloads current `main` and the candidate revision separately. It copies the whole `source/` store from main, validates and appends exactly one candidate through the strict ingestion path, and runs the normalized validator again while rebuilding. Then it rebuilds every canonical shard and summary from all retained sources.
+Normal acceptance reads three compact state files and only the immutable
+candidate bundle. It validates identity, schema, hashes, links, safe metadata and
+suite compatibility; retains the source bundle; adds one new shard per table;
+and updates aggregate state and compact views. It does not copy the complete
+source store or rebuild every historical shard.
 
-Publication is one Hub commit whose `parentCommit` is the main commit it downloaded. If main moved during the build, Hugging Face rejects the commit. The command never retries against a new parent behind your back, so run it again and it will rebuild from the new main. The same operation rebuilds all accepted views and records their hashes in `dataset-index.json`. Those views are the ones this commit publishes; nothing downstream defines a Score of its own.
+Publication is one parent-checked Hub commit. If Dataset main changed,
+acceptance fails closed; the next serialized pass reloads that head and reapplies
+the unchanged candidate. After publication it posts a receipt and closes the
+candidate instead of using the Hub merge action. If receipt delivery fails,
+keep the accepted commit and reconcile delivery without repeating the append.
 
-The workflow uses the repository `HF_TOKEN` secret. Contributors never get that token.
+A full snapshot/rebuild is an explicit recovery operation, not normal candidate
+acceptance. Production credentials stay on the workflow; contributors use their
+own account to submit, never a maintainer token.
 
 After a real Dataset change, acceptance sends a `dataset-updated` repository dispatch to `alexshpunt/benchmark-explorer`. Configure `EXPLORER_DISPATCH_TOKEN` as a repository secret with permission to dispatch events to that repository. Prefer a short-lived GitHub App token with only the required repository access. Dry runs and duplicate candidates do not send an event. If the secret is absent, publication still succeeds and the workflow records a warning so the Explorer's scheduled revision check can recover.

@@ -2,11 +2,25 @@
 
 Use the public [official run template](https://github.com/alexshpunt/explicit-edit-benchmark-run-template) when you want a result whose exact bytes are tied to an approved GitHub workflow.
 
-Select **Use this template**, create a public repository, add `PI_AUTH_JSON` and `HF_TOKEN` as Actions secrets, then run **Run official benchmark** from the Actions tab. The workflow UI accepts only registered adapters, an exact model and package versions, reasoning, and a registered task. A one-task or other partial run is valid.
+Select **Use this template**, create a public repository, add `PI_AUTH_JSON`
+and `HF_TOKEN` as Actions secrets, then run **Run official benchmark** from the
+Actions tab. The same setup can be requested through the
+[common CLI](../README.md#official-observation); creating a public caller, uploading
+secrets, model execution and submission all need approval.
+
+Select the suite, registered adapter, exact model, installed agent/package
+versions and reasoning. Original Explicit Edit supports optional task selection
+and configurable concurrency (default 10). Multi-Agent requires all 71 tasks
+and a fixed 15-agent team; leave its task input empty. Custom configs and local
+provider files are not official inputs.
+
+Multi-Agent workflow, policy and caller changes are prepared but not yet
+activated. Check the [release gate](multi-agent.md#official-release-gate) before
+dispatching; an older template or unapproved signer does not authorize it.
 
 The caller invokes `official-run.yml` at a full approved commit SHA. Model execution, signing, and submission have separate credentials and permissions. The caller does not supply benchmark code, commands, checkout paths, provider URLs, environment variables, caches, or runner labels.
 
-After inference succeeds, the workflow attests the exact result archive and starts submit-only delivery. Hugging Face downtime does not require new model calls: run **Resubmit existing official result** with the original GitHub run ID and attempt. Repeated delivery of the same execution and digest is a no-op; a conflicting digest is rejected.
+After inference succeeds, the workflow attests the exact result archive and starts submit-only delivery. Hugging Face downtime does not require new model calls: run **Resubmit existing official result** with the original GitHub run ID, attempt and actual signer workflow SHA. For historical artifacts, select their original signer instead of leaving the newer release's default. Repeated delivery of the same execution and digest is a no-op; a conflicting digest is rejected.
 
 A scheduled workflow in this repository validates both official and ordinary candidates and publishes structurally valid observations automatically. Score does not affect admission. Failures and timeouts are observations. Official candidates also require the approved workflow proof and retain the signed archive, attestation, execution identity, source workflow, policy identity, and acceptance receipt.
 
@@ -48,7 +62,7 @@ node scripts/official-acceptance-cli.mjs rebuild --backup-root /mnt/benchmark-ba
 - **Check publishing identity:** run `oidc_check_only`. The negative exchange for another Dataset must fail and the scoped production exchange must succeed.
 - **Revoke a signer:** remove or revoke its full workflow SHA in `policies/official-runs/v1.json` through a code PR. This blocks future acceptance; it does not delete historical observations.
 - **Disable a package/configuration:** use the versioned registry or exclusion policy. Admission revocation and retroactive view exclusion are separate decisions.
-- **Recover delivery:** rerun **Resubmit existing official result** with the original producer run ID and attempt. It performs no inference, verifies the retained bytes, resumes the existing candidate, verifies `acceptance.json`, and closes it with the contributor token.
+- **Recover delivery:** rerun **Resubmit existing official result** with the original producer run ID, attempt and actual signer workflow SHA. It performs no inference, verifies the retained bytes, resumes the existing candidate, verifies `acceptance.json`, and closes it with the contributor token.
 - **Recover derived views or a missing aggregate state:** dispatch `rebuild_only`. It downloads canonical `source/`, rebuilds state, shards, leaderboard, views, summary, badges and README, then publishes one parent-checked commit.
 - **Recover after commit-before-close:** rerun submit-only. It finds the existing execution, verifies the candidate commit and accepted Dataset commit, writes the receipt comment and closes the PR.
 - **Parent conflict:** do not force-push. Let the next serialized batch reload the new Dataset head and reapply the immutable candidate.

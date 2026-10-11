@@ -1,39 +1,58 @@
-# Explicit Edit architecture
+# Benchmark architecture
 
-Explicit Edit keeps three things apart: the benchmark definition, accepted evidence, and generated analysis. Each fact has exactly one home.
+The repository contains two benchmark suites and one shared execution and
+publication system. Suites define what agents must do and what counts as correct.
+The common layers configure harnesses, collect native evidence and publish results.
 
-## Where each fact lives
+## One home for each fact
 
-| Layer              | Home                                                                                                                                                      | What it owns                                                                                                                              |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Benchmark core     | This GitHub repository                                                                                                                                    | Tasks, fixtures, instructions, the exact verifier, normalized schema, runner, validation, Score rules, and the commands that publish data |
-| Run output         | A contributor's local `results/` directory                                                                                                                | Raw evidence from one execution. Private until reviewed and normalized.                                                                   |
-| Accepted evidence  | Hugging Face Dataset [`alexshpunt/explicit-edit-benchmark`](https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark), under `source/accepted/` | Reviewed observations and where they came from                                                                                            |
-| Generated analysis | The same Hugging Face Dataset                                                                                                                             | Leaderboard, dashboard views, summaries, indexes, and compressed tables, all rebuilt from accepted evidence                               |
+| Layer              | Home                                                                                                           | Responsibility                                                                              |
+| ------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Suite definition   | `src/suites/` and `fixtures/`                                                                                  | Workload, task identity, correctness, run policy and suite-specific Score                   |
+| Common runner      | `scripts/benchmark*.mjs`, `harness-runtime.mjs` and `harness-participant.mjs`                                  | CLI selection, model × harness profiles, sandbox lifecycle and native receipts              |
+| Local evidence     | Private `results/` and preparation directories                                                                 | Source, sessions, commands and raw logs from one execution                                  |
+| Normalization      | `scripts/normalized-run.mjs` and `validate-normalized-run.mjs`                                                 | Safe shared tables, identities, links, hashes and validation                                |
+| Accepted evidence  | [Hugging Face Dataset](https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark), `source/accepted/` | Retained observations, submission provenance and official proof where present               |
+| Generated analysis | The same Dataset                                                                                               | Suite rankings, summaries, indexes, badges and Explorer data rebuilt from accepted evidence |
 
-The Dataset stores accepted evidence and the generated views. The benchmark calculates those views.
+This GitHub repository owns the definitions and calculations, not the accepted
+result corpus. The Dataset is the only result store. The Explorer consumes
+generated views; it does not invent another Score.
 
-## What this repository owns
+## Suite and harness boundaries
 
-The task set is frozen: it changes only when the task bytes or the verifier behavior change.
+`scripts/benchmark-suites.mjs` resolves the supported suite and public scheduling
+constraints before credentials or harnesses are accessed. It currently selects
+between two suites, not arbitrary plugins. Original Explicit Edit remains the
+default. A new suite needs an implemented contract, routing, validation and
+release policy; adding a name to documentation is not enough.
 
-The repository owns:
+- **Explicit Edit** generates its initial and expected files in code. Independent
+  trials receive a task, edit their own workspace and pass byte-exact verification.
+- **Multi-Agent** uses a pinned C++ fixture. Preparation proves the restoration
+  workload and dependency graph. A fixed team shares one writable project, with
+  separate participant histories and rotating assignments. Each barrier checks
+  cumulative obligations, a fresh build and repeated rendered images.
 
-- task identity and starting files;
-- expected files and byte-exact verification;
-- sandbox and run-policy behavior;
-- normalized schema v1;
-- validation and acceptance rules;
-- the canonical Score and aggregation rules;
-- the commands that build and publish Dataset views.
+The [Multi-Agent source map](multi-agent.md#source-layout) separates generation,
+tasks, execution, grading, reference editors and C++ analysis. Full and coherent
+reference routes remain preparation dependencies. Older experiment commands are
+developer tools, not another publication protocol.
 
-It does not store the accepted result corpus.
+Harness identity and task delivery are separate. `scripts/adapter-registry.mjs`
+owns registered presets; `benchmark-config.mjs` expands matrices and pairs.
+Adapters own calling the CLI, parsing its native events and continuing a session.
+Suite code owns task scheduling and grading. Selecting a harness must not replace
+it with Baseline Agent or infer tool usage from whether a task passed.
 
-## Local runs and normalization
+Each participant sees the current assignment and live source, not future tasks,
+reference source, private contracts or expected pixels. Reference workers receive
+an explicit source allowlist; mounting the whole trusted checkout would break
+that boundary.
 
-A run stays in your local `results/` directory. It can hold sensitive logs, sessions, workspaces, prompts, output, commands, arguments, and credentials, so never upload it.
+## Shared result protocol
 
-The exporter turns it into a safe normalized bundle:
+The exporter produces one manifest and five tables:
 
 ```text
 manifest.json
@@ -44,85 +63,89 @@ rounds.jsonl
 tool-calls.jsonl
 ```
 
-`profiles.jsonl` records the agent, model, provider, harness, adapter, transport, reasoning mode, exact versions, and `configurationHash` that were actually observed. `configurations.jsonl` maps that hash to a recipe for reproducing the setup. A recipe holds safe public references and environment variable names, never credentials or local executable state.
+Profiles keep agent, harness, model, provider, reasoning and exact versions apart.
+Configurations contain safe public recipes and environment variable names, never
+credentials or executable local state. Trials describe correctness; rounds and
+tool calls describe native deliveries, usage and observed errors. Unknown metrics
+stay null rather than becoming zero.
 
-Runner, benchmark, task-set, and owner provenance travel separately in the submission metadata. The evidence is taken on trust and can be removed if it turns out to be wrong; there is no trust field to filter on.
+The original suite retains historical schemas 1 and 2. Schema 2 adds safe
+provider-failure attribution. Multi-Agent uses schema 3 in the same tables:
+trial rows link barriers to canonical tasks; round/call rows link native deliveries
+to participants. The manifest binds the workload, graph, schedule, fixed team and
+wall-clock observations. See the [team result contract](multi-agent-results.md).
 
-## Candidates and accepted evidence
+A barrier can contain several tasks and deliveries. Native events are counted
+once, not once per task. Joint acceptance is all-or-nothing at a barrier. Failed
+corrections retain state; unreached tasks do not become infrastructure failures.
+Provider, driver and cancellation stops retain the accepted prefix but are not
+editing failures. Team duration is wall-clock time, not summed participant time.
 
-A contributor uses their own Hugging Face account to open a Dataset pull request containing:
+The safe bundle excludes source, prompts, model prose, command text, raw arguments,
+logs, sessions, credentials and local paths. Raw run directories remain private
+even when the normalized bundle is safe.
 
-```text
-candidates/<run-id>/
-  manifest.json
-  profiles.jsonl
-  configurations.jsonl
-  trials.jsonl
-  rounds.jsonl
-  tool-calls.jsonl
-  submission.json
-```
+## Admission and trust
 
-A candidate is not evidence yet. A maintainer has to review and accept it.
+Ordinary contributors open a Dataset candidate with their own Hugging Face
+account. Local observations are `unverified`. Official candidates carry the
+signed archive, attestation and exact execution identity; they become `verified`
+only after trusted proof validation.
 
-Accepted bundles are kept as they are, with generated tables living elsewhere:
+`scripts/official-policy.mjs` and `policies/official-runs/` bind approved workflow,
+runner and suite identities. Multi-Agent has its own approved workload, fixture,
+graph, schedule and verifier record. Its fixed team and lack of task deadlines
+do not relax original-suite policies. Maintainer reference evidence is not a model
+observation and is not taken from a contributor's submitted approval hashes.
 
-```text
-source/accepted/<submission-id>/
-  manifest.json
-  profiles.jsonl
-  configurations.jsonl
-  trials.jsonl
-  rounds.jsonl
-  tool-calls.jsonl
-  submission.json
-```
+Release preparation pins both the producer and submit-only recovery callers.
+The [release guide](official-run-release.md) describes that transaction.
+Prepared branches are not deployed authorization: caller and policy activation
+must happen explicitly before a new official suite can run.
 
-`source/index.json` lists the accepted submissions. Links to evidence must point at accepted source data, never at another scoreboard.
+Admission checks safety, structure, identities, hashes and proof, not Score.
+Structurally valid low-score or correction-exhausted observations are useful data.
+Code, task, adapter and release changes still need normal pull-request review.
 
-## Acceptance and aggregation
+## Incremental acceptance
 
-Acceptance publishes everything in one parent-checked commit:
+Scheduled acceptance processes candidates serially against the current Dataset
+head. Its normal append path:
 
-1. Download the three compact state files from Dataset `main` and the seven files in the immutable candidate bundle.
-2. Validate schema v1, hashes, foreign keys, run identity, safe metadata, task-set identity, and compatibility.
-3. Add the bundle to `source/accepted/` and create one new compressed shard per table.
-4. Append the run to `aggregate-state.json` and regenerate only the compact indexes, scores, views, badges, and Dataset card.
-5. Commit the new evidence and updated projections together.
+1. reads the compact source index, Dataset index and aggregate state;
+2. downloads only the immutable candidate files and validates them;
+3. retains the source bundle and adds one compressed shard per table;
+4. appends aggregate state and regenerates compact views, indexes and the Dataset card;
+5. publishes one parent-checked commit, then posts the receipt and closes the candidate.
 
-Historical source bundles and historical table shards are not downloaded or rewritten during normal acceptance. A full source download and rebuild exists only as an explicit recovery operation.
+It does not download or rebuild all historical source on every submission.
+If the parent moved, acceptance fails closed and retries from the new head.
+A receipt failure does not erase a successful Dataset commit. Official delivery
+can reuse the retained signed artifact without repeating inference.
 
-The benchmark Score is:
+Full snapshots and rebuilds are explicit recovery operations, with a retained
+backup. See [official operations and recovery](official-community-runs.md#operations-and-recovery).
 
-```text
-coverage × (0.75 × first exact rate + 0.25 × final exact rate)
-```
+## Scores and comparisons
 
-`scripts/result-aggregation.mjs` defines the Score and the shared aggregation rules. First exact, final exact, EOF-normalized results, recovery, timeouts, duration, cost, and tokens all stay separate facts.
+`scripts/result-aggregation.mjs` owns both calculations:
 
-Explorer rollups use the median Score of complete eligible configurations. Primary model rankings group by model family and provider; a provider-agnostic model-family summary remains secondary. Agent, harness, and reasoning families keep their existing identities. Partial or provider-quarantined configurations stay in the evidence and configuration table but do not affect rankings or badges. Family views retain the score distribution and the complete and total configuration counts.
+- Original Explicit Edit: coverage × (0.75 × first exact rate + 0.25 × final exact rate).
+- Multi-Agent: jointly accepted canonical tasks / 71.
 
-Provider quarantine is configuration-scoped. It starts at 50 trials when confirmed provider-attributable terminal failures reach 20%. Only the safe enum in schema-v2 round evidence can contribute. A timeout or generic error is not provider attribution, and schema-v1 history is not reclassified.
+Rankings stay separate by suite and comparable policy. Duration, cost, tokens,
+corrections and tool usage remain shared statistical facts; they do not weight
+the Multi-Agent Score. Historical calibration runs are labelled separately,
+not relabelled as common-protocol observations.
 
-Acceptance generates:
+Provider quarantine uses confirmed attribution and observed execution counts,
+not the unreached suffix. Schema-1 history is not retroactively attributed.
+Details live in [methodology](methodology.md) and the [team result contract](multi-agent-results.md).
 
-- `leaderboard.json`, the canonical configuration ranking;
-- `views.json`, with the precomputed group, task-family, tool-usage, and drill-down views;
-- `summary.json`, with observation and efficiency summaries;
-- `dataset-index.json`, with run provenance, completeness, and hashes;
-- gzip JSONL tables under `data/`.
+## Further reading
 
-All of these are projections. Delete them and they rebuild from `source/accepted/`.
-
-## Failures and concurrency
-
-Acceptance is parent-checked. If another commit changes Dataset `main`, the stale attempt fails instead of overwriting it. The maintainer runs acceptance again against the new head.
-
-Publishing the Dataset is retryable, not transactional. The accepted commit holds the evidence, and every generated view can be rebuilt from it later without touching that evidence.
-
-## Related guides
-
-- [Run a benchmark](running.md)
+- [Run and configure a harness](running.md)
+- [Multi-Agent workload and run policy](multi-agent.md)
 - [Share a result](contributing-results.md)
-- [Benchmark automation and public data](benchmark-automation.md)
-- [Methodology](methodology.md)
+- [Configuration API and public data](benchmark-automation.md)
+- [Official community runs](official-community-runs.md)

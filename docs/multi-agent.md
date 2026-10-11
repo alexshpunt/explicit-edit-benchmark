@@ -87,7 +87,7 @@ There is no scored `--task`, smaller team, fresh retry or finite timeout option
 for this suite. `--concurrency 15` is accepted but is already the default.
 
 For runs without automatic submission, use the common `raw-run`, `export` and
-`inspect` commands described in [benchmark automation](benchmark-automation.md).
+`inspect` commands described in [development commands](running.md#development-commands).
 `raw-run` accepts `--suite explicit-edit-multi-agent` and an explicit
 `--preparation PREPARATION` with a matching completed 15-agent proof. It still
 requires the same model/auth smoke readiness; preparation is not a substitute.
