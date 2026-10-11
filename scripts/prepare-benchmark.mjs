@@ -229,6 +229,43 @@ function ompSettings(provider, model, thinking, env) {
       ) + "\n",
   };
 }
+const AFT_DISABLED_TOOLS = ["aft_move", "aft_delete"];
+const AFT_TOOLS = [
+  "read",
+  "write",
+  "edit",
+  "grep",
+  "find",
+  "ls",
+  "bash",
+  "bash_status",
+  "bash_watch",
+  "bash_write",
+  "bash_kill",
+  "aft_outline",
+  "aft_zoom",
+  "aft_search",
+  "aft_callgraph",
+  "aft_inspect",
+  "aft_import",
+  "aft_safety",
+  "aft_conflicts",
+  "ast_grep_search",
+  "ast_grep_replace",
+  "lsp_diagnostics",
+];
+const AFT_BENCHMARK_CONFIG = Object.freeze({
+  edit_mode: "default",
+  format_on_edit: false,
+  validate_on_edit: "syntax",
+  disabled_tools: AFT_DISABLED_TOOLS,
+  indexes: { trigram: true, semantic: false, callgraph: true },
+  lsp: { auto_install: false },
+  bash: { enabled: true, rewrite: false, compress: false, background: false },
+  github: { shim: false, read: false, write: false },
+  git: { co_author: "off" },
+});
+
 function canonicalIdentity({
   harness,
   canonicalModel,
@@ -241,8 +278,8 @@ function canonicalIdentity({
   const agentFamily = ADAPTERS[harness]?.agentFamily;
   if (!agentFamily)
     throw Error(`Unsupported adapter: ${harness}. Use one of: ${ADAPTER_IDS.join(", ")}`);
-  if (harness === "pi-agent-ide" && !harnessVersion)
-    throw Error("The Pi Agent IDE adapter requires --harness-version for the installed package");
+  if (ADAPTERS[harness]?.extensionPackage && !harnessVersion)
+    throw Error(`The ${harness} adapter requires --harness-version for its installed extension`);
   const exactVersion = String(version).split(/\r?\n/, 1)[0];
   return {
     agentFamily,
@@ -261,15 +298,31 @@ function canonicalIdentity({
           ? ["bash"]
           : harness === "pi-agent-ide"
             ? ["pi-agent-ide"]
-            : ["default"],
+            : harness === "pi-aft"
+              ? AFT_TOOLS
+              : ["default"],
       extensions:
         harness === "baseline-agent"
           ? ["pi-baseline-agent@1"]
           : harness === "pi-agent-ide"
             ? [`pi-agent-ide@${harnessVersion}`]
-            : [],
-      rules: [],
-      runtimeFlags: [`thinking=${thinking}`],
+            : harness === "pi-aft"
+              ? [`@cortexkit/aft-pi@${harnessVersion}`]
+              : [],
+      rules: harness === "pi-aft" ? [`aft-workflow-hints@${harnessVersion}`] : [],
+      runtimeFlags: [
+        `thinking=${thinking}`,
+        ...(harness === "pi-aft"
+          ? [
+              "edit-mode=default",
+              "semantic-index=false",
+              "lsp-auto-install=false",
+              "bash-rewrite=false",
+              "bash-compress=false",
+              "bash-background=false",
+            ]
+          : []),
+      ],
       environment: provider?.apiKeyEnv ? [provider.apiKeyEnv] : [],
     },
   };
@@ -305,9 +358,10 @@ export function makeAdapter({
   switch (harness) {
     case "pi-default":
     case "baseline-agent":
-    case "pi-agent-ide": {
-      if (harness === "pi-agent-ide" && !idePackage)
-        throw Error("IDE requires --ide-package for the installed package");
+    case "pi-agent-ide":
+    case "pi-aft": {
+      if (ADAPTERS[harness]?.extensionPackage && !idePackage)
+        throw Error(`${harness} requires --ide-package for the installed package`);
       const installed = idePackage ? resolveIdePackage(idePackage) : null;
       if (installed) assertDeclaredIdeEntry(installed.entry);
       return {
@@ -337,7 +391,14 @@ export function makeAdapter({
         env: {
           ...env,
           PI_CODING_AGENT_DIR: "/state/pi",
-          ...(harness === "pi-agent-ide" ? { SHELL: "/bin/bash" } : {}),
+          ...(["pi-agent-ide", "pi-aft"].includes(harness) ? { SHELL: "/bin/bash" } : {}),
+          ...(harness === "pi-aft"
+            ? {
+                AFT_STORAGE_DIR: "/state/aft/storage",
+                AFT_CACHE_DIR: "/state/aft/cache",
+                XDG_CONFIG_HOME: "/state/home/.config",
+              }
+            : {}),
         },
         seedFiles: {
           ...auth("pi/auth.json"),
@@ -350,6 +411,14 @@ export function makeAdapter({
             : {}),
           ...(modelFile ? { "pi/models.json": path.resolve(modelFile) } : {}),
         },
+        ...(harness === "pi-aft"
+          ? {
+              stateFiles: {
+                "home/.config/cortexkit/aft.jsonc":
+                  JSON.stringify(AFT_BENCHMARK_CONFIG, null, 2) + "\n",
+              },
+            }
+          : {}),
       };
     }
     case "codex-cli-default": {
@@ -641,7 +710,7 @@ async function main() {
     const installed = resolveIdePackage(values["ide-package"]);
     if (installed.version !== values["harness-version"])
       throw Error(
-        `IDE package version ${installed.version} does not match --harness-version ${values["harness-version"]}`,
+        `Pi extension package version ${installed.version} does not match --harness-version ${values["harness-version"]}`,
       );
   }
   const providerId =

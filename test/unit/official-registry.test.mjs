@@ -148,6 +148,39 @@ test("Pi Agent IDE resolves agent and extension as separate exact packages", asy
   );
 });
 
+test("Pi AFT resolves Pi and the AFT extension as separate exact packages", async () => {
+  const plan = await resolveExecutionPlan(
+    { ...input, adapter: "pi-aft", harnessVersion: "0.58.0" },
+    {
+      fetch: async (url) => {
+        const aft = url.includes(encodeURIComponent("@cortexkit/aft-pi"));
+        const name = aft ? "@cortexkit/aft-pi" : "@earendil-works/pi-coding-agent";
+        const version = aft ? "0.58.0" : "0.85.1";
+        return {
+          ok: true,
+          json: async () => ({
+            name,
+            version,
+            dependencies: {},
+            dist: {
+              integrity: "sha512-abcdef",
+              tarball: `https://registry.npmjs.org/${name}/-/${name.split("/").at(-1)}-${version}.tgz`,
+            },
+          }),
+        };
+      },
+    },
+  );
+  assert.deepEqual(
+    plan.packages.map(({ name, version, role }) => ({ name, version, role })),
+    [
+      { name: "@earendil-works/pi-coding-agent", version: "0.85.1", role: "agent" },
+      { name: "@cortexkit/aft-pi", version: "0.58.0", role: "extension" },
+    ],
+  );
+  assert.equal(plan.harnessFamily, "pi-aft");
+});
+
 test("official resolver rejects executable and mutable caller inputs before package resolution", async () => {
   for (const extra of [
     { command: "sh -c evil" },
