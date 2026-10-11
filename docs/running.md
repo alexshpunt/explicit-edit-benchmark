@@ -1,16 +1,22 @@
 # Configuration guide
 
-This guide covers what sits behind `npm run benchmark:submit`: models, reasoning levels, provider routes, credential files, and custom adapters.
+This guide covers harness configuration behind the common
+`npm run benchmark -- run` command: models, reasoning, account routes, credential
+files and custom adapters. Select the suite first in the [README](../README.md#choose-a-suite).
+Account configuration is shared; task scheduling and run policy belong to the suite.
+The original suite remains the default. Read the [Multi-Agent guide](multi-agent.md)
+for its fixed team, compiler and preparation requirements.
 
 ## The normal path
 
 Install and log in to your agent CLI, then pass the agent, the exact model, and the reasoning level:
 
 ```sh
-npm run benchmark:submit -- --harness codex-cli-default --model PROVIDER/MODEL --thinking high --concurrency 10
+npm run benchmark -- run --local --suite SUITE \
+  --harness codex-cli-default --model PROVIDER/MODEL --thinking high
 ```
 
-`--concurrency` is how many tasks run at once. It changes how long the run takes, not the result.
+Replace `SUITE` with a supported ID from the README. This command calls a model and submits a result; approve both first. Original-suite concurrency defaults to 10 and is configurable. Multi-Agent uses exactly 15 participants and rejects finite delivery deadlines or task subsets. Scheduling affects wall time and can also affect failures under resource contention.
 
 The command writes a temporary configuration into the system temp folder and deletes it when it finishes, so you never prepare or commit a config file for a ready adapter.
 
@@ -146,8 +152,7 @@ node scripts/export-subscription-credentials.mjs
 export CODEX_HOME="$HOME/.local/share/explicit-edit-benchmark/subscription/codex"
 ```
 
-The snapshot holds the access token and no refresh token, so it can only read and it expires with
-the Pi session; re-run the command after signing in or refreshing in Pi. To sign in separately
+The snapshot holds an access token and no refresh token. It authenticates model requests but cannot refresh itself; regenerate it after the token expires or after a new login. To sign in separately
 instead, point `CODEX_HOME` at an empty directory and run `codex login` there.
 
 The same command writes an Oh My Pi credential store when you pass `--omp ~/.bun/bin/omp`, which is
@@ -198,7 +203,7 @@ The runner does not inherit your whole shell environment.
 - `--command` picks the CLI binary. If the binary lives outside `/usr`, pass `--runtime` for its installation directory and dependencies.
 - Do not mount your whole home directory, this checkout, or your credentials directory. The model can see everything you mount.
 - `--model-file` seeds a custom Pi or OMP model catalog. The benchmark copies seeds into isolated state and leaves your originals alone.
-- State is deleted after each chain, so refreshed credentials are never written back.
+- Credentials are copied into private sandbox state; the original account files are not updated. Treat retained state and raw evidence as sensitive.
 
 Raw CLI logs can contain secrets. Never upload them without reading them first.
 
@@ -207,7 +212,7 @@ Raw CLI logs can contain secrets. Never upload them without reading them first.
 If you keep your own `benchmark.config.ts`, submit it with `--config`:
 
 ```sh
-npm run benchmark:submit -- --config benchmark.config.ts
+npm run benchmark -- run --local --suite SUITE --config benchmark.config.ts
 ```
 
 A TypeScript config is a trusted module you build from `defineHarness` and `defineBenchmarkConfig`. It can run one model on one harness, a list of pairs, or a full model × harness matrix. Start from [`examples/benchmark.config.ts`](../examples/benchmark.config.ts).
@@ -230,19 +235,19 @@ leaves token metrics unavailable instead of publishing the incomplete count.
 
 ## Development commands
 
-The lower-level commands are still there for adapter work and maintainer debugging:
+The lower-level commands remain for execution without automatic submission, adapter work and maintainer debugging. They can call models: approve the scope before running them and satisfy the documented readiness/smoke gate. This example uses the original suite's policy:
 
 ```sh
 npm run benchmark -- init
 npm run benchmark -- check --config benchmark.config.ts
-npm run benchmark -- run --config benchmark.config.ts \
+npm run benchmark -- raw-run --suite explicit-edit --config benchmark.config.ts \
   --oracle-recoveries 5 --concurrency 10 --timeout-seconds 120 --run-id my-run
 npm run benchmark -- export results/my-run
 npm run benchmark -- inspect results/my-run/normalized
 npm run benchmark -- report results/my-run/normalized
 ```
 
-Without `--task` the runner takes all 226 tasks. `--task ID` runs one, and `--task-manifest FILE` runs a saved subset; you cannot combine those two. `--results DIR` moves the output root, and `--retry-failures N` starts fresh trials instead of recovering in the same session. `npm run bench:run -- --help` prints the full list.
+For original-suite `raw-run`, omitting `--task` selects all 226 tasks. `--task ID` runs one; `--task-manifest FILE` runs a saved subset, and they cannot be combined. `--results DIR` moves the output root. `--retry-failures N` creates fresh trials instead of same-session corrections. These are original-suite options, not general team policy. Multi-Agent rejects subsets, smaller teams, fresh retries and finite delivery deadlines; its [guide](multi-agent.md) describes `--preparation` and reference readiness. `npm run bench:run -- --help` prints lower-level options.
 
 A finished queue does not mean every task passed. Read `summary.json` before you trust a run.
 

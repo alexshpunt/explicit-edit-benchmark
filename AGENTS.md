@@ -22,8 +22,8 @@ Treat every local file as potentially private until you have checked it. Do not 
 account details, machine paths, private configuration, raw run output, or Linear project bindings.
 
 Do nothing on your own initiative: no run, no commit, no publication until the user asks for it. A
-full observation spends real money, so confirm the scope before starting one, and prefer one task
-before the whole set.
+full observation spends real money, so confirm the suite, scope and publication before starting.
+Use its documented smoke gate; not every suite permits partial scored runs.
 
 Before you commit, run the check the README describes. It is free, it is what CI runs, and it catches
 a missing seeded file, an adapter name that does not exist, and an identity literal written outside

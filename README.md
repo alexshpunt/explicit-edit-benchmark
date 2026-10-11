@@ -4,7 +4,7 @@
 
 <h1 align="center">Explicit Edit Benchmark</h1>
 
-<p align="center">Explicit Edit is an open benchmark for measuring how accurately coding agents and agent harnesses edit files across 226 deterministic, byte-exact tasks.</p>
+<p align="center">Two open benchmark suites for measuring how reliably coding agents edit files: exact text changes and concurrent work in a large shared project.</p>
 
 <p align="center">
   <a href="https://github.com/alexshpunt/explicit-edit-benchmark/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/alexshpunt/explicit-edit-benchmark/ci.yml?branch=main&label=CI%2FCD" alt="CI/CD status"></a>
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/tasks-226%20exact%20edits-blue" alt="226 tasks"></a>
+  <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/suites-2-blue" alt="Two benchmark suites"></a>
   <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2Falexshpunt%2Fexplicit-edit-benchmark%2Fresolve%2Fmain%2Fdataset-index.json&query=%24.runs.length&label=runs&color=blue" alt="Accepted benchmark runs"></a>
   <a href="https://github.com/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexshpunt%2Fexplicit-edit-benchmark%2Fmain%2Fbadges.json&query=%24.contributors&label=contributors&color=blue" alt="Benchmark contributors"></a>
   <a href="https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2Falexshpunt%2Fexplicit-edit-benchmark%2Fresolve%2Fmain%2Fsummary.json&query=%24.observations&label=observations&color=blue" alt="Accepted benchmark observations"></a>
@@ -23,17 +23,34 @@
   <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?view=harness"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2Falexshpunt%2Fexplicit-edit-benchmark%2Fresolve%2Fmain%2Fsummary.json&query=%24.harnesses&label=harnesses&color=blue" alt="Accepted harness families"></a>
 </p>
 
-The tasks are small on purpose. None of them needs deep reasoning or domain knowledge: the agent finds the right text, changes it, and leaves every other byte as it was. That keeps the attention on what actually differs between setups, which is the model, the tools, and the harness around them.
+## Choose a suite
 
-There are 226 of them: replacements, insertions, deletions, copies, moves, large files, several file types, and Unicode edge cases. A verifier compares the result byte for byte.
+| Suite                                                                            | What it measures                                                                                             | Workload                                                                                                            | Score                                                                              |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [Explicit Edit](docs/tasks.md) (`explicit-edit`)                                 | Accurate replacements, insertions, deletions, copies and moves, including large files and Unicode edge cases | 226 independent, generated tasks with byte-exact verification                                                       | Coverage and first/final exact correctness; see [methodology](docs/methodology.md) |
+| [Explicit Edit — Multi-Agent](docs/multi-agent.md) (`explicit-edit-multi-agent`) | Concurrent editing of one large existing C++ project, with rotating assignments and separate agent histories | 71 restoration tasks, fixed 15-agent team, cumulative structural checks, fresh builds and unchanged rendered images | Jointly accepted tasks / 71                                                        |
 
-**What the tasks actually are:** [Benchmark tasks](docs/tasks.md) lists every task family, explains what each scale means, and shows how the generator increases context, matches, files, decoys, block size, and Unicode risk.
+The original suite keeps edits simple so it measures precision rather than domain
+knowledge. Multi-Agent asks agents to extract modules from a shuffled renderer
+monolith and restore names while preserving earlier work and peer edits.
 
-**Where results live:** the [Benchmark Explorer](https://huggingface.co/spaces/alexshpunt/benchmark-explorer) shows current rankings, and the [Hugging Face Dataset](https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark) stores every accepted run.
+Both suites use the same CLI, harness adapters, model configuration, normalized
+statistics and publication path. Their Scores and rankings stay separate: a
+percentage from one suite is not interchangeable with a percentage from the other.
+Omitting `--suite` still selects the original Explicit Edit.
 
-The benchmark grows with the people who run it. Run it on your own harness and configuration, publish the result, and it joins the same database and counts towards the statistics.
+Multi-Agent has no local run or delivery deadline. Its graph decides which tasks
+can run together; not all 15 agents receive work at every barrier. Preparation is
+model-free but CPU-heavy. Read its [run guide](docs/multi-agent.md) before starting.
+The [calibration observations](docs/multi-agent-calibration.md) document earlier
+runs, including a full Sol 6.1 high team run in about 68 minutes, versus about
+10.5 hours for the earlier single-agent route. Those are historical measurements,
+not a runtime guarantee or new public submissions.
 
-There is room for more than this, too: longer and more involved edits are planned, closer to the work people do when they change software. Ideas are welcome as issues, pull requests are reviewed and merged when they help, and the author is open to discussing any of it.
+Results live in the [Benchmark Explorer](https://huggingface.co/spaces/alexshpunt/benchmark-explorer)
+and the [Hugging Face Dataset](https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark).
+Run either suite with your own model and harness, then share the observation.
+New task ideas and harness contributions are welcome.
 
 <!-- benchmark-community:start -->
 
@@ -91,29 +108,6 @@ Thank you to everyone who shares benchmark observations. Your work makes this pu
 
 <!-- benchmark-community:end -->
 
-## Multi-Agent suite
-
-[**Explicit Edit — Multi-Agent**](docs/multi-agent.md) measures concurrent editing
-of one large shared project: 71 restoration goals and a fixed 15-agent team.
-It uses the common CLI, harness configuration, normalized statistics and submission
-path, but has its own ranking: Score is jointly accepted tasks / 71.
-
-```sh
-npm run benchmark -- run --local --suite explicit-edit-multi-agent \
-  --harness pi-default --model PROVIDER/MODEL --thinking high
-```
-
-This command calls the model and submits a result. Read the [run guide](docs/multi-agent.md)
-first for compiler requirements, costs, model-free preparation and the pending
-official release gate. See the [result contract](docs/multi-agent-results.md) and
-[historical calibration observations](docs/multi-agent-calibration.md).
-
-## Project and personal skills
-
-Public skills for working on this repository live in `.agents/skills/`.
-The whole `.pi/` directory is ignored: it holds personal skills, settings and
-runtime data. Do not force-add its files to Git.
-
 ## What you need
 
 - Linux or WSL2
@@ -122,6 +116,7 @@ runtime data. Do not force-add its files to Git.
 - Bubblewrap (`bwrap`)
 - the agent CLI you want to test, installed and logged in
 - access to the model you want to test
+- for Multi-Agent: Linux x64 or x64 WSL2, Clang 18 as `clang++`, Clangd, and the C++17 standard library
 - a free [Hugging Face account](https://huggingface.co/join) to submit the result
 
 Clone the repository, then install it and the Hugging Face CLI:
@@ -152,76 +147,97 @@ The benchmark has ready adapters for these CLIs. Use the name in the `--harness`
 
 The name in the flag is the published harness family, so a result lands in the leaderboard under the name you ran. The binary column is what actually runs; pass a different path with `--command` when yours is not on `PATH`. `pi-default` and `pi-agent-ide` both run `pi`, and differ only in the tools.
 
-You install and sign in to that CLI yourself. The benchmark leaves your CLI alone, and your credentials stay yours: it copies only the file you point it at, for the length of a run.
+You install and sign in to that CLI yourself. Local runs copy explicit credential files into isolated private state; they do not update your original account files. Treat retained run state and logs as sensitive, never as publishable evidence.
 
 For anything not in this list you write your own adapter. [Benchmark automation and public data](docs/benchmark-automation.md) documents the config API, and [examples/bb](examples/bb/benchmark.config.mjs) is a worked example for a harness that is more than one CLI call: it starts a server, runs another agent in a thread, and reads that thread's timeline. We ship the example and a smoke run, not a bb result.
 
 ## Run and publish
 
-Choose whether the observation is verified on GitHub or runs on your machine. Both paths use one command.
+Choose the suite and whether you want a local or official observation.
+**These commands spend model credit and submit a result.** The automatic smoke
+check also calls the model. Confirm the scope and account before starting.
 
-For a verified observation:
+### Local observation
 
-```sh
-npm run benchmark -- run --official --harness pi-default \
-  --model openai-codex/gpt-5.6-luna --thinking low
-```
-
-The first invocation checks `gh` and `hf` login, creates your public caller repository from the approved template when needed, copies your local Pi and Hugging Face credentials into GitHub Actions secrets through stdin, starts the workflow, and waits until the result is accepted. Credentials are never placed in command arguments. Use `--task TASK_ID` for another partial run, `--caller-repository OWNER/REPO` for an existing caller, or `--no-wait` to return after dispatch.
-
-For an ordinary unverified observation:
+Use the same command for either suite:
 
 ```sh
-npm run benchmark -- run --local --harness pi-default \
-  --model openai-codex/gpt-5.6-luna --thinking low
+# Original suite: all 226 tasks, default concurrency 10
+npm run benchmark -- run --local --suite explicit-edit \
+  --harness pi-default --model PROVIDER/MODEL --thinking low
+
+# Multi-Agent: all 71 tasks, fixed 15-agent team
+npm run benchmark -- run --local --suite explicit-edit-multi-agent \
+  --harness pi-default --model PROVIDER/MODEL --thinking high
 ```
 
-Local mode keeps the existing smoke gate, runs the complete task set, validates the result, and opens the Dataset contribution. The Dataset marks approved GitHub workflow results as `verified` and ordinary local contributions as `unverified`. Both remain visible. See [Official community runs](docs/official-community-runs.md) for the trust boundary and recovery path.
+Each selected configuration first passes a one-task model/auth smoke check.
+The original suite then runs independent trials. Multi-Agent also prepares the
+renderer and proves the parallel schedule with scripted editors before measured
+agents start. It allows three corrections per failed barrier, keeps failed edits
+and histories, and stops when those corrections are exhausted. Legitimate early
+stops retain the accepted prefix; they are results, not runs to hide.
 
-## Local options
+The command exports and validates the common safe bundle, then opens a Dataset
+contribution. Local observations are marked `unverified`. Different configurations
+in a Multi-Agent matrix run as separate teams, sequentially.
 
-The local command accepts the existing submission options. Its lower-level equivalent is:
+### Official observation
+
+Official mode uses a registered preset and exact installed package versions.
+For example, replace `PI_VERSION` with the version you intend to measure:
 
 ```sh
-npm run benchmark:submit -- --harness pi-default --model PROVIDER/MODEL --thinking low --concurrency 10
+npm run benchmark -- run --official --suite explicit-edit \
+  --harness pi-default --model PROVIDER/MODEL --thinking low \
+  --agent-version PI_VERSION
 ```
 
-You can run that yourself, or hand your coding agent this repository link and let it do the work: the skills in `.agents/skills/` know how to route a harness to your account, run the observation, and open the pull request. Ask it to publish a result and it will use them.
+Pi Agent IDE also requires `--harness-version`; Oh My Pi requires
+`--runtime-version`. Official mode does not accept custom configs or provider files.
 
-| Flag            | What it means                                                                                                                             |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `--harness`     | The harness from the table above.                                                                                                         |
-| `--model`       | The exact model id, spelled the way that CLI expects it.                                                                                  |
-| `--thinking`    | The reasoning level, for example `low`, `medium`, or `high`.                                                                              |
-| `--concurrency` | How many tasks run at once. Default 10. It changes how long a run takes, and under heavy contention it can also change which trials fail. |
+This command checks `gh` and `hf` login, creates a public caller repository if
+needed, uploads Pi and Hugging Face credentials as Actions secrets through stdin,
+dispatches the workflow, and waits for acceptance. Approve those effects before
+running it. Credentials are never placed in command arguments.
 
-Then the command does the rest:
+**Multi-Agent official activation is pending.** Its producer, policy and caller
+updates are prepared, but official runs require deployed approved pins and a
+matching suite release. Do not dispatch with older callers. See the
+[official release gate](docs/multi-agent.md#official-release-gate).
 
-1. builds a temporary configuration for the agent you picked, and checks the binary and its version;
-2. checks the Hugging Face login;
-3. runs one exact task for every selected configuration and compares the files byte for byte;
-4. runs all 226 tasks;
-5. exports the result, validates it, and opens a pull request on the Dataset.
+Approved workflow results are marked `verified`. Both verified and unverified
+observations remain visible. Use `--caller-repository OWNER/REPO` for an existing
+caller or `--no-wait` to return after dispatch. Original-suite official runs can
+select `--task TASK_ID`; Multi-Agent always uses the whole workload.
+[Official community runs](docs/official-community-runs.md) explains signing,
+acceptance and submit-only recovery.
 
-**If step 3 fails, the command stops there**, so a misconfiguration costs you a minute instead of a full run. That check is part of the command rather than something you have to remember.
+### Configuration and lower-level commands
 
-Every run sees the same 226 tasks. A run is grouped with others only when the rules match: how many recovery attempts it allows, how long one attempt may take, the task set, and the verifier. How many trials ran at once is recorded too, but it does not separate groups, because it is scheduling rather than a rule; it shows up in timings, and under contention sometimes in failures. If a harness needs longer, raise `--timeout-seconds`, and the result is compared with runs that used the same timeout.
+| Option                               | Meaning                                                                       |
+| ------------------------------------ | ----------------------------------------------------------------------------- |
+| `--suite`                            | Which benchmark to run; original Explicit Edit remains the default            |
+| `--harness`, `--model`, `--thinking` | The installed harness, exact selector and reasoning level                     |
+| `--config FILE`                      | Custom adapter or model × harness matrix, instead of a preset; local only     |
+| `--concurrency N`                    | Original-suite parallel trials, default 10; Multi-Agent accepts only 15       |
+| `--timeout-seconds N`                | Original-suite local delivery limit, default 120; unavailable for Multi-Agent |
 
-Some agents need a provider route or a credential file. That is one more flag on the same command:
+Local provider routes use `--provider-file` and `--env-file`; explicit credential
+files use `--auth-file`. Keep those files private.
+The [configuration guide](docs/running.md) covers runtime mounts, account routes
+and adapter details. The lower-level `benchmark:submit` command accepts
+`--suite` too. It applies the selected suite's policy, not one shared deadline
+or correction count.
 
-```sh
-npm run benchmark:submit -- --harness codex-cli-default --model PROVIDER/MODEL --thinking high \
-  --provider-file provider.json \
-  --env-file private-env.json
-```
-
-`provider.json` holds routing metadata and no key. `private-env.json` holds the key itself. Keep both files private. The [configuration guide](docs/running.md) explains each adapter's quirks, the runtime and mount rules, and the files each CLI expects.
-
-If you keep your own `benchmark.config.ts`, submit it with `--config benchmark.config.ts` instead of `--harness`. Run `npm run benchmark:submit -- --help` for every option.
+For model-free Multi-Agent preparation, read the [reference commands](docs/multi-agent.md#model-free-preparation-and-proof).
+For execution without automatic submission, use the common `raw-run`, `export`
+and `inspect` workflow in [development commands](docs/running.md#development-commands).
+Never pass an unsupported suite name or bypass readiness to start a run.
 
 ## What gets published
 
-The pull request holds benchmark facts: task results, exact versions, timings, tool-call categories, and a safe copy of the configuration recipe. It holds no credentials, local paths, prompts, model prose, raw commands, command output, sessions, or workspaces, and your Hugging Face token only ever goes to the Hub API.
+The pull request holds benchmark facts: task results, exact versions, timings, tool-call categories, and a safe copy of the configuration recipe. It holds no credentials, local paths, prompts, model prose, raw commands, command output, sessions, or workspaces. Local submission credentials go to the Hub API. Official mode also stores the token in the approved caller's GitHub Actions secrets, as described above.
 
 Keep the failures, timeouts, and recovery attempts in the result, because a published number is only useful when it is the real one. If a row is wrong, fix it at its source and rerun instead of editing the exported file.
 
@@ -233,7 +249,7 @@ Once your run is accepted, you can show its score in your own README:
 [![Explicit Edit Benchmark](https://img.shields.io/endpoint?url=https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/resolve/main/badges/pi-agent-ide.json&style=flat-square)](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-agent-ide%40latest)
 ```
 
-The Dataset publishes one badge per harness family under `badges/`, named after the family. Clicking a badge opens the latest harness version’s card while keeping the full comparison visible. This is how they look right now:
+For the original suite, the Dataset publishes one badge per harness family under `badges/`, named after the family. These badges are not Multi-Agent Scores. Clicking a badge opens the latest harness version’s card while keeping the full comparison visible. This is how they look right now:
 
 | Family                       | Badge                                                                                                                                                                                                                                                                                                                      |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -266,18 +282,23 @@ It runs formatting, linting, type checks, the unit and integration tests, and on
 | [Configuration guide](docs/running.md)                               | Per-adapter model and auth details, provider routes, mounts, lower-level commands    |
 | [Share a result](docs/contributing-results.md)                       | The submission flow step by step, and what happens after you open the pull request   |
 | [Benchmark automation and public data](docs/benchmark-automation.md) | The config API, the normalized data format, and the Dataset views                    |
-| [Benchmark tasks](docs/tasks.md)                                     | Every task family, scale, language, Unicode variant, and generation rule             |
-| [Methodology](docs/methodology.md)                                   | What the scores mean, how exact verification works, and how recovery works           |
-| [Architecture](docs/architecture.md)                                 | Where each fact lives, and which layer owns what                                     |
+| [Explicit Edit tasks](docs/tasks.md)                                 | Original task families, scales, languages and generation rules                       |
+| [Explicit Edit methodology](docs/methodology.md)                     | Original Score, byte-exact verification and recovery                                 |
+| [Multi-Agent run guide](docs/multi-agent.md)                         | Shared project, fixed team, dependency graph, preparation and run policy             |
+| [Multi-Agent results](docs/multi-agent-results.md)                   | Joint task credit, barrier/participant links and common statistics                   |
+| [Architecture](docs/architecture.md)                                 | Shared infrastructure, suite boundaries and accepted evidence                        |
 
 ## Skills for coding agents
 
-These are instructions that a coding agent loads on its own rather than documents to read. They live in `.agents/skills/`, and an agent that supports skills picks them up when a task matches, so it is enough to ask for the job.
+Public work skills live in `.agents/skills/`. The whole `.pi/` directory is ignored
+for personal skills, settings and runtime data. Do not force-add it to Git.
+
+These are instructions that a coding agent loads on its own rather than documents to read.
 
 | Skill                           | The job it covers                                                                                     |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `configure-codex-account`       | Run Codex on a ChatGPT subscription, an API-key route, or a Chinese provider such as Z.AI or DeepSeek |
 | `configure-copilot-account`     | Run Copilot on its own GitHub account, a provider key, or an OAuth-only plan through a local bridge   |
 | `add-benchmark-harness`         | Add an adapter for another agent CLI                                                                  |
-| `publish-benchmark-observation` | Run a full observation and open the Dataset pull request                                              |
+| `publish-benchmark-observation` | Select a registered suite, configure the run and publish its observation                              |
 | `review-benchmark-candidate`    | Review, validate, and accept a contributed result                                                     |

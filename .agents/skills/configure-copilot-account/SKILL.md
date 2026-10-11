@@ -8,20 +8,23 @@ compatibility: Linux, Node.js 24+, an installed Copilot CLI, and this repository
 
 The Copilot CLI has three sources of model access, and the adapter keeps them apart in the published
 data. Pick the one your account has; `docs/running.md` explains each in full.
+Keep the suite already selected by `publish-benchmark-observation`; changing the
+account does not change its policy. Model calls need approval, and
+`benchmark:submit` also publishes a candidate.
 
 ## Its own GitHub account
 
 ```sh
-npm run benchmark:submit -- --harness github-copilot-cli-default --model claude-haiku-4.5 --thinking low \
+npm run benchmark:submit -- --suite SUITE --harness github-copilot-cli-default --model claude-haiku-4.5 --thinking low \
   --auth-file "$HOME/.copilot/config.json"
 ```
 
 No provider file, because the CLI already knows your account. `--auth-file` copies that one file into
-the sandbox. Published transport: `harness-native`.
+the sandbox. Published transport: `harness-native`. Replace `SUITE` with the selected registered suite.
 
 A plan or organization can block the CLI itself. The run then stops in a few seconds with
-`Access denied by policy settings`, which GitHub reports, not the benchmark. Two model ids on this
-machine were refused that way, so use the BYOK route below for such an account.
+`Access denied by policy settings`, which GitHub reports, not the benchmark.
+Do not switch accounts or routes silently; ask whether the user wants to use BYOK.
 
 ## A provider key (BYOK)
 
@@ -32,15 +35,18 @@ This is how a Chinese provider is measured through Copilot. Copy the provider bl
 node scripts/prepare-benchmark.mjs --harness github-copilot-cli-default --model glm-5.3-flash --thinking low \
   --provider-file provider.json --env-file private-env.json --auth-file "$HOME/.copilot/config.json" \
   --output /tmp/copilot-byok.json
-npm run benchmark -- run --config /tmp/copilot-byok.json --smoke --task replace-all-10-plain
+npm run benchmark -- raw-run --config /tmp/copilot-byok.json --smoke \
+  --task replace-all-10-plain --run-id NEW_SMOKE_ID
 ```
 
 Fields the adapter uses: `copilotWireApi` (`completions` or `responses`), `copilotModelId`,
 `copilotReasoningEffort`, `copilotMaxPromptTokens`, `copilotMaxOutputTokens`, and `copilotHeadersEnv`.
 Leave `copilotReasoningEffort` off for a model that has no reasoning effort: the CLI refuses the
 request with `Model ... does not support reasoning effort configuration` when the adapter passes
-`--effort` anyway. Published transport: `direct-completions` or `direct-responses`. Verified:
-`glm-5.3-flash` PASS in 30 seconds.
+`--effort` anyway. Published transport: `direct-completions` or `direct-responses`.
+This smoke checks account access with an original-suite task; it does not score
+Multi-Agent or replace its reference proof. Keep the selected suite when returning
+to the publishing skill.
 
 ## An OAuth-only plan, such as a ChatGPT subscription
 
@@ -55,8 +61,8 @@ node scripts/wire-bridge.mjs --upstream http://127.0.0.1:1337 --port 1339 --log 
 
 Then use `examples/openai-subscription.example.json` as the provider file with any non-empty key in
 the env file: the OAuth session authenticates, the key only satisfies the CLI. The bridge must stay
-running for the whole run; a dead bridge shows up as `Connection timed out to provider`. Verified:
-`gpt-5.6-luna` through the subscription, PASS in 24 seconds, published as `direct-responses`.
+running for the whole run; a dead bridge can appear as a provider connection failure.
+Inspect the actual error rather than attributing it to editing. Published transport: `direct-responses`.
 
 ## Keep the secrets local
 

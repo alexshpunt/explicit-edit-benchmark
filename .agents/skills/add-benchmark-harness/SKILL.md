@@ -21,11 +21,7 @@ Add the smallest adapter that lets the existing runner call a new harness. Do no
 
 - **Private or experimental harness**: define it locally with `defineHarness({ createAdapter() })` in a config file. Nothing changes in the repository, and the contributor runs it with `npm run benchmark:submit -- --config FILE`.
 - **Harness that needs several steps** (start a server, spawn a worker thread, read a native timeline): copy `examples/bb/`. It holds a driver script, a timeline parser, and the config that ties them together, and it stays outside the built-in list because it is a starting point, not a verified family.
-- **Reusable harness**: add a built-in adapter. Four places know the adapter list, and all four change together:
-  - `scripts/prepare-benchmark.mjs`: the `makeAdapter` switch, the `ADAPTER_AGENT`, `ADAPTER_IDS`, and `ADAPTER_BINARIES` maps, and the `--harness` validator, because a name missing from them cannot resolve an agent or a binary;
-  - the `--harness` help text in `scripts/prepare-benchmark.mjs`;
-  - the ready adapter list in `usage` in `scripts/benchmark-submit.mjs`;
-  - the adapter tables in `README.md` and `docs/running.md`.
+- **Reusable harness**: register it in `scripts/adapter-registry.mjs`, then implement its adapter in `scripts/prepare-benchmark.mjs`. Keep help text, adapter tests, and the README/configuration tables consistent with that registry. Official support also needs an approved execution plan and release policy; a local preset alone does not authorize official runs.
 
 `createAdapter` receives `{ model, modelId, harnessId, profileId, overrides }` and returns the adapter object.
 
@@ -54,7 +50,18 @@ A recipe tells a reader how to reproduce the public setup. It is not an installe
 4. Implement `continueSession` only when same-session recovery is supported and you have verified it.
 5. Keep raw harness output local. Public exports must exclude prompts, model prose, commands, arguments, output, and file contents.
 
-`ready` only gates a direct `npm run benchmark -- run`. `npm run benchmark:submit` runs its own smoke task and does not need it.
+`ready` gates the lower-level `npm run benchmark -- raw-run`. `npm run benchmark:submit` runs its own smoke task and does not need it.
+
+## Suite independence
+
+Resolve suite selection through `publish-benchmark-observation`; do not embed a
+task count, concurrency, timeout or suite-specific prompt into the adapter.
+Use the common config and result protocol for each supported suite.
+
+For Multi-Agent, exercise several assignments in each participant's own history,
+including simultaneous deliveries, native errors, cancellation and cleanup.
+A one-task auth smoke is not proof of shared-project continuation or isolation.
+Keep public task credit separate from native delivery metrics.
 
 ## Verify
 
@@ -64,7 +71,7 @@ A recipe tells a reader how to reproduce the public setup. It is not an installe
 4. Run a one-task smoke. A paid smoke needs the user's approval.
 5. Check the actual model, reasoning, tools, exit state, normalized calls, and which metrics are available.
 6. Export and validate the bundle, and confirm nothing sensitive got in.
-7. Set `ready: true` only when the adapter will also be used through `npm run benchmark -- run`.
+7. Set `ready: true` only when the adapter will also be used through `npm run benchmark -- raw-run`.
 
 ## What to put in the PR
 
