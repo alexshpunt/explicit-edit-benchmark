@@ -64,7 +64,19 @@ export async function multiAgentMain(args) {
   if (command === "prepare") {
     const { prepareMultiAgent } =
       await import("../src/suites/explicit-edit-multi-agent/prepare.mjs");
-    await prepareMultiAgent(positionals[0], { coherentProof: values["from-coherent"] });
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
+    try {
+      await prepareMultiAgent(positionals[0], {
+        coherentProof: values["from-coherent"],
+        signal: controller.signal,
+      });
+    } finally {
+      process.removeListener("SIGINT", cancel);
+      process.removeListener("SIGTERM", cancel);
+    }
     return;
   }
   if (command === "export") {

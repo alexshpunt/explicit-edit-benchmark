@@ -46,9 +46,10 @@ export async function runMultiAgentBatch({
   signal,
   log = console.log,
 }) {
+  signal?.throwIfAborted();
   if (!preparation) {
     const input = path.join(root, "input");
-    await prepareMultiAgent(input);
+    await prepareMultiAgent(input, { signal });
     preparation = path.join(input, "preparation");
     const proof = await runConcurrent(preparation, path.join(root, "reference-proof"), {
       agents: 15,

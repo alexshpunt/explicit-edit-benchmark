@@ -1,5 +1,5 @@
 import path from "node:path";
-import { writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import {
   closeHarness,
   inspectHarnessOutput,
@@ -10,16 +10,19 @@ import {
 /** Bind an existing benchmark adapter to one participant's durable state.
  * Participants share only the project. Each delivery keeps its own native evidence
  * and uses the same output parser and continuation contract as ordinary trials.
+ * State is private and disposable; artifacts must live outside it. Closing waits
+ * for the owned process before removing state, leaving delivery evidence intact.
  */
 export function harnessParticipant(adapter, { workspace, state, artifacts }) {
   let delivered = false;
   let closed = false;
+  let closing;
   return {
     get closed() {
       return closed;
     },
     async execute(prompt, { signal, round, attempt }) {
-      if (closed) throw Error("Harness participant is closed");
+      if (closed || closing) throw Error("Harness participant is closed");
       const current = delivered
         ? adapter.driver?.persistent
           ? { ...adapter, seedFiles: {}, stateFiles: {} }
@@ -75,7 +78,11 @@ export function harnessParticipant(adapter, { workspace, state, artifacts }) {
         }
         throw failure;
       }
-      if (metrics.providerFailure || execution.exitCode !== 0) {
+      if (
+        metrics.providerFailure ||
+        execution.exitCode !== 0 ||
+        (Array.isArray(errors) && errors.length > 0)
+      ) {
         const error = Error("Harness delivery did not settle successfully");
         error.category = metrics.providerFailure ? "provider_failure" : "driver_exit";
         error.receipt = receipt;
@@ -84,8 +91,12 @@ export function harnessParticipant(adapter, { workspace, state, artifacts }) {
       return receipt;
     },
     async close() {
-      await closeHarness(state);
-      closed = true;
+      closing ??= (async () => {
+        await closeHarness(state);
+        await rm(state, { recursive: true, force: true });
+        closed = true;
+      })();
+      await closing;
     },
   };
 }
