@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Explicit Edit Benchmark" width="560">
+  <img src="assets/logo-multi-agent.png" alt="Explicit Edit — Multi-Agent" width="560">
 </p>
 
 <h1 align="center">Explicit Edit Benchmark</h1>
@@ -23,29 +23,60 @@
   <a href="https://huggingface.co/spaces/alexshpunt/benchmark-explorer?view=harness"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2Falexshpunt%2Fexplicit-edit-benchmark%2Fresolve%2Fmain%2Fsummary.json&query=%24.harnesses&label=harnesses&color=blue" alt="Accepted harness families"></a>
 </p>
 
-## Choose a suite
+## Multi Edit
 
-| Suite                                                                            | What it measures                                                                                             | Workload                                                                                                            | Score                                                                              |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [Explicit Edit](docs/tasks.md) (`explicit-edit`)                                 | Accurate replacements, insertions, deletions, copies and moves, including large files and Unicode edge cases | 226 independent, generated tasks with byte-exact verification                                                       | Coverage and first/final exact correctness; see [methodology](docs/methodology.md) |
-| [Explicit Edit — Multi-Agent](docs/multi-agent.md) (`explicit-edit-multi-agent`) | Concurrent editing of one large existing C++ project, with rotating assignments and separate agent histories | 71 restoration tasks, fixed 15-agent team, cumulative structural checks, fresh builds and unchanged rendered images | Jointly accepted tasks / 71                                                        |
+**One file. 22,743 lines. A team of 15 agents editing the same project concurrently.**
 
-The original suite keeps edits simple so it measures precision rather than domain
-knowledge. Multi-Agent asks agents to extract modules from a shuffled renderer
-monolith and restore names while preserving earlier work and peer edits.
+Multi Edit ([Explicit Edit — Multi-Agent](docs/multi-agent.md),
+`explicit-edit-multi-agent`) tests whether agents can make precise, atomic edits
+and leave the product working, even while other agents change the same code.
+Each requested edit is feasible and checked with a scripted reference engine.
+A dependency graph determines which edits are independent and can run together;
+not every task can start at once, and not all 15 agents are busy at every round.
+
+### Methodology
+
+We take pinned C++ source from [Yocto/GL](https://github.com/xelatihy/yocto-gl),
+prepare a comment-free project, pack its modules into one monolith, shuffle
+function definitions and rename declarations and their bound uses. Agents must
+restore that prepared project through **71 restoration tasks**: refactor the
+monolith into working headers and implementation files and restore the names.
+They must preserve function bodies, literals, macros, inactive branches and
+previously accepted edits. See the [source provenance and licenses](fixtures/explicit-edit-multi-agent/PROVENANCE.md).
+
+The 15 agents share one live workspace, with separate histories and rotating
+assignments. A scripted reference engine proves the full parallel schedule
+before measured agents start. After each round, the verifier checks the combined
+edits, builds a fresh project and renders two scenes twice. Every image must
+match the original pixels exactly.
+
+A failed round allows three corrections without resetting the source or agent
+histories. **Score is the percentage of all 71 tasks jointly accepted.** Local
+runs have no overall or per-delivery deadline. Preparation is model-free but
+CPU-heavy; read the [run guide](docs/multi-agent.md) before starting.
+
+<p align="center">
+  <img src="assets/logo.png" alt="Explicit Edit 1.0" width="560">
+</p>
+
+## Explicit Edit 1.0
+
+Explicit Edit (`explicit-edit`) is an open benchmark for measuring how accurately
+coding agents and agent harnesses edit files across **226 deterministic,
+byte-exact tasks**.
+
+The tasks are small on purpose. None of them needs deep reasoning or domain knowledge: the agent finds the right text, changes it, and leaves every other byte as it was. That keeps the attention on what actually differs between setups, which is the model, the tools, and the harness around them.
+
+There are 226 of them: replacements, insertions, deletions, copies, moves, large files, several file types, and Unicode edge cases. A verifier compares the result byte for byte.
+
+**What the tasks actually are:** [Benchmark tasks](docs/tasks.md) lists every task family, explains what each scale means, and shows how the generator increases context, matches, files, decoys, block size, and Unicode risk. The original [methodology and Score](docs/methodology.md) stay unchanged.
+
+## Shared setup and results
 
 Both suites use the same CLI, harness adapters, model configuration, normalized
 statistics and publication path. Their Scores and rankings stay separate: a
 percentage from one suite is not interchangeable with a percentage from the other.
-Omitting `--suite` still selects the original Explicit Edit.
-
-Multi-Agent has no local run or delivery deadline. Its graph decides which tasks
-can run together; not all 15 agents receive work at every barrier. Preparation is
-model-free but CPU-heavy. Read its [run guide](docs/multi-agent.md) before starting.
-The [calibration observations](docs/multi-agent-calibration.md) document earlier
-runs, including a full Sol 6.1 high team run in about 68 minutes, versus about
-10.5 hours for the earlier single-agent route. Those are historical measurements,
-not a runtime guarantee or new public submissions.
+Omitting `--suite` still selects Explicit Edit 1.0.
 
 Results live in the [Benchmark Explorer](https://huggingface.co/spaces/alexshpunt/benchmark-explorer)
 and the [Hugging Face Dataset](https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark).
