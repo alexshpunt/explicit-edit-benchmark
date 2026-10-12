@@ -21,6 +21,7 @@ import { selectedTasks } from "./focused-selection.mjs";
 import { loadBenchmarkProfiles } from "./benchmark-config.mjs";
 import { assertConfigurationMetadata } from "./normalized-run.mjs";
 import { DEFAULT_BENCHMARK_SUITE, suiteRunOptions } from "./benchmark-suites.mjs";
+import { MULTI_AGENT_POLICY } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const args = process.argv.slice(2);
 if (args.includes("--help")) {
@@ -47,9 +48,13 @@ if (
     "Multi-Agent requires the full untimed workload; smoke and partial selection use the original suite",
   );
 const retryFailures = retryBudget(option("retry-failures", "0"));
-const oracleRecoveries = retryBudget(option("oracle-recoveries", multiAgent ? "3" : "0"));
-if (multiAgent && (retryFailures !== 0 || oracleRecoveries !== 3))
-  throw Error("Multi-Agent uses three retained-state corrections and no fresh retries");
+const oracleRecoveries = retryBudget(
+  option("oracle-recoveries", multiAgent ? String(MULTI_AGENT_POLICY.oracleRecoveries) : "0"),
+);
+if (multiAgent && (retryFailures !== 0 || oracleRecoveries !== MULTI_AGENT_POLICY.oracleRecoveries))
+  throw Error(
+    `Multi-Agent uses ${MULTI_AGENT_POLICY.oracleRecoveries} retained-state corrections and no fresh retries`,
+  );
 if (oracleRecoveries && retryFailures)
   throw Error("Choose fresh retries or oracle recovery, not both");
 const configFile = option("config");

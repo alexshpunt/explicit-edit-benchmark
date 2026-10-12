@@ -8,6 +8,7 @@ import { harnessParticipant } from "./harness-participant.mjs";
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_POLICY,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 import { verifierSha256 } from "./verifier-identity.mjs";
 
@@ -60,10 +61,17 @@ export async function runMultiAgentBatch({
   }
   preparation = path.resolve(preparation);
   const manifest = JSON.parse(await readFile(path.join(preparation, "manifest.json"), "utf8"));
+  assert.deepEqual(
+    manifest.policy,
+    MULTI_AGENT_POLICY,
+    "Unsupported Multi-Agent preparation policy",
+  );
   assert.equal(manifest.tasks, 71, "Multi-Agent always uses the full 71-task workload");
   assert.equal(manifest.graphWidth, 15, "Multi-Agent uses the canonical maximal team");
   const proof = JSON.parse(await readFile(path.join(preparation, "verification-15.json"), "utf8"));
   assert.equal(proof.status, "pass");
+  assert.equal(proof.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent proof protocol");
+  assert.deepEqual(proof.policy, MULTI_AGENT_POLICY, "Unsupported Multi-Agent proof policy");
   const tasks = JSON.parse(await readFile(path.join(preparation, "tasks.json"), "utf8"));
   const json = (file, value) =>
     writeFile(path.join(root, file), JSON.stringify(value, null, 2) + "\n");
@@ -71,7 +79,7 @@ export async function runMultiAgentBatch({
     contract: MULTI_AGENT_PROTOCOL,
     attempts: 1,
     retryFailures: 0,
-    oracleRecoveries: 3,
+    oracleRecoveries: MULTI_AGENT_POLICY.oracleRecoveries,
     concurrency: 15,
     timeoutMs: null,
     harnesses: safeAdapters,

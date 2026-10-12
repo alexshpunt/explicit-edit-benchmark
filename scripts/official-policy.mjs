@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_POLICY,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -58,12 +59,14 @@ function validateTeamRelease(suites) {
   );
   if (
     suite.runPolicy.partialRuns !== true ||
-    suite.runPolicy.oracleRecoveries !== 3 ||
+    suite.runPolicy.oracleRecoveries !== MULTI_AGENT_POLICY.oracleRecoveries ||
     suite.runPolicy.retryFailures !== 0 ||
     suite.runPolicy.concurrency !== 15 ||
     suite.runPolicy.timeoutMs !== null
   )
-    throw Error("policy.suites.multi-agent: expected 15 agents, three corrections and no deadline");
+    throw Error(
+      `policy.suites.multi-agent: expected 15 agents, ${MULTI_AGENT_POLICY.oracleRecoveries} corrections and no deadline`,
+    );
 }
 
 function exactKeys(value, keys, label) {

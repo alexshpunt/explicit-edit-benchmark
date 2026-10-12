@@ -557,9 +557,7 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
       const qualityScore =
         firstExactRate == null || finalExactRate == null
           ? null
-          : group.wallClockObservations.size
-            ? finalExactRate
-            : 0.75 * firstExactRate + 0.25 * finalExactRate;
+          : 0.75 * firstExactRate + 0.25 * finalExactRate;
       const coverage = benchmarkTaskCount ? taskCount / benchmarkTaskCount : null;
       const ranking = providerFailureEligibility(group.observedTrials, group.providerFailureTrials);
       return {

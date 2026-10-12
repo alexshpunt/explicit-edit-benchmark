@@ -7,7 +7,10 @@ import { callData, toolCategory } from "./build-trajectory-analysis.mjs";
 import { inspectHarnessOutput } from "./harness-runtime.mjs";
 import { canonicalModelProvider, loadModelRegistry } from "./model-registry.mjs";
 
-import { MULTI_AGENT_BENCHMARK } from "../src/suites/explicit-edit-multi-agent/results.mjs";
+import {
+  MULTI_AGENT_BENCHMARK,
+  MULTI_AGENT_MAX_ATTEMPTS,
+} from "../src/suites/explicit-edit-multi-agent/results.mjs";
 import { validateTeamSuite, validateTeamTables } from "./normalized-team-protocol.mjs";
 
 export const NORMALIZED_SCHEMA_VERSION = 2;
@@ -286,7 +289,7 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
       if (
         !Number.isInteger(item.attempt) ||
         item.attempt < 1 ||
-        item.attempt > 4 ||
+        item.attempt > MULTI_AGENT_MAX_ATTEMPTS ||
         !Number.isInteger(item.agent) ||
         item.agent < 0 ||
         item.agent >= report.agents

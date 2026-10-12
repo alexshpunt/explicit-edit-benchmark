@@ -11,17 +11,20 @@ export const MULTI_AGENT_PROTOCOL = "shared-project-rotating-v1";
 export const MULTI_AGENT_VERSION = "1";
 /** Version of the safe, standalone result format. */
 export const MULTI_AGENT_RESULT_VERSION = "explicit-edit-multi-agent-result-v1";
-/** Fixed candidate policy; changed policies need a new protocol. */
+/** Fixed policy for the first public Multi-Agent release. */
 export const MULTI_AGENT_POLICY = Object.freeze({
   trialTimeoutMs: null,
   attemptTimeoutMs: null,
-  oracleRecoveries: 3,
+  oracleRecoveries: 5,
   feedbackMode: "coarse",
   workspace: "shared-live",
   checkpoint: "ready-task-barrier",
   commitOrder: "observed-not-prescribed",
   assignment: "rotating-stable-ready-order",
 });
+/** Initial delivery plus the fixed retained-state correction budget. */
+export const MULTI_AGENT_MAX_ATTEMPTS = MULTI_AGENT_POLICY.oracleRecoveries + 1;
+
 const statuses = new Set([
   "pass",
   "blocked",
@@ -230,7 +233,7 @@ export function multiAgentResult(raw) {
   );
   for (const round of accepted) {
     const checks = raw.checks.filter((item) => item.contractId === round.id);
-    assert.ok(checks.length >= 1 && checks.length <= 4);
+    assert.ok(checks.length >= 1 && checks.length <= MULTI_AGENT_MAX_ATTEMPTS);
     for (const [index, check] of checks.entries()) {
       assert.equal(check.label, `${round.id}-attempt-${index + 1}`);
       assert.equal(check.status, index === checks.length - 1 ? "pass" : "fail");
@@ -248,7 +251,11 @@ export function multiAgentResult(raw) {
   if (raw.status === "blocked") {
     assert.equal(raw.terminal.id, next?.id);
     const failures = raw.checks.filter((item) => item.contractId === next.id);
-    assert.equal(failures.length, 4, "Editing stop must exhaust three corrections");
+    assert.equal(
+      failures.length,
+      MULTI_AGENT_MAX_ATTEMPTS,
+      `Editing stop must exhaust ${MULTI_AGENT_POLICY.oracleRecoveries} corrections`,
+    );
     for (const [index, check] of failures.entries()) {
       assert.equal(check.label, `${next.id}-attempt-${index + 1}`);
       assert.equal(check.status, "fail");
@@ -261,7 +268,7 @@ export function multiAgentResult(raw) {
     const round = rounds.get(execution.round);
     assert.ok(round);
     integer(execution.attempt, 1);
-    assert.ok(execution.attempt <= 4);
+    assert.ok(execution.attempt <= MULTI_AGENT_MAX_ATTEMPTS);
     const id = `${execution.round}:${execution.attempt}:${execution.agent}`;
     assert.ok(!deliveries.has(id), "Duplicate agent delivery");
     deliveries.add(id);
