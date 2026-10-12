@@ -6,6 +6,7 @@ import test from "node:test";
 import { tempDirectory } from "../helpers/temp.mjs";
 import { releaseOfficialWorkflow } from "../../scripts/release-official-workflow.mjs";
 import { loadOfficialPolicy } from "../../scripts/official-policy.mjs";
+import { seedTeamReleaseEvidence } from "../helpers/team-release-evidence.mjs";
 
 function git(root, ...args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -35,6 +36,8 @@ async function fixture(t) {
     await mkdir(path.dirname(path.join(benchmark, relative)), { recursive: true });
     await cp(path.resolve(relative), path.join(benchmark, relative), { recursive: true });
   }
+  // This is controlled transaction evidence, not a fresh renderer reference proof.
+  await seedTeamReleaseEvidence(benchmark);
   await symlink(path.resolve("node_modules"), path.join(benchmark, "node_modules"), "dir");
   git(benchmark, "add", ".");
   git(benchmark, "commit", "-m", "Seed tested benchmark");
@@ -75,7 +78,7 @@ async function fixture(t) {
   return { benchmark, callers };
 }
 
-await test("the real local release transaction commits a canonical policy and upgrades both pinned callers", async (t) => {
+await test("the local release transaction validates controlled evidence and upgrades both pinned callers", async (t) => {
   const { benchmark, callers } = await fixture(t);
   const runner = git(benchmark, "rev-parse", "HEAD");
   const result = await releaseOfficialWorkflow({

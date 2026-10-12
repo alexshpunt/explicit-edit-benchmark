@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { pinCallerTemplate } from "../../scripts/release-official-workflow.mjs";
+import { seedTeamReleaseEvidence } from "../helpers/team-release-evidence.mjs";
 
 const old = "a".repeat(40);
 const current = "b".repeat(40);
@@ -97,7 +98,20 @@ test("official releases publish one mutable workflow reference", async () => {
   assert.match(workflow, /RUNNER_SHA:refs\/heads\/official/);
 });
 
-test("reviewed team evidence authorizes only the unchanged full suite and leaves original policy intact", async (t) => {
+test("experimental three-correction proof does not authorize the first public release", async (t) => {
+  const { approvedTeamRelease } = await import("../../scripts/official-team-release.mjs");
+  const { cp, mkdir, rm } = await import("node:fs/promises");
+  const { tempDirectory } = await import("../helpers/temp.mjs");
+  const root = await tempDirectory("historical-team-proof-");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "policies/official-runs"), { recursive: true });
+  await cp(
+    "policies/official-runs/multi-agent-v1.json",
+    path.join(root, "policies/official-runs/multi-agent-v1.json"),
+  );
+  await assert.rejects(approvedTeamRelease(root), /Reference correction budget differs/);
+});
+test("controlled release evidence authorizes only matching source and leaves original policy intact", async (t) => {
   const { prepareReleasePolicy } = await import("../../scripts/release-official-workflow.mjs");
   const { cp, mkdtemp, rm, writeFile } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
@@ -111,6 +125,7 @@ test("reviewed team evidence authorizes only the unchanged full suite and leaves
     await cp(path.resolve(relative), path.join(root, relative), { recursive: true });
   const original = JSON.parse(await readFile("policies/official-runs/v1.json", "utf8"));
   delete original.suites; // Exercise the original-suite policy before team activation.
+  const evidenceFile = await seedTeamReleaseEvidence(root);
   const approved = await prepareReleasePolicy(original, current, root);
   assert.deepEqual(approved.runner, original.runner);
   assert.deepEqual(approved.runPolicy, original.runPolicy);
@@ -121,7 +136,7 @@ test("reviewed team evidence authorizes only the unchanged full suite and leaves
   assert.equal(team.runner.tasks.length, 71);
   assert.deepEqual(team.runPolicy, {
     partialRuns: true,
-    oracleRecoveries: 3,
+    oracleRecoveries: 5,
     retryFailures: 0,
     concurrency: 15,
     timeoutMs: null,
@@ -134,8 +149,18 @@ test("reviewed team evidence authorizes only the unchanged full suite and leaves
   const revoked = structuredClone(original);
   revoked.workflows.push({ sha: current, runnerSha: current, status: "revoked" });
   await assert.rejects(prepareReleasePolicy(revoked, current, root), /reactivate/);
-  const evidenceFile = path.join(root, "policies/official-runs/multi-agent-v1.json");
   const evidence = JSON.parse(await readFile(evidenceFile, "utf8"));
+  for (const [field, value] of [
+    ["contract", "shared-project-rotating-v2"],
+    ["oracleRecoveries", 3],
+  ]) {
+    const changed = structuredClone(evidence);
+    if (field === "contract") changed.release.runner.contract = value;
+    else changed.release.runPolicy.oracleRecoveries = value;
+    await writeFile(evidenceFile, JSON.stringify(changed));
+    await assert.rejects(prepareReleasePolicy(original, current, root), /Reference .* differs/);
+  }
+  await writeFile(evidenceFile, JSON.stringify(evidence));
   const failed = structuredClone(evidence);
   failed.reference.acceptedTasks = 70;
   await writeFile(evidenceFile, JSON.stringify(failed));

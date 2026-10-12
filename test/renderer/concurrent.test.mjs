@@ -321,7 +321,7 @@ await test(
 );
 
 await test(
-  "a peer regression remains visible through three coarse corrections and no reset or later delivery",
+  "a peer regression remains visible through five coarse corrections and no reset or later delivery",
   { timeout: 120000 },
   async (t) => {
     const seen = new Set();
@@ -346,12 +346,12 @@ await test(
     assert.equal(safe.configuration.runtime.version, "1.0.1");
     assert.equal(report.acceptedTasks, 4);
     assert.equal(report.acceptedRounds, 1);
-    assert.equal(report.repairs, 12);
-    assert.equal(report.deliveries, 20);
+    assert.equal(report.repairs, 20);
+    assert.equal(report.deliveries, 28);
     assert.equal(
       report.checks.filter((check) => check.status === "fail" && check.category === "structure")
         .length,
-      4,
+      6,
     );
     assert.ok(report.agentsClosed.every(Boolean));
     assert.ok(
@@ -361,7 +361,7 @@ await test(
     );
     assert.equal(
       (await readFile(path.join(f.output, "workspace/corrections.txt"), "utf8")).length,
-      "retained".length * 12,
+      "retained".length * 20,
     );
     await assert.rejects(access(path.join(f.output, "verification.json")), { code: "ENOENT" });
   },

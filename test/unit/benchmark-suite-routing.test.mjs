@@ -114,7 +114,7 @@ test("the real raw CLI rejects invalid team policy before opening a harness conf
     { flags: ["--concurrency", "1"], error: /15.*agents|agents.*15/ },
     { flags: ["--task", "task-001"], error: /full.*workload|partial/ },
     { flags: ["--smoke"], error: /full.*untimed.*workload/ },
-    { flags: ["--oracle-recoveries", "5"], error: /three.*corrections/ },
+    { flags: ["--oracle-recoveries", "3"], error: /5.*corrections/ },
     { flags: ["--timeout-seconds", "120"], error: /untimed.*workload/ },
   ];
   for (const { flags, error } of cases) {
@@ -160,7 +160,7 @@ test("submission retains the fixed team policy without passing suite options to 
   ]);
   assert.equal(options.suite, "explicit-edit-multi-agent");
   assert.equal(options.concurrency, 15);
-  assert.equal(options.oracleRecoveries, 3);
+  assert.equal(options.oracleRecoveries, 5);
   assert.equal(options.timeoutSeconds, null);
   assert.deepEqual(options.prepareArgs, [
     "--harness",
