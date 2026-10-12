@@ -7,6 +7,9 @@ import {
   exportMultiAgentResult,
   multiAgentResult,
   validateMultiAgentResult,
+  MULTI_AGENT_POLICY,
+  MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_MAX_ATTEMPTS,
 } from "../../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -18,7 +21,7 @@ function report(status = "blocked") {
   const checks = [{ label: "initial", contractId: "initial", status: "pass" }];
   const executions = [];
   for (const [index, round] of schedule.entries()) {
-    const attempts = index === 1 && status === "blocked" ? 4 : 1;
+    const attempts = index === 1 && status === "blocked" ? MULTI_AGENT_MAX_ATTEMPTS : 1;
     for (let attempt = 1; attempt <= attempts; attempt++) {
       checks.push({
         label: `${round.id}-attempt-${attempt}`,
@@ -40,7 +43,7 @@ function report(status = "blocked") {
   return {
     version: "renderer-concurrent-run-v1",
     benchmark: "explicit-edit-multi-agent",
-    protocol: "shared-project-rotating-v1",
+    protocol: MULTI_AGENT_PROTOCOL,
     runtime: { agent: "pi", version: "1.0.1", platform: "linux", architecture: "x64" },
     mode: "live",
     status,
@@ -67,16 +70,7 @@ function report(status = "blocked") {
     model: "example/model",
     thinking: "high",
     harness: "baseline-agent",
-    policy: {
-      trialTimeoutMs: null,
-      attemptTimeoutMs: null,
-      oracleRecoveries: 3,
-      feedbackMode: "coarse",
-      workspace: "shared-live",
-      checkpoint: "ready-task-barrier",
-      commitOrder: "observed-not-prescribed",
-      assignment: "rotating-stable-ready-order",
-    },
+    policy: { ...MULTI_AGENT_POLICY },
     terminal:
       status === "blocked"
         ? {
@@ -247,4 +241,29 @@ await test("provider, driver and cancellation stops keep their accepted prefix w
     assert.ok(!JSON.stringify(safe).includes("private upstream"));
   }
   assert.throws(() => multiAgentResult({ ...report(), status: "running" }));
+});
+
+await test("standalone projection admits sixth-attempt acceptance but rejects premature exhaustion and v1 relabeling", () => {
+  const repaired = report();
+  repaired.status = "pass";
+  repaired.acceptedRounds = 2;
+  repaired.acceptedTasks = 2;
+  repaired.terminal = null;
+  repaired.checks.at(-1).status = "pass";
+  delete repaired.checks.at(-1).category;
+  const safe = multiAgentResult(repaired);
+  assert.equal(safe.progress.acceptedTasks, 2);
+  assert.equal(safe.execution.repairs, 5);
+  for (const count of [4, 5]) {
+    const premature = report();
+    premature.checks = premature.checks.slice(0, 2 + count);
+    premature.executions = premature.executions.slice(0, 1 + count);
+    premature.deliveries = premature.executions.length;
+    premature.repairs = count - 1;
+    assert.throws(() => multiAgentResult(premature), /exhaust/);
+  }
+  const historical = report();
+  historical.protocol = "shared-project-rotating-v1";
+  historical.policy.oracleRecoveries = 3;
+  assert.throws(() => multiAgentResult(historical));
 });

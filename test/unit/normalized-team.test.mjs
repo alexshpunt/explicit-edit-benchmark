@@ -73,7 +73,7 @@ function fixture() {
       { label: "initial", status: "pass" },
       { label: "round-001-attempt-1", status: "fail", category: "structure" },
       { label: "round-001-attempt-2", status: "pass" },
-      ...[1, 2, 3, 4].map((attempt) => ({
+      ...[1, 2, 3, 4, 5, 6].map((attempt) => ({
         label: `round-002-attempt-${attempt}`,
         status: "fail",
         category: "structure",
@@ -84,7 +84,7 @@ function fixture() {
       execution(1, 1, metrics),
       execution(0, 2, metrics),
       execution(1, 2, metrics),
-      ...[1, 2, 3, 4].map((attempt) => ({
+      ...[1, 2, 3, 4, 5, 6].map((attempt) => ({
         round: "round-002",
         attempt,
         agent: 0,
@@ -109,7 +109,7 @@ const initial = "a".repeat(64);
 test("barrier task credit remains joint while each native delivery is recorded exactly once", () => {
   const { trials, rounds } = normalizeTeamReport(fixture(), profile, initial);
   assert.equal(trials.length, 2);
-  assert.equal(rounds.length, 8);
+  assert.equal(rounds.length, 10);
   assert.deepEqual(trials[0].taskIds, ["task-001", "task-002", "task-003"]);
   assert.equal(trials[0].firstExactPassed, false);
   assert.equal(trials[0].finalExactPassed, true);
@@ -128,7 +128,7 @@ test("barrier task credit remains joint while each native delivery is recorded e
   );
   assert.equal(
     rounds.reduce((sum, round) => sum + round.toolCallCount, 0),
-    8,
+    10,
   );
   assert.deepEqual(
     rounds.slice(0, 4).map((round) => [round.agent, round.barrierAttempt]),
@@ -244,7 +244,7 @@ await test("the common exporter and validator carry a team bundle without duplic
       contract: MULTI_AGENT_PROTOCOL,
       suite,
       harnesses: { custom: adapter },
-      oracleRecoveries: 3,
+      oracleRecoveries: 5,
       retryFailures: 0,
       concurrency: 15,
       timeoutMs: null,
@@ -287,8 +287,8 @@ await test("the common exporter and validator carry a team bundle without duplic
   assert.equal(manifest.policy.timeoutMs, null);
   assert.equal(manifest.taskSetSha256, suite.workloadSha256);
   assert.equal(manifest.counts.trials, 28);
-  assert.equal(manifest.counts.rounds, 8);
-  assert.equal(manifest.counts.toolCalls, 8);
+  assert.equal(manifest.counts.rounds, 10);
+  assert.equal(manifest.counts.toolCalls, 10);
   await validateNormalizedRun(output);
   const policy = JSON.parse(
     await readFile(new URL("../../policies/official-runs/v1.json", import.meta.url), "utf8"),
@@ -500,7 +500,7 @@ await test("the common exporter and validator carry a team bundle without duplic
   assert.equal(officialSummary.observations, 71);
   assert.equal(officialSummary.efficiency[0].durationSeconds, 12.345);
   const officialLeaderboard = published.get("leaderboard.json").toString("utf8");
-  assert.ok(officialLeaderboard.includes(String(3 / 71)));
+  assert.ok(officialLeaderboard.includes(String(0.25 * (3 / 71))));
   const metadata = await submissionMetadata(output, manifest.runId);
   assert.equal(metadata.definitions.benchmark.id, MULTI_AGENT_BENCHMARK);
   assert.equal(metadata.definitions.benchmark.contract, MULTI_AGENT_PROTOCOL);
@@ -529,7 +529,7 @@ await test("the common exporter and validator carry a team bundle without duplic
   const leaderboard = JSON.parse(
     await readFile(path.join(publicDirectory, "leaderboard.json"), "utf8"),
   );
-  assert.ok(JSON.stringify(leaderboard).includes(String(3 / 71)));
+  assert.ok(JSON.stringify(leaderboard).includes(String(0.25 * (3 / 71))));
   const trials = (await readFile(path.join(output, "trials.jsonl"), "utf8"))
     .trim()
     .split("\n")
@@ -562,9 +562,9 @@ await test("the common exporter and validator carry a team bundle without duplic
     await table("rounds.jsonl"),
   );
   assert.equal(aggregate.taskCount, 71);
-  assert.equal(aggregate.score, 3 / 71);
+  assert.equal(aggregate.score, 0.25 * (3 / 71));
   assert.equal(aggregate.finalExactPasses, 3);
-  assert.equal(aggregate.recoveryRounds, 4);
+  assert.equal(aggregate.recoveryRounds, 6);
   assert.equal(aggregate.cost.total, 1);
   assert.equal(aggregate.tokens.total, 56);
   assert.equal(aggregate.durationSummary.coveredRun, 12.345);
@@ -639,7 +639,7 @@ await test("the common exporter and validator carry a team bundle without duplic
       await interruptedTable("trials"),
       await interruptedTable("rounds"),
     );
-    assert.equal(interruptedAggregate.score, 3 / 71);
+    assert.equal(interruptedAggregate.score, 0.25 * (3 / 71));
     assert.equal(interruptedAggregate.infrastructureFailures, 1);
     assert.equal(
       interruptedAggregate.providerFailureRate,

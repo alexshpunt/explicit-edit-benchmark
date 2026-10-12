@@ -6,6 +6,7 @@ import { runConcurrent } from "../../src/suites/explicit-edit-multi-agent/execut
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_POLICY,
 } from "../../src/suites/explicit-edit-multi-agent/results.mjs";
 import { suiteVerifier } from "../../scripts/run-multi-agent-batch.mjs";
 import { exportNormalizedRun } from "../../scripts/normalized-run.mjs";
@@ -46,7 +47,7 @@ await test(
       writeFile(path.join(root, file), JSON.stringify(value, null, 2) + "\n");
     await json("manifest.json", {
       contract: MULTI_AGENT_PROTOCOL,
-      oracleRecoveries: 3,
+      oracleRecoveries: MULTI_AGENT_POLICY.oracleRecoveries,
       retryFailures: 0,
       concurrency: 15,
       timeoutMs: null,
