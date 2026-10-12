@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   MULTI_AGENT_BENCHMARK,
-  MULTI_AGENT_PROTOCOL,
+  multiAgentCorrectionBudget,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const statuses = new Set([
@@ -24,7 +24,9 @@ function keys(value, expected) {
   );
 }
 
-/** Validate the public maximal-team protocol and its workload/schedule bindings. */
+/** Validate a recognized maximal-team protocol, its exact correction policy and
+ * workload/schedule bindings, including historical v1 evidence.
+ */
 export function validateTeamSuite(suite, contract, policy) {
   keys(suite, [
     "id",
@@ -38,12 +40,12 @@ export function validateTeamSuite(suite, contract, policy) {
     "observations",
   ]);
   assert.equal(suite.id, MULTI_AGENT_BENCHMARK);
-  assert.equal(suite.protocol, MULTI_AGENT_PROTOCOL);
-  assert.equal(contract, MULTI_AGENT_PROTOCOL);
+  const oracleRecoveries = multiAgentCorrectionBudget(suite.protocol);
+  assert.equal(contract, suite.protocol);
   assert.equal(suite.agents, 15);
   assert.equal(suite.graphWidth, 15);
   assert.deepEqual(policy, {
-    oracleRecoveries: 3,
+    oracleRecoveries,
     retryFailures: 0,
     concurrency: 15,
     timeoutMs: null,
@@ -95,8 +97,12 @@ export function validateTeamSuite(suite, contract, policy) {
   }
 }
 
-/** Verify joint task credit and participant delivery links, without inventing per-agent scores. */
+/** Verify joint task credit and participant delivery links against the recorded
+ * protocol's correction budget, without inventing per-agent scores.
+ */
 export function validateTeamTables(suite, profiles, trials, rounds) {
+  const oracleRecoveries = multiAgentCorrectionBudget(suite.protocol);
+  const maxAttempts = oracleRecoveries + 1;
   assert.deepEqual(
     suite.observations.map((item) => item.profileId).sort(),
     profiles.map((item) => item.profileId).sort(),
@@ -120,7 +126,7 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
         assert.ok(
           Number.isInteger(delivery.barrierAttempt) &&
             delivery.barrierAttempt >= 0 &&
-            delivery.barrierAttempt <= 3,
+            delivery.barrierAttempt < maxAttempts,
         );
         const assigned = barrier.assignments
           .filter((item) => item.agent === delivery.agent)
@@ -163,7 +169,11 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
     if (observation.status === "pass") assert.ok(!stopped, "Passing team has unaccepted tasks");
     else assert.ok(stopped, "Stopped team has completed the workload");
     if (observation.status === "blocked") {
-      assert.equal(failed.attempts.size, 4, "Editing block did not exhaust three corrections");
+      assert.equal(
+        failed.attempts.size,
+        maxAttempts,
+        `Editing block did not exhaust ${oracleRecoveries} corrections`,
+      );
       assert.ok(
         failed.deliveries.every((item) => item.difference === "other"),
         "Editing block lacks failed grading evidence",

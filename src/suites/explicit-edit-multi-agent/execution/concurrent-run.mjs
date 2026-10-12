@@ -16,7 +16,12 @@ import {
 import { startBaseline, finalizedUsage } from "./pi-baseline.mjs";
 import { readSharedSource } from "../reference/concurrent-commit.mjs";
 import { REFERENCE_PLANNER_SLOTS } from "../reference/concurrent-planners.mjs";
-import { MULTI_AGENT_BENCHMARK, MULTI_AGENT_PROTOCOL } from "../results.mjs";
+import {
+  MULTI_AGENT_BENCHMARK,
+  MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_POLICY,
+  MULTI_AGENT_MAX_ATTEMPTS,
+} from "../results.mjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function feedback(category) {
@@ -28,7 +33,7 @@ function feedback(category) {
 /** Run real persistent agents concurrently against one writable project. The DAG
  * fixes safe readiness; team size sets round membership and ownership rotates.
  * Grading happens
- * after all participants settle. Three coarse repairs retain every agent's edits
+ * after all participants settle. Coarse repairs up to the fixed policy budget retain every agent's edits
  * and history. A failed barrier stops the verified team prefix, not an invented
  * per-agent score. Live trials require an exact matching scripted team proof.
  * Reference CAS conflict counts are observable; live counts stay unknown unless
@@ -60,6 +65,11 @@ export async function runConcurrent(
   try {
     const manifest = await json(path.join(preparation, "manifest.json"));
     assert.equal(manifest.version, "renderer-concurrent-v2");
+    assert.deepEqual(
+      manifest.policy,
+      MULTI_AGENT_POLICY,
+      "Unsupported Multi-Agent preparation policy",
+    );
     const bytes = await readFile(path.join(preparation, "tasks.json"));
     assert.equal(digest(bytes), manifest.workloadSha256);
     const taskList = JSON.parse(bytes);
@@ -95,6 +105,8 @@ export async function runConcurrent(
     if (live) {
       const proof = await json(path.join(preparation, `verification-${agents}.json`));
       assert.equal(proof.status, "pass", "Concurrent live runs need a matched scripted proof");
+      assert.equal(proof.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent proof protocol");
+      assert.deepEqual(proof.policy, MULTI_AGENT_POLICY, "Unsupported Multi-Agent proof policy");
       assert.equal(proof.workloadSha256, manifest.workloadSha256);
       assert.equal(proof.scheduleSha256, scheduleSha256);
       assert.deepEqual(proof.contractHashes, contractHashes);
@@ -247,8 +259,10 @@ export async function runConcurrent(
     for (const round of schedule) {
       signal.throwIfAborted();
       let failure;
-      for (let attempt = 1; attempt <= 4; attempt++) {
-        log(`EDIT ${round.id}: ${agents} persistent agents, attempt ${attempt}/4`);
+      for (let attempt = 1; attempt <= MULTI_AGENT_MAX_ATTEMPTS; attempt++) {
+        log(
+          `EDIT ${round.id}: ${agents} persistent agents, attempt ${attempt}/${MULTI_AGENT_MAX_ATTEMPTS}`,
+        );
         const participants = Array.from({ length: agents }, (_, agent) => ({
           agent,
           assigned: round.assignments
@@ -327,8 +341,10 @@ export async function runConcurrent(
         } catch (error) {
           if (!["structure", "build", "behavior"].includes(error.category)) throw error;
           failure = error;
-          log(`FAIL ${round.id}: attempt ${attempt}/4 [${error.category}]`);
-          if (attempt === 4) {
+          log(
+            `FAIL ${round.id}: attempt ${attempt}/${MULTI_AGENT_MAX_ATTEMPTS} [${error.category}]`,
+          );
+          if (attempt === MULTI_AGENT_MAX_ATTEMPTS) {
             report.status = "blocked";
             report.terminal = {
               id: round.id,
@@ -383,6 +399,8 @@ export async function runConcurrent(
   if (!live && report.status === "pass") {
     const proof = {
       status: "pass",
+      protocol: report.protocol,
+      policy: report.policy,
       agents,
       workloadSha256: report.workloadSha256,
       scheduleSha256: report.scheduleSha256,

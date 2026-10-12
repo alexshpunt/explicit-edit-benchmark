@@ -1,3 +1,4 @@
+import { MULTI_AGENT_LEGACY_PROTOCOL } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 const metricNames = ["duration", "cost", "tokens"];
 /** Per-trial sample fields for each observed metric. */
 const SAMPLE_FIELDS = { duration: "seconds", cost: "costUsd", tokens: "tokens" };
@@ -557,7 +558,7 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
       const qualityScore =
         firstExactRate == null || finalExactRate == null
           ? null
-          : group.wallClockObservations.size
+          : sampleRun.suite?.protocol === MULTI_AGENT_LEGACY_PROTOCOL
             ? finalExactRate
             : 0.75 * firstExactRate + 0.25 * finalExactRate;
       const coverage = benchmarkTaskCount ? taskCount / benchmarkTaskCount : null;

@@ -4,7 +4,12 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { suiteVerifier } from "./run-multi-agent-batch.mjs";
-import { MULTI_AGENT_BENCHMARK } from "../src/suites/explicit-edit-multi-agent/results.mjs";
+import {
+  MULTI_AGENT_BENCHMARK,
+  MULTI_AGENT_POLICY,
+  MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_VERSION,
+} from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 /** Hash the bundled fixture as portable relative names and exact file bytes. */
 export async function teamFixtureSources(root = process.cwd()) {
@@ -36,10 +41,31 @@ export async function teamFixtureSources(root = process.cwd()) {
  * has been reviewed and recorded. This does not call models or publish results.
  */
 export async function approvedTeamRelease(root = process.cwd()) {
+  const evidenceFile = path.join(
+    root,
+    `policies/official-runs/multi-agent-v${MULTI_AGENT_VERSION}.json`,
+  );
   const evidence = JSON.parse(
-    await readFile(path.join(root, "policies/official-runs/multi-agent-v1.json"), "utf8"),
+    await readFile(evidenceFile, "utf8").catch((cause) => {
+      throw Error(
+        "Cannot read a reviewed full reference proof for the current Multi-Agent version",
+        {
+          cause,
+        },
+      );
+    }),
   );
   assert.equal(evidence.schemaVersion, 1);
+  assert.equal(
+    evidence.release.runner.contract,
+    MULTI_AGENT_PROTOCOL,
+    "Reference protocol differs",
+  );
+  assert.equal(
+    evidence.release.runPolicy.oracleRecoveries,
+    MULTI_AGENT_POLICY.oracleRecoveries,
+    "Reference correction budget differs",
+  );
   assert.match(evidence.sourceCommit, /^[a-f0-9]{40}$/);
   assert.match(evidence.reference.reportSha256, /^[a-f0-9]{64}$/);
   assert.match(evidence.reference.normalizedSha256, /^[a-f0-9]{64}$/);

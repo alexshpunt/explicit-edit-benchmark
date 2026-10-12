@@ -7,6 +7,7 @@ import { readTree, writeTree, treeIdentity } from "../generation/generator.mjs";
 import { contractTransition, dependencyGraph, rotatingSchedule } from "./concurrent-schedule.mjs";
 
 import { checkpointContracts } from "../grading/concurrent-contracts.mjs";
+import { MULTI_AGENT_POLICY } from "../results.mjs";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const normalized = (contract) => ({
   ...contract,
@@ -110,16 +111,7 @@ export async function prepareConcurrent(coherentPath, outputPath) {
     tasks: source.tasks,
     graphWidth: graph.width,
     defaultAgents: graph.width,
-    policy: {
-      trialTimeoutMs: null,
-      attemptTimeoutMs: null,
-      oracleRecoveries: 3,
-      feedbackMode: "coarse",
-      workspace: "shared-live",
-      checkpoint: "ready-task-barrier",
-      commitOrder: "observed-not-prescribed",
-      assignment: "rotating-stable-ready-order",
-    },
+    policy: { ...MULTI_AGENT_POLICY },
   };
   await writeFile(path.join(output, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
   console.log(

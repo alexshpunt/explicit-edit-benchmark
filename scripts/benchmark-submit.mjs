@@ -15,8 +15,8 @@ import {
 
 import {
   MULTI_AGENT_BENCHMARK,
-  MULTI_AGENT_PROTOCOL,
-  MULTI_AGENT_VERSION,
+  MULTI_AGENT_POLICY,
+  multiAgentVersion,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -55,7 +55,7 @@ Ready adapters: pi-default, baseline-agent, pi-agent-ide, codex-cli-default, ope
 
 Run policy:
   --suite SUITE         explicit-edit (default) or explicit-edit-multi-agent
-                       Multi-Agent always uses all 71 tasks, 15 agents, three retained-state
+                       Multi-Agent always uses all 71 tasks, 15 agents, ${MULTI_AGENT_POLICY.oracleRecoveries} retained-state
                        corrections and no deadline. No partial, smaller-team or fresh retry run.
   --concurrency N       original-suite parallel trials, default 10
   --timeout-seconds N   per-attempt limit, default 120. A harness that starts a server or a
@@ -94,7 +94,7 @@ export function submitOptions(args) {
     throw Error("timeout-seconds must be a positive integer");
   const policy = {
     concurrency,
-    oracleRecoveries: multiAgent ? 3 : 5,
+    oracleRecoveries: multiAgent ? MULTI_AGENT_POLICY.oracleRecoveries : 5,
     timeoutSeconds,
     ...(multiAgent ? { suite: scheduling.suite } : {}),
   };
@@ -199,8 +199,8 @@ export async function submissionMetadata(normalized, runId) {
       runner: { ...explicitEditRunner, version: explicitEditVersion },
       benchmark: {
         id: manifest.suite?.id ?? explicitEditBenchmarkId,
-        version: manifest.suite ? MULTI_AGENT_VERSION : explicitEditVersion,
-        contract: manifest.suite ? MULTI_AGENT_PROTOCOL : explicitEditContract,
+        version: manifest.suite ? multiAgentVersion(manifest.suite.protocol) : explicitEditVersion,
+        contract: manifest.suite?.protocol ?? explicitEditContract,
         kind: "official",
         hash: manifest.taskSetSha256,
       },
