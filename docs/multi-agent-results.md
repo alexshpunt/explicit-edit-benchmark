@@ -3,8 +3,8 @@
 Multi-Agent uses normalized schema **3**, the same five public tables and the
 same submission/store/report machinery as Explicit Edit. The original suite
 keeps schemas 1/2 and its existing scoring rules. Benchmark id is
-`explicit-edit-multi-agent`; current benchmark version is 2 and execution contract
-is `shared-project-rotating-v2`.
+`explicit-edit-multi-agent`; benchmark version is 1 and execution contract
+is `shared-project-rotating-v1`.
 
 ## Tables and joint credit
 
@@ -72,18 +72,9 @@ facts, host paths and free-form terminal messages. Review public identity labels
 before sharing: no pattern scanner can recognize every secret hidden in a name.
 Raw evidence and private configuration stay outside Git and Dataset uploads.
 
-## Historical protocol
-
-Schema 3 readers also recognize `shared-project-rotating-v1`, with three
-corrections and completion-only Score. The exact recorded protocol selects its
-policy; v1 evidence cannot claim five corrections, and v2 evidence cannot stop
-as an editing block after only three. Historical signed bundles and approval
-records stay unchanged. Rankings keep the two versions separate.
-
 ## Earlier candidate exports
 
-`explicit-edit-multi-agent-result-v1` names the standalone diagnostic JSON format,
-not the execution protocol. The current developer exporter handles v2 runs only;
-inspect historical v1 raw reports with their pinned v1 tooling. Standalone exports
-are not common submission bundles and must not be silently converted into
-authenticated observations. Historical calibration evidence stays unchanged.
+`explicit-edit-multi-agent-result-v1` is the standalone diagnostic JSON format,
+not the common submission bundle. Current tooling requires the five-correction
+public policy. Inspect earlier experimental reports with their pinned tooling;
+do not relabel them as public results. Calibration evidence stays unchanged.

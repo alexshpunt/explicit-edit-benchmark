@@ -135,9 +135,9 @@ rate). Each canonical task has equal weight. Multi-Agent tasks inherit their
 barrier's joint grade; a barrier's size does not change any task's weight. Its
 full scope is 71 tasks, including the unreached suffix.
 
-Historical Multi-Agent v1 keeps its completion-only Score and three-correction
-policy. Current v2 allows five corrections, like the original suite. Protocol
-and benchmark version keep those observations in separate comparison groups.
+Multi-Agent's first public release allows five corrections, like the original
+suite. Earlier calibration runs used an experimental three-correction policy;
+they are not published benchmark results.
 
 Rankings stay separate by suite and comparable policy. Duration, cost, tokens,
 corrections and tool usage remain shared statistical facts; they do not weight

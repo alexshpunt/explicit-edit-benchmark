@@ -45,9 +45,9 @@ score. Duration, cost and delivery counts do not weight Score.
 
 A team that passes every task initially scores 100%. A team that passes every task
 only after corrections scores 25%. Completion remains a separate statistic.
-This is benchmark version 2, protocol `shared-project-rotating-v2`. Historical v1
-results retain their three-correction policy and completion-only Score; they do
-not enter the same comparison group.
+This is the first public benchmark version, protocol `shared-project-rotating-v1`.
+Earlier calibration runs used three corrections; their experimental reports
+remain unchanged and are not published results under this contract.
 
 **Local team runs have no overall or delivery deadline.** They can continue
 indefinitely and spend model credit. Cancel with Ctrl+C or SIGTERM. Owned agent
@@ -152,10 +152,11 @@ signed archive and attestation path, with an explicitly approved suite registry.
 
 ## Official release gate
 
-The producer and validator support suite selection. Version 2 is not authorized
-for official runs until a fresh full reference proof has been reviewed and stored
-as `policies/official-runs/multi-agent-v2.json`. The historical v1 record cannot
-authorize this changed correction and scoring contract. Maintainers
+The producer and validator support suite selection. Official Multi-Agent runs
+remain unapproved until a fresh full reference proof for the five-correction
+policy has been reviewed and recorded in `policies/official-runs/multi-agent-v1.json`.
+The existing experimental proof uses three corrections and cannot authorize the
+public contract. Maintainers
 must approve canonical workload, graph, schedule, fixture and verifier identities,
 release the pinned workflow and update the caller's suite input before official
 Multi-Agent runs can be used. Unapproved runs must stop before model calls; old
