@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   MULTI_AGENT_BENCHMARK,
-  multiAgentCorrectionBudget,
+  MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_POLICY,
+  MULTI_AGENT_MAX_ATTEMPTS,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const statuses = new Set([
@@ -24,9 +26,7 @@ function keys(value, expected) {
   );
 }
 
-/** Validate a recognized maximal-team protocol, its exact correction policy and
- * workload/schedule bindings, including historical v1 evidence.
- */
+/** Validate the maximal-team protocol, fixed policy and workload/schedule bindings. */
 export function validateTeamSuite(suite, contract, policy) {
   keys(suite, [
     "id",
@@ -40,12 +40,12 @@ export function validateTeamSuite(suite, contract, policy) {
     "observations",
   ]);
   assert.equal(suite.id, MULTI_AGENT_BENCHMARK);
-  const oracleRecoveries = multiAgentCorrectionBudget(suite.protocol);
-  assert.equal(contract, suite.protocol);
+  assert.equal(suite.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent protocol");
+  assert.equal(contract, MULTI_AGENT_PROTOCOL);
   assert.equal(suite.agents, 15);
   assert.equal(suite.graphWidth, 15);
   assert.deepEqual(policy, {
-    oracleRecoveries,
+    oracleRecoveries: MULTI_AGENT_POLICY.oracleRecoveries,
     retryFailures: 0,
     concurrency: 15,
     timeoutMs: null,
@@ -97,12 +97,10 @@ export function validateTeamSuite(suite, contract, policy) {
   }
 }
 
-/** Verify joint task credit and participant delivery links against the recorded
- * protocol's correction budget, without inventing per-agent scores.
- */
+/** Verify joint task credit and participant delivery links without per-agent scores. */
 export function validateTeamTables(suite, profiles, trials, rounds) {
-  const oracleRecoveries = multiAgentCorrectionBudget(suite.protocol);
-  const maxAttempts = oracleRecoveries + 1;
+  assert.equal(suite.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent protocol");
+  const maxAttempts = MULTI_AGENT_MAX_ATTEMPTS;
   assert.deepEqual(
     suite.observations.map((item) => item.profileId).sort(),
     profiles.map((item) => item.profileId).sort(),
@@ -172,7 +170,7 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
       assert.equal(
         failed.attempts.size,
         maxAttempts,
-        `Editing block did not exhaust ${oracleRecoveries} corrections`,
+        `Editing block did not exhaust ${MULTI_AGENT_POLICY.oracleRecoveries} corrections`,
       );
       assert.ok(
         failed.deliveries.every((item) => item.difference === "other"),
