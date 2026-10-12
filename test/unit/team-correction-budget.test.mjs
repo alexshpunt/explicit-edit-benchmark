@@ -142,46 +142,17 @@ await test("public maximal-team evidence uses five corrections without deadlines
     assert.throws(() => validateTeamSuite(suite, MULTI_AGENT_PROTOCOL, { ...policy, ...changed }));
 });
 
-await test("historical schema-3 evidence keeps its exact four-attempt exhaustion boundary", () => {
-  const value = evidence(4, false, "shared-project-rotating-v1");
+await test("experimental three-correction evidence is not a public release contract", () => {
   const suite = fullSuite();
-  suite.protocol = value.suite.protocol;
-  suite.observations = value.suite.observations;
-  const trials = suite.schedule.map((barrier, index) => ({
-    profileId: "team",
-    trialId: barrier.id,
-    taskId: barrier.id,
-    taskIds: barrier.assignments.map((assignment) => assignment.task),
-    firstExactPassed: index === 0,
-    finalExactPassed: index === 0,
-  }));
-  const rounds = suite.schedule.slice(0, 2).flatMap((barrier, index) =>
-    Array.from({ length: index === 0 ? 1 : 4 }, (_, barrierAttempt) =>
-      barrier.assignments.map(({ task, agent }) => ({
-        trialId: barrier.id,
-        barrierAttempt,
-        agent,
-        taskIds: [task],
-        exactPassed: index === 0,
-        difference: index === 0 ? null : "other",
-      })),
-    ).flat(),
-  );
   const policy = { oracleRecoveries: 3, retryFailures: 0, concurrency: 15, timeoutMs: null };
-  validateTeamSuite(suite, suite.protocol, policy);
-  validateTeamTables(suite, value.profiles, trials, rounds);
-  assert.throws(() => validateTeamSuite(suite, suite.protocol, { ...policy, oracleRecoveries: 5 }));
-  const modern = { ...suite, protocol: MULTI_AGENT_PROTOCOL };
-  assert.throws(() => validateTeamSuite(modern, modern.protocol, policy));
-  validateTeamSuite(modern, modern.protocol, { ...policy, oracleRecoveries: 5 });
-  assert.throws(() => validateTeamTables(modern, value.profiles, trials, rounds), /exhaust/);
-  assert.throws(() => validateEvidence(evidence(5, false, "shared-project-rotating-v1")));
+  assert.throws(() => validateTeamSuite(suite, suite.protocol, policy));
+  assert.throws(() => validateEvidence(evidence(4, false)), /exhaust/);
 });
 
 await test("unknown or mismatched team protocols cannot borrow a recognized correction budget", () => {
   const suite = fullSuite();
   const policy = { oracleRecoveries: 5, retryFailures: 0, concurrency: 15, timeoutMs: null };
-  assert.throws(() => validateTeamSuite(suite, "shared-project-rotating-v1", policy));
+  assert.throws(() => validateTeamSuite(suite, "shared-project-rotating-v2", policy));
   for (const protocol of ["shared-project-rotating-v3", "unknown", undefined]) {
     assert.throws(
       () => validateTeamSuite({ ...suite, protocol }, protocol, policy),
@@ -201,22 +172,26 @@ await test("unknown or mismatched team protocols cannot borrow a recognized corr
   }
 });
 
-await test("historical approvals stay readable but cannot supply the v2 correction budget", async () => {
-  const historical = JSON.parse(
+await test("the public policy stays unapproved until matching five-correction evidence is supplied", async () => {
+  const original = JSON.parse(
     await readFile(new URL("../../policies/official-runs/v1.json", import.meta.url), "utf8"),
   );
-  validateOfficialPolicy(historical);
-  const proposed = structuredClone(historical);
-  const suite = proposed.suites[MULTI_AGENT_BENCHMARK];
-  suite.runner.contract = MULTI_AGENT_PROTOCOL;
+  validateOfficialPolicy(original);
+  assert.equal(original.suites, undefined);
+  const experimental = JSON.parse(
+    await readFile(
+      new URL("../../policies/official-runs/multi-agent-v1.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const proposed = structuredClone(original);
+  proposed.suites = { [MULTI_AGENT_BENCHMARK]: experimental.release };
   assert.throws(() => validateOfficialPolicy(proposed), /5 corrections/);
-  suite.runPolicy.oracleRecoveries = 5;
+  proposed.suites[MULTI_AGENT_BENCHMARK].runPolicy.oracleRecoveries = 5;
   validateOfficialPolicy(proposed);
-  assert.deepEqual(proposed.runner, historical.runner);
-  assert.deepEqual(proposed.runPolicy, historical.runPolicy);
-  assert.deepEqual(proposed.fullRunPolicy, historical.fullRunPolicy);
-  suite.runner.contract = "shared-project-rotating-v1";
-  assert.throws(() => validateOfficialPolicy(proposed), /3 corrections/);
+  assert.deepEqual(proposed.runner, original.runner);
+  assert.deepEqual(proposed.runPolicy, original.runPolicy);
+  assert.deepEqual(proposed.fullRunPolicy, original.fullRunPolicy);
 });
 
 await test("a current preparation cannot reuse a proof from the old correction contract", async (t) => {
@@ -233,7 +208,7 @@ await test("a current preparation cannot reuse a proof from the old correction c
   for (const identity of [
     {},
     {
-      protocol: "shared-project-rotating-v1",
+      protocol: "shared-project-rotating-v2",
       policy: { ...MULTI_AGENT_POLICY, oracleRecoveries: 3 },
     },
     { protocol: MULTI_AGENT_PROTOCOL, policy: { ...MULTI_AGENT_POLICY, oracleRecoveries: 3 } },

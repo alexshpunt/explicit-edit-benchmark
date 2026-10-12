@@ -98,7 +98,7 @@ test("official releases publish one mutable workflow reference", async () => {
   assert.match(workflow, /RUNNER_SHA:refs\/heads\/official/);
 });
 
-test("historical three-correction proof does not authorize the current scoring contract", async (t) => {
+test("experimental three-correction proof does not authorize the first public release", async (t) => {
   const { approvedTeamRelease } = await import("../../scripts/official-team-release.mjs");
   const { cp, mkdir, rm } = await import("node:fs/promises");
   const { tempDirectory } = await import("../helpers/temp.mjs");
@@ -109,7 +109,7 @@ test("historical three-correction proof does not authorize the current scoring c
     "policies/official-runs/multi-agent-v1.json",
     path.join(root, "policies/official-runs/multi-agent-v1.json"),
   );
-  await assert.rejects(approvedTeamRelease(root), /reviewed.*proof/i);
+  await assert.rejects(approvedTeamRelease(root), /Reference correction budget differs/);
 });
 test("controlled release evidence authorizes only matching source and leaves original policy intact", async (t) => {
   const { prepareReleasePolicy } = await import("../../scripts/release-official-workflow.mjs");
@@ -151,7 +151,7 @@ test("controlled release evidence authorizes only matching source and leaves ori
   await assert.rejects(prepareReleasePolicy(revoked, current, root), /reactivate/);
   const evidence = JSON.parse(await readFile(evidenceFile, "utf8"));
   for (const [field, value] of [
-    ["contract", "shared-project-rotating-v1"],
+    ["contract", "shared-project-rotating-v2"],
     ["oracleRecoveries", 3],
   ]) {
     const changed = structuredClone(evidence);

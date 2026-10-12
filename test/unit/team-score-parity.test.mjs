@@ -8,7 +8,6 @@ import {
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_PROTOCOL,
-  MULTI_AGENT_LEGACY_PROTOCOL,
   MULTI_AGENT_VERSION,
 } from "../../src/suites/explicit-edit-multi-agent/results.mjs";
 
@@ -110,14 +109,6 @@ for (const [name, attempts, firstTasks, finalTasks] of [
   });
 }
 
-test("historical v1 team evidence retains its completion-only Score", () => {
-  const { index, trials, rounds } = evidence([2, 2, 0]);
-  Object.assign(index.runs[0], { contract: MULTI_AGENT_LEGACY_PROTOCOL });
-  index.runs[0].definitions.benchmark.version = "1";
-  index.runs[0].suite.protocol = MULTI_AGENT_LEGACY_PROTOCOL;
-  const [aggregate] = aggregateExactConfigurations(index, [profile], trials, rounds);
-  assert.equal(aggregate.score, 3 / 71);
-});
 test("original single-task trials retain the same first/eventual Score", () => {
   const { index, trials } = evidence([1, 2, 0]);
   delete index.runs[0].suite;

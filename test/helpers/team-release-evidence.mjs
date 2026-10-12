@@ -10,7 +10,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/results.mjs";
 
 /** Seed controlled evidence for release-transaction tests, never a real approval.
- * The historical record supplies canonical task identities only. Synthetic proof
+ * The experimental record supplies canonical task identities only. Synthetic proof
  * hashes exercise validation and commits without claiming a new reference run.
  */
 export async function seedTeamReleaseEvidence(root) {

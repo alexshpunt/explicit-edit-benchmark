@@ -243,7 +243,7 @@ await test("provider, driver and cancellation stops keep their accepted prefix w
   assert.throws(() => multiAgentResult({ ...report(), status: "running" }));
 });
 
-await test("standalone projection admits sixth-attempt acceptance but rejects premature exhaustion and v1 relabeling", () => {
+await test("standalone projection admits sixth-attempt acceptance but rejects premature exhaustion and experimental budgets", () => {
   const repaired = report();
   repaired.status = "pass";
   repaired.acceptedRounds = 2;
@@ -262,8 +262,7 @@ await test("standalone projection admits sixth-attempt acceptance but rejects pr
     premature.repairs = count - 1;
     assert.throws(() => multiAgentResult(premature), /exhaust/);
   }
-  const historical = report();
-  historical.protocol = "shared-project-rotating-v1";
-  historical.policy.oracleRecoveries = 3;
-  assert.throws(() => multiAgentResult(historical));
+  const experimental = report();
+  experimental.policy.oracleRecoveries = 3;
+  assert.throws(() => multiAgentResult(experimental));
 });
