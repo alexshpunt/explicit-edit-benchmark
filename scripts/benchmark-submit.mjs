@@ -16,7 +16,8 @@ import {
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_POLICY,
-  multiAgentVersion,
+  MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_VERSION,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -192,6 +193,8 @@ export async function submissionMetadata(normalized, runId) {
   const trials = lines(await readFile(path.join(normalized, "trials.jsonl"), "utf8"));
   if (manifest.suite && manifest.suite.id !== MULTI_AGENT_BENCHMARK)
     throw Error("Unsupported benchmark suite");
+  if (manifest.suite && manifest.suite.protocol !== MULTI_AGENT_PROTOCOL)
+    throw Error("Unsupported Multi-Agent protocol");
   return {
     clientRunId: runId,
     purpose: "exploratory",
@@ -199,7 +202,7 @@ export async function submissionMetadata(normalized, runId) {
       runner: { ...explicitEditRunner, version: explicitEditVersion },
       benchmark: {
         id: manifest.suite?.id ?? explicitEditBenchmarkId,
-        version: manifest.suite ? multiAgentVersion(manifest.suite.protocol) : explicitEditVersion,
+        version: manifest.suite ? MULTI_AGENT_VERSION : explicitEditVersion,
         contract: manifest.suite?.protocol ?? explicitEditContract,
         kind: "official",
         hash: manifest.taskSetSha256,

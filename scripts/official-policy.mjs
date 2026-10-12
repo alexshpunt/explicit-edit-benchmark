@@ -2,7 +2,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   MULTI_AGENT_BENCHMARK,
-  multiAgentCorrectionBudget,
+  MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_POLICY,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -39,8 +40,11 @@ function validateTeamRelease(suites) {
     "policy.suites.multi-agent",
   );
   validateRunner(suite.runner, "policy.suites.multi-agent.runner");
-  const recoveries = multiAgentCorrectionBudget(suite.runner.contract);
-  if (!SHA256.test(suite.graphSha256) || !SHA256.test(suite.scheduleSha256))
+  if (
+    suite.runner.contract !== MULTI_AGENT_PROTOCOL ||
+    !SHA256.test(suite.graphSha256) ||
+    !SHA256.test(suite.scheduleSha256)
+  )
     throw Error("policy.suites.multi-agent: invalid protocol or graph identity");
   const expected = Array.from(
     { length: 71 },
@@ -55,13 +59,13 @@ function validateTeamRelease(suites) {
   );
   if (
     suite.runPolicy.partialRuns !== true ||
-    suite.runPolicy.oracleRecoveries !== recoveries ||
+    suite.runPolicy.oracleRecoveries !== MULTI_AGENT_POLICY.oracleRecoveries ||
     suite.runPolicy.retryFailures !== 0 ||
     suite.runPolicy.concurrency !== 15 ||
     suite.runPolicy.timeoutMs !== null
   )
     throw Error(
-      `policy.suites.multi-agent: expected 15 agents, ${recoveries} corrections and no deadline`,
+      `policy.suites.multi-agent: expected 15 agents, ${MULTI_AGENT_POLICY.oracleRecoveries} corrections and no deadline`,
     );
 }
 

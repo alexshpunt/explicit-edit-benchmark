@@ -6,14 +6,12 @@ import path from "node:path";
 /** Public benchmark identity; never reuse the original Exact Edit identity. */
 export const MULTI_AGENT_BENCHMARK = "explicit-edit-multi-agent";
 /** Execution protocol, including explicit participant disclosure. */
-export const MULTI_AGENT_PROTOCOL = "shared-project-rotating-v2";
-/** Historical execution contract; read its evidence without upgrading its policy or Score. */
-export const MULTI_AGENT_LEGACY_PROTOCOL = "shared-project-rotating-v1";
+export const MULTI_AGENT_PROTOCOL = "shared-project-rotating-v1";
 /** Public version of the fixed 71-task maximal-team benchmark. */
-export const MULTI_AGENT_VERSION = "2";
+export const MULTI_AGENT_VERSION = "1";
 /** Version of the safe, standalone result format. */
 export const MULTI_AGENT_RESULT_VERSION = "explicit-edit-multi-agent-result-v1";
-/** Fixed candidate policy; changed policies need a new protocol. */
+/** Fixed policy for the first public Multi-Agent release. */
 export const MULTI_AGENT_POLICY = Object.freeze({
   trialTimeoutMs: null,
   attemptTimeoutMs: null,
@@ -27,22 +25,6 @@ export const MULTI_AGENT_POLICY = Object.freeze({
 /** Initial delivery plus the fixed retained-state correction budget. */
 export const MULTI_AGENT_MAX_ATTEMPTS = MULTI_AGENT_POLICY.oracleRecoveries + 1;
 
-/** Return the fixed retained-state correction budget for a recognized protocol.
- * Historical evidence readers may use v1; current execution still requires
- * MULTI_AGENT_PROTOCOL and MULTI_AGENT_POLICY. Unknown protocols are rejected.
- * @param {string} protocol Exact execution protocol recorded in the evidence.
- * @returns {number} Corrections after the initial delivery, not total attempts.
- */
-export function multiAgentCorrectionBudget(protocol) {
-  if (protocol === MULTI_AGENT_PROTOCOL) return MULTI_AGENT_POLICY.oracleRecoveries;
-  assert.equal(protocol, MULTI_AGENT_LEGACY_PROTOCOL, "Unsupported Multi-Agent protocol");
-  return 3;
-}
-/** Return the benchmark version recorded by a recognized execution protocol. */
-export function multiAgentVersion(protocol) {
-  multiAgentCorrectionBudget(protocol);
-  return protocol === MULTI_AGENT_PROTOCOL ? MULTI_AGENT_VERSION : "1";
-}
 const statuses = new Set([
   "pass",
   "blocked",
