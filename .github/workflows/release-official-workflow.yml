@@ -20,7 +20,7 @@ name: Release official workflow
       - scripts/prepare-benchmark.mjs
       - src/suites/explicit-edit-multi-agent/**
       - fixtures/explicit-edit-multi-agent/**
-      - policies/official-runs/multi-agent-v*.json
+      - policies/official-runs/multi-agent-v1.json
       - scripts/run-multi-agent-batch.mjs
       - scripts/harness-participant.mjs
       - scripts/harness-runtime.mjs
