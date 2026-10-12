@@ -21,10 +21,14 @@ To revoke future acceptance, change an approved workflow entry from `active` to 
 
 ## Multi-Agent release evidence
 
-`policies/official-runs/multi-agent-v1.json` is a reviewed reference-proof record,
-not a contributor observation. It records the tested source commit, exact fixture
-and suite identities, the canonical 71 tasks, graph and 15-agent schedule, and
-hashes of the completed model-free proof. It contains no raw source, prompts,
+`policies/official-runs/multi-agent-v1.json` is maintainer-owned reference evidence,
+not a contributor observation. The existing record covers an experimental
+three-correction run. Before the first public release, replace it with reviewed
+evidence from a full scripted proof of the five-correction contract. Until then,
+release preparation fails closed and the public policy does not approve
+Multi-Agent. The record binds the
+tested source commit, exact fixture and suite identities, the canonical 71 tasks,
+graph and 15-agent schedule, and hashes of the completed model-free proof. It contains no raw source, prompts,
 credentials or machine paths.
 
 The release command checks the current fixture and suite against that record

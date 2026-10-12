@@ -3,7 +3,8 @@
 Multi-Agent uses normalized schema **3**, the same five public tables and the
 same submission/store/report machinery as Explicit Edit. The original suite
 keeps schemas 1/2 and its existing scoring rules. Benchmark id is
-`explicit-edit-multi-agent`; execution contract is `shared-project-rotating-v1`.
+`explicit-edit-multi-agent`; benchmark version is 1 and execution contract
+is `shared-project-rotating-v1`.
 
 ## Tables and joint credit
 
@@ -16,8 +17,11 @@ keeps schemas 1/2 and its existing scoring rules. Benchmark id is
 - `tool-calls.jsonl` contains the same safe native tool facts, linked to deliveries.
 
 There are 28 barriers and 71 tasks. A passing barrier earns credit for all its
-tasks; a failed barrier earns none. Score is **accepted task count / 71**, not
-passed barriers / 28. No individual-agent success is invented.
+tasks; a failed barrier earns none. **Score = 0.75 × first-pass task rate +
+0.25 × eventual task rate**, using all 71 tasks rather than 28 equally weighted
+barriers. A task inherits its barrier's initial and eventual grades. Completion
+is accepted task count / 71 and is published separately from Score. No
+individual-agent success is invented.
 
 The manifest's `suite` binds the workload, graph, schedule and fixed 15-agent
 policy. Its per-profile `observations` preserve execution status, wall-clock
@@ -41,7 +45,7 @@ Reference execution has no model usage and must not be presented as model perfor
 
 ## Stops
 
-An editing `blocked` result must exhaust the initial attempt and three corrections
+An editing `blocked` result must exhaust the initial attempt and five corrections
 at its next barrier. Its accepted prefix retains credit. Later barriers remain
 `not-reached`, not infrastructure failures or fabricated model deliveries.
 
@@ -70,7 +74,7 @@ Raw evidence and private configuration stay outside Git and Dataset uploads.
 
 ## Earlier candidate exports
 
-`explicit-edit-multi-agent-result-v1` is the earlier standalone diagnostic JSON.
-Its developer exporter remains for inspecting historical candidate runs. It is
-not the common submission bundle and must not be silently converted into an
-authenticated observation. Historical calibration evidence stays unchanged.
+`explicit-edit-multi-agent-result-v1` is the standalone diagnostic JSON format,
+not the common submission bundle. Current tooling requires the five-correction
+public policy. Inspect earlier experimental reports with their pinned tooling;
+do not relabel them as public results. Calibration evidence stays unchanged.

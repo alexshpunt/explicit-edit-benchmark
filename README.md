@@ -48,10 +48,12 @@ before measured agents start. After each round, the verifier checks the combined
 edits, builds a fresh project and renders two scenes twice. Every image must
 match the original pixels exactly.
 
-A failed round allows three corrections without resetting the source or agent
-histories. **Score is the percentage of all 71 tasks jointly accepted.** Local
-runs have no overall or per-delivery deadline. Preparation is model-free but
-CPU-heavy; read the [run guide](docs/multi-agent.md) before starting.
+A failed round allows five corrections without resetting the source or agent
+histories: six attempts including the first. **Score is 75% first-pass success
+plus 25% eventual success, with equal weight for all 71 tasks.** A failed round
+earns no individual task credit. Local runs have no overall or per-delivery
+deadline. Preparation is model-free but CPU-heavy; read the
+[run guide](docs/multi-agent.md) before starting.
 
 <p align="center">
   <img src="assets/logo.png" alt="Explicit Edit 1.0" width="560">
@@ -229,7 +231,7 @@ npm run benchmark -- run --local --suite explicit-edit-multi-agent \
 Each selected configuration first passes a one-task model/auth smoke check.
 The original suite then runs independent trials. Multi-Agent also prepares the
 renderer and proves the parallel schedule with scripted editors before measured
-agents start. It allows three corrections per failed barrier, keeps failed edits
+agents start. It allows five corrections per failed barrier, keeps failed edits
 and histories, and stops when those corrections are exhausted. Legitimate early
 stops retain the accepted prefix; they are results, not runs to hide.
 

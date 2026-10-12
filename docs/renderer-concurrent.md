@@ -52,9 +52,9 @@ obligations, builds a fresh project and renders two scenes twice. Exact pixels
 must still match. It also checks that source did not change after the barrier.
 Earlier accepted work is part of every later check.
 
-A failed checkpoint allows three corrections with coarse feedback: requirements
-not met, build failed, or rendered images differ. Failed source and conversations
-are retained; nothing resets to an answer. Exhaustion stops the jointly verified
+A failed checkpoint allows five corrections after the initial attempt, with
+coarse feedback: requirements not met, build failed, or rendered images differ.
+Failed source and conversations are retained; nothing resets to an answer. Exhaustion stops the jointly verified
 prefix. The runner does not invent individual scores for a failed team checkpoint.
 Provider, driver and infrastructure failures are separate from editing failures.
 There is no overall or per-attempt deadline by default; cancellation remains active.

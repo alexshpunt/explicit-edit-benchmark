@@ -31,14 +31,23 @@ a fresh isolated project and renders two scenes twice. All four outputs must
 match the pinned pixels. Earlier accepted edits remain obligations, and source
 must not change after the barrier.
 
-A failed barrier allows three corrections with coarse feedback: requirements not
-met, build failed, or images differ. Failed edits and histories remain. There is
-no reset or fresh retry. Exhausting corrections stops the accepted prefix.
+A failed barrier allows five corrections after the initial attempt, with coarse
+feedback: requirements not met, build failed, or images differ. Failed edits and
+histories remain. There is no reset or fresh retry. Exhausting corrections stops the accepted prefix.
 Provider, driver, infrastructure and cancellation stops are recorded separately.
 
-**Score is jointly accepted tasks / 71.** A partly completed failed barrier earns
-no task credit. There is no individual-agent score. Duration, cost and correction
-counts do not weight Score. The original suite keeps its existing Score.
+**Score = 0.75 × first-pass task rate + 0.25 × eventual task rate.** Both rates
+use all 71 canonical tasks, not the 28 barriers. Tasks share their barrier's grade:
+first pass means its initial attempt passed; eventual pass means it passed within
+six attempts. A partly completed failed barrier earns no task credit. Unreached
+tasks count as neither first nor eventual passes. There is no individual-agent
+score. Duration, cost and delivery counts do not weight Score.
+
+A team that passes every task initially scores 100%. A team that passes every task
+only after corrections scores 25%. Completion remains a separate statistic.
+This is the first public benchmark version, protocol `shared-project-rotating-v1`.
+Earlier calibration runs used three corrections; their experimental reports
+remain unchanged and are not published results under this contract.
 
 **Local team runs have no overall or delivery deadline.** They can continue
 indefinitely and spend model credit. Cancel with Ctrl+C or SIGTERM. Owned agent
@@ -143,8 +152,11 @@ signed archive and attestation path, with an explicitly approved suite registry.
 
 ## Official release gate
 
-The producer and validator support suite selection, but the currently deployed
-policy and external caller template do not yet authorize this suite. Maintainers
+The producer and validator support suite selection. Official Multi-Agent runs
+remain unapproved until a fresh full reference proof for the five-correction
+policy has been reviewed and recorded in `policies/official-runs/multi-agent-v1.json`.
+The existing experimental proof uses three corrections and cannot authorize the
+public contract. Maintainers
 must approve canonical workload, graph, schedule, fixture and verifier identities,
 release the pinned workflow and update the caller's suite input before official
 Multi-Agent runs can be used. Unapproved runs must stop before model calls; old

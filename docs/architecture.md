@@ -130,8 +130,14 @@ backup. See [official operations and recovery](official-community-runs.md#operat
 
 `scripts/result-aggregation.mjs` owns both calculations:
 
-- Original Explicit Edit: coverage × (0.75 × first exact rate + 0.25 × final exact rate).
-- Multi-Agent: jointly accepted canonical tasks / 71.
+Both current suites use coverage × (0.75 × first exact rate + 0.25 × final exact
+rate). Each canonical task has equal weight. Multi-Agent tasks inherit their
+barrier's joint grade; a barrier's size does not change any task's weight. Its
+full scope is 71 tasks, including the unreached suffix.
+
+Multi-Agent's first public release allows five corrections, like the original
+suite. Earlier calibration runs used an experimental three-correction policy;
+they are not published benchmark results.
 
 Rankings stay separate by suite and comparable policy. Duration, cost, tokens,
 corrections and tool usage remain shared statistical facts; they do not weight
