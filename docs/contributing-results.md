@@ -21,7 +21,7 @@ overrides are recorded and compared under their matching policy.
 
 Multi-Agent runs all 71 tasks with a fixed 15-agent team. Model-free preparation
 and a matching parallel reference proof precede measured execution. It allows
-three retained-state corrections per failed barrier and has no local overall or
+five retained-state corrections per failed barrier and has no local overall or
 delivery deadline. It accepts no scored task subset or smaller team. Read the
 [run guide](multi-agent.md) for compiler requirements and costs.
 
