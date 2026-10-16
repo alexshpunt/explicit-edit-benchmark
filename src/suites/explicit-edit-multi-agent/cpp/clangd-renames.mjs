@@ -101,7 +101,12 @@ export async function semanticSession(sourcePath, source, flags) {
   }
   return {
     close: () => client.close(),
-    async edits(selection) {
+    /** Narrow compiler edits with trusted AST evidence before per-binding plans
+     * merge. keepEdit never adds edits; unknown cases must remain accepted.
+     * @param {{ keepEdit?: (entry: {name: string, offset: number, role?: string}, edit: {start: number, old: string, new: string}) => boolean }} [options]
+     */
+    async edits(selection, options = {}) {
+      const keepEdit = options.keepEdit ?? (() => true);
       const edits = new Map();
       for (const entry of selection) {
         const start = Buffer.from(source).subarray(0, entry.offset).toString("utf8").length;
@@ -126,6 +131,7 @@ export async function semanticSession(sourcePath, source, flags) {
               new: change.newText,
               families: [entry.family],
             };
+            if (!keepEdit(entry, edit)) continue;
             const previous = edits.get(begin);
             if (previous && (previous.old !== edit.old || previous.new !== edit.new))
               throw new Error(`Conflicting semantic edits: ${entry.name}`);

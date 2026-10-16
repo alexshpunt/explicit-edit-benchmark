@@ -12,6 +12,7 @@ import {
 import { variableBindingEdits } from "../generation/semantic-names.mjs";
 import { semanticSession } from "./clangd-renames.mjs";
 import { assertNeutralSource } from "../generation/origin-markers.mjs";
+import { createDirectCallEditFilter } from "./direct-call-edits.mjs";
 
 function matchesPublicSelector(entry, category, selector) {
   const owner = entry.owner;
@@ -378,6 +379,7 @@ export async function scopedNamingSession(
   await writeFile(sourcePath, image.source);
   const flags = ["-std=c++17", "-pthread"];
   const roots = await projectAst(sourcePath, flags);
+  const keepEdit = createDirectCallEditFilter(roots, image.source);
   let compiler;
   const consumed = new Set();
   const renamed = new Map();
@@ -414,7 +416,7 @@ export async function scopedNamingSession(
     if (semantic.length) compiler ??= await semanticSession(sourcePath, image.source, flags);
     return [
       ...(local.length ? variableBindingEdits(roots, local, image.source) : []),
-      ...(semantic.length ? await compiler.edits(semantic) : []),
+      ...(semantic.length ? await compiler.edits(semantic, { keepEdit }) : []),
     ];
   }
   function physicalPlan(id, edits) {

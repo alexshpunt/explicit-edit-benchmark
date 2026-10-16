@@ -20,6 +20,7 @@ export async function prepareFullExecutor(directory) {
     "generation/generator.mjs",
     "generation/origin-markers.mjs",
     "cpp/scoped-names.mjs",
+    "cpp/direct-call-edits.mjs",
     "cpp/joined-project.mjs",
     "generation/semantic-names.mjs",
     "cpp/clangd-renames.mjs",
