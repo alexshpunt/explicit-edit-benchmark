@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { atomicIdentity } from "../helpers/atomic-identity.mjs";
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -26,6 +27,7 @@ function evidence(attemptCount, accepted, protocol = MULTI_AGENT_PROTOCOL) {
     ...(accepted ? [] : [{ id: "round-003", assignments: [{ task: "task-004", agent: 1 }] }]),
   ];
   const suite = {
+    agents: 2,
     protocol,
     schedule,
     observations: [
@@ -186,6 +188,7 @@ await test("the public policy stays unapproved until matching five-correction ev
   );
   const proposed = structuredClone(original);
   proposed.suites = { [MULTI_AGENT_BENCHMARK]: experimental.release };
+  proposed.suites[MULTI_AGENT_BENCHMARK].atomic = atomicIdentity();
   assert.throws(() => validateOfficialPolicy(proposed), /5 corrections/);
   proposed.suites[MULTI_AGENT_BENCHMARK].runPolicy.oracleRecoveries = 5;
   validateOfficialPolicy(proposed);

@@ -52,8 +52,19 @@ await test("clustered reference runtimes stage only editing dependencies and can
       extra: [
         "reference/coherent-edit.mjs",
         "reference/concurrent-commit.mjs",
-        "reference/concurrent-plan.mjs",
-        "reference/concurrent-planners.mjs",
+        "reference/current-naming-service.mjs",
+        "reference/current-naming-worker.mjs",
+      ],
+    },
+    {
+      entry: "current-naming-worker.mjs",
+      channel: true,
+      prepare: prepareConcurrentExecutor,
+      extra: [
+        "reference/coherent-edit.mjs",
+        "reference/concurrent-commit.mjs",
+        "reference/current-naming-service.mjs",
+        "reference/current-naming-worker.mjs",
       ],
     },
   ];
@@ -72,7 +83,7 @@ await test("clustered reference runtimes stage only editing dependencies and can
       await mkdir(workspace);
       await item.prepare(tools);
       assert.deepEqual(await stagedFiles(tools), [...shared, ...item.extra].sort());
-      const entry = path.join(tools, "reference/full-worker.mjs");
+      const entry = path.join(tools, "reference", item.channel ? item.entry : "full-worker.mjs");
       assert.deepEqual(
         await readFile(entry),
         await readFile(path.join("src/suites/explicit-edit-multi-agent/reference", item.entry)),
@@ -100,19 +111,25 @@ for await (const line of createInterface({ input: process.stdin })) {
         [
           "--input-type=module",
           "-e",
-          `const { fullExecutor } = await import(process.argv[1]);
-const worker = fullExecutor(process.argv[2], process.argv[3]);
+          `const runtime = await import(process.argv[1]);
+const worker = runtime.referenceChannel
+  ? runtime.referenceChannel(process.argv[2], process.argv[3], process.argv[6])
+  : runtime.fullExecutor(process.argv[2], process.argv[3]);
 try {
   await worker.deliver({ id: "first", trusted: process.argv[4], adjacent: process.argv[5] });
   await worker.deliver({ id: "second", trusted: process.argv[4], adjacent: process.argv[5] });
-} finally { worker.close(); }`,
+} finally { await worker.close(); }`,
           pathToFileURL(
-            path.resolve("src/suites/explicit-edit-multi-agent/reference/full-executor.mjs"),
+            path.resolve(
+              "src/suites/explicit-edit-multi-agent/reference",
+              item.channel ? "concurrent-channel.mjs" : "full-executor.mjs",
+            ),
           ).href,
           workspace,
           tools,
           trusted,
           adjacent,
+          item.entry,
         ],
         { timeout: 30_000 },
       );
