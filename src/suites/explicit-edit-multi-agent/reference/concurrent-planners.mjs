@@ -1,74 +1,44 @@
-import { spawn } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-/** Maximum overlapping compiler lifetimes in the model-free reference editor. */
-export const REFERENCE_PLANNER_SLOTS = 2;
+import { referenceChannel } from "./concurrent-channel.mjs";
 
-/** Bound reference compiler memory, not the benchmark team or live tools.
- * Two compiler jobs may overlap. Persistent agents keep separate identities;
- * this resource pool neither changes the task DAG nor grants source ownership.
- * A fresh child releases its full-project AST after each planning attempt.
+/** One shared compiler-planning slot per reference workspace, not a live-agent cap. */
+export const REFERENCE_PLANNER_SLOTS = 1;
+const services = new Map();
+
+/** Acquire a current-task-only isolated planning service for one shared project.
+ * Requests queue only after public dispatch. No future work, grading state or
+ * prepared plans enter this transport. The last participant closes the service;
+ * cancellation of active work closes its namespace before participant settlement.
  */
-export async function withReferencePlanner(workspace, signal, action) {
-  let owned;
-  try {
-    while (!owned) {
-      signal?.throwIfAborted();
-      for (let slot = 0; slot < REFERENCE_PLANNER_SLOTS; slot++) {
-        const directory = path.join(workspace, `.renderer-planner-${slot}`);
-        try {
-          await mkdir(directory);
-          owned = directory;
-          break;
-        } catch (error) {
-          if (error.code !== "EEXIST") throw error;
-        }
-      }
-      if (!owned) await delay(10, undefined, { signal });
-    }
-    signal?.throwIfAborted();
-    return await action();
-  } finally {
-    if (owned) await rm(owned, { recursive: true });
+export function sharedReferencePlanner(workspace, tools) {
+  const key = JSON.stringify([path.resolve(workspace), path.resolve(tools)]);
+  let entry = services.get(key);
+  if (!entry) {
+    entry = { references: 0, channel: undefined, queue: Promise.resolve(), closing: undefined };
+    services.set(key, entry);
   }
-}
-
-/** Compute only current public naming operations in a disposable compiler process. */
-export function planCurrentNames(before, task, signal) {
-  signal?.throwIfAborted();
-  const child = spawn(
-    process.execPath,
-    [new URL("./concurrent-plan.mjs", import.meta.url).pathname],
-    {
-      signal,
+  entry.references++;
+  const close = () => {
+    if (!entry.closing) {
+      entry.closing = entry.channel?.close() ?? Promise.resolve();
+      if (services.get(key) === entry) services.delete(key);
+    }
+    return entry.closing;
+  };
+  return {
+    execute(task) {
+      const deliver = async () => {
+        if (entry.closing) throw Error("Shared reference planner closed");
+        entry.channel ??= referenceChannel(workspace, tools, "current-naming-worker.mjs");
+        return entry.channel.deliver(task);
+      };
+      const result = entry.queue.then(deliver);
+      entry.queue = result.catch(() => {});
+      return result;
     },
-  );
-  let stdout = "",
-    stderr = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk;
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr = (stderr + chunk).slice(-8192);
-  });
-  child.stdin.on("error", () => {});
-  return new Promise((resolve, reject) => {
-    let failure;
-    child.on("error", (error) => {
-      failure = error;
-    });
-    child.on("close", (code) => {
-      if (failure) return reject(failure);
-      if (code !== 0) return reject(Error(stderr || `Reference planner exited ${code}`));
-      try {
-        resolve(JSON.parse(stdout));
-      } catch (error) {
-        reject(error);
-      }
-    });
-    child.stdin.end(JSON.stringify({ before, task }));
-  });
+    close,
+    release() {
+      return --entry.references === 0 ? close() : Promise.resolve();
+    },
+  };
 }

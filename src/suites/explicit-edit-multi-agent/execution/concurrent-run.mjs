@@ -16,6 +16,9 @@ import {
 import { startBaseline, finalizedUsage } from "./pi-baseline.mjs";
 import { readSharedSource } from "../reference/concurrent-commit.mjs";
 import { REFERENCE_PLANNER_SLOTS } from "../reference/concurrent-planners.mjs";
+import { ATOMIC_DISPATCH_POLICY, runAtomicStream } from "./atomic-stream.mjs";
+import { atomicOrder } from "../tasks/atomic-effects.mjs";
+import { atomicCheckpoints } from "../tasks/atomic-bundle.mjs";
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_PROTOCOL,
@@ -30,16 +33,17 @@ function feedback(category) {
   return "The batch requirements are not met.";
 }
 
-/** Run real persistent agents concurrently against one writable project. The DAG
- * fixes safe readiness; team size sets round membership and ownership rotates.
- * Grading happens
- * after all participants settle. Coarse repairs up to the fixed policy budget retain every agent's edits
- * and history. A failed barrier stops the verified team prefix, not an invented
- * per-agent score. Live trials require an exact matching scripted team proof.
- * Reference CAS conflict counts are observable; live counts stay unknown unless
- * the harness supplies them. Reports and trusted contracts are not agent mounts.
- * createDriver(workspace, state, agent) binds a common harness participant with
- * execute(prompt, { signal, round, attempt }), close() and a closed getter.
+/** Stream one ready atomic edit to each free persistent participant sharing a project.
+ * Verified effects unlock dependencies; drained parent-task barriers alone grant
+ * Score credit after cumulative structure, build and repeated-pixel checks.
+ * Corrections retain edits/history and share the fixed barrier-level budget. If
+ * atoms remain verified but full grading fails, one short global repair replaces
+ * atomic redispatch for that attempt. A failed barrier stops the accepted prefix.
+ * Live trials require a matching atomic scripted proof before drivers open.
+ * Reference CAS conflicts are observed; live counts remain unknown unless supplied
+ * by the harness. Private plans, gates and future tasks are never agent mounts.
+ * createDriver(workspace, state, agent) returns execute(prompt, { signal, round,
+ * attempt, atomicId? , deliveryKind? }), async close() and a closed getter.
  */
 export async function runConcurrent(
   preparationPath,
@@ -70,10 +74,39 @@ export async function runConcurrent(
       MULTI_AGENT_POLICY,
       "Unsupported Multi-Agent preparation policy",
     );
+    assert.equal(
+      manifest.atomic?.version,
+      ATOMIC_DISPATCH_POLICY.version,
+      "Unsupported atomic stream preparation",
+    );
+    assert.equal(
+      manifest.atomic.dispatchPolicySha256,
+      digest(JSON.stringify(ATOMIC_DISPATCH_POLICY)),
+      "Atomic dispatch policy changed",
+    );
     const bytes = await readFile(path.join(preparation, "tasks.json"));
     assert.equal(digest(bytes), manifest.workloadSha256);
     const taskList = JSON.parse(bytes);
     assert.equal(taskList.length, manifest.tasks);
+    const atomicBytes = await readFile(path.join(preparation, "atomic/tasks.json"));
+    const batchBytes = await readFile(path.join(preparation, "atomic/batches.json"));
+    assert.equal(digest(atomicBytes), manifest.atomic.workloadSha256, "Atomic workload changed");
+    assert.equal(
+      digest(batchBytes),
+      manifest.atomic.batchesSha256,
+      "Private atomic bindings changed",
+    );
+    const atomicWorkload = JSON.parse(atomicBytes);
+    assert.equal(atomicWorkload.version, "renderer-atomic-workload-v1");
+    assert.equal(atomicWorkload.nodes.length, manifest.atomic.edits);
+    atomicOrder(atomicWorkload.nodes);
+    assert.deepEqual(
+      [...new Set(atomicWorkload.nodes.map((node) => node.taskId))].sort(),
+      taskList.map((task) => task.id).sort(),
+      "Atomic scoring-group coverage differs",
+    );
+    const atomicBatches = JSON.parse(batchBytes);
+    assert.ok(Array.isArray(atomicBatches), "Invalid private atomic binding batches");
     const graphBytes = await readFile(path.join(preparation, "graph.json"));
     assert.equal(digest(graphBytes), manifest.graphSha256);
     const graph = JSON.parse(graphBytes);
@@ -99,12 +132,35 @@ export async function runConcurrent(
       transitions,
       schedule,
     );
+    const atomicIntervals = atomicCheckpoints(
+      initial,
+      atomicWorkload,
+      atomicBatches,
+      schedule,
+      contracts,
+    );
+    assert.equal(
+      treeIdentity(atomicIntervals.tree),
+      manifest.final,
+      "Atomic schedule changed the final restoration",
+    );
     const contractHashes = Object.fromEntries(
       [...contracts].map(([id, contract]) => [id, digest(JSON.stringify(contract))]),
     );
     if (live) {
       const proof = await json(path.join(preparation, `verification-${agents}.json`));
+      assert.deepEqual(
+        proof.atomic,
+        manifest.atomic,
+        "Concurrent live runs need a matched atomic stream proof",
+      );
       assert.equal(proof.status, "pass", "Concurrent live runs need a matched scripted proof");
+      assert.equal(proof.agents, agents, "Atomic proof participant count differs");
+      assert.equal(
+        proof.acceptedAtomicEdits,
+        manifest.atomic.edits,
+        "Atomic proof inventory is incomplete",
+      );
       assert.equal(proof.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent proof protocol");
       assert.deepEqual(proof.policy, MULTI_AGENT_POLICY, "Unsupported Multi-Agent proof policy");
       assert.equal(proof.workloadSha256, manifest.workloadSha256);
@@ -134,6 +190,8 @@ export async function runConcurrent(
       contractHashes,
       schedule,
       policy: manifest.policy,
+      atomic: manifest.atomic,
+      atomicBarriers: [],
       initial: manifest.initial,
       totalRounds: schedule.length,
       totalTasks: manifest.tasks,
@@ -161,7 +219,7 @@ export async function runConcurrent(
       return saving;
     };
     let acceptedIds = new Set();
-    async function grade(label, id) {
+    async function grade(label, id, { atomicBlocked = false } = {}) {
       signal.throwIfAborted();
       const directory = path.join(output, "checks", label);
       await mkdir(directory, { recursive: true });
@@ -192,6 +250,10 @@ export async function runConcurrent(
           report.regressedAcceptedObligations.push({ label, ids: item.regressions });
         if (ledger.status !== "pass")
           throw new GradeFailure("structure", "Round editing obligations are not met");
+        if (atomicBlocked)
+          throw Error(
+            "Atomic gates contradicted a passing full contract; retained for investigation",
+          );
         log(
           `BUILD ${label}: cumulative obligations ${ledger.passed}/${ledger.total}; fresh build and two repeated scenes`,
         );
@@ -255,62 +317,83 @@ export async function runConcurrent(
             : concurrentExecutor(workspace, path.join(output, "executor"), { signal }),
       );
     }
-    const tasks = new Map(taskList.map((task) => [task.id, task]));
+    let rotation = 0;
+    let lastProgressSave = performance.now();
+    const decision = (result) =>
+      result.status === "pass" ? true : result.status === "pending" ? "pending" : false;
     for (const round of schedule) {
       signal.throwIfAborted();
+      const { nodes, checkpoint } = atomicIntervals.rounds.get(round.id);
+      // Only this local interval owns warm inventories through its corrections.
+      atomicIntervals.rounds.delete(round.id);
+      const parentTasks = round.assignments.map((assignment) => assignment.task);
+      let completed = new Set();
+      let startedAtoms = new Set();
       let failure;
+      let barrierRepair = false;
       for (let attempt = 1; attempt <= MULTI_AGENT_MAX_ATTEMPTS; attempt++) {
         log(
           `EDIT ${round.id}: ${agents} persistent agents, attempt ${attempt}/${MULTI_AGENT_MAX_ATTEMPTS}`,
         );
-        const participants = Array.from({ length: agents }, (_, agent) => ({
-          agent,
-          assigned: round.assignments
-            .filter((item) => item.agent === agent)
-            .map((item) => tasks.get(item.task)),
-        })).filter((item) => item.assigned.length);
-        const executions = participants.map(async ({ agent, assigned }) => {
+        const retained = checkpoint.revalidate(await readSharedSource(workspace), {
+          completed,
+          started: startedAtoms,
+        });
+        completed = retained.completed;
+        const state = {
+          round: round.id,
+          attempt,
+          retained: [...completed],
+          invalidated: retained.invalidated,
+          completed: null,
+          failed: [],
+        };
+        report.atomicBarriers.push(state);
+        const executions = new Map();
+        async function deliver(node, agent, deliverySignal, context, globalRepair = false) {
+          const abortDelivery = () => controller.abort(deliverySignal.reason);
+          deliverySignal.addEventListener("abort", abortDelivery, { once: true });
           const item = {
             round: round.id,
             attempt,
             agent,
-            tasks: assigned.map((task) => task.id),
+            tasks: globalRepair ? parentTasks : [node.taskId],
+            ...(globalRepair ? { deliveryKind: "barrier-repair" } : { atomicId: node.id }),
             status: "running",
             startedMs: performance.now() - started,
           };
           report.executions.push(item);
+          if (!globalRepair) startedAtoms.add(node.id);
+          executions.set(node.id, item);
           report.deliveries++;
           if (attempt > 1) report.repairs++;
-          // One public block per live agent, only its own targets for this round.
-          const current = assigned
-            .map((task) => (agents === 1 ? task.prompt : `Task ${task.id}:\n${task.prompt}`))
-            .join("\n\n");
-          const guidance =
-            agents === 1
-              ? ""
-              : `\n\nYou share one writable project with ${agents - 1} other persistent agents (${agents} agents in this run, including you). This round assigns editing tasks to ${participants.length} agents, including you. Agents without an assignment wait. Peers assigned in this round may edit the same files concurrently. Re-read after peer changes and preserve their completed work. Do not replace files from stale whole-file snapshots or leave background writers after settling. Verification is at the ready-task barrier.`;
+          const current = globalRepair
+            ? "Repair the current shared project after the drained barrier failed verification. The requested atomic edits have already been delivered. Preserve completed work and correct only what is needed to make this barrier pass."
+            : node.prompt;
+          const guidance = `\n\nYou are one of ${agents} persistent agents sharing this writable project. At this dispatch, ${context.writers.size} editing deliveries are active, including yours. Tasks are assigned one at a time to free agents. Other agents may edit the same files concurrently. Do only the current request. Re-read after peer changes, preserve completed work, and never replace a file from a stale whole-file snapshot. Do not leave background writers after your response. Dependencies are checked between edits; full verification waits for the barrier.`;
           const prompt =
-            attempt > 1
-              ? `${current}${guidance}\n\n${feedback(failure.category)}\nCorrect the current workspace. Keep earlier changes and satisfy the current request.`
-              : current + guidance;
+            current +
+            guidance +
+            (attempt > 1
+              ? `\n\n${feedback(failure.category)}\nCorrect the current workspace; do not restart or undo earlier completed work.`
+              : "");
           try {
-            if (live)
+            if (live) {
               item.receipt = await drivers[agent].execute(prompt, {
-                signal,
+                signal: deliverySignal,
                 round: round.id,
                 attempt,
+                ...(globalRepair ? { deliveryKind: "barrier-repair" } : { atomicId: node.id }),
               });
-            else {
+            } else {
               if (attempt > 1)
                 throw Error("Reference editor has no repair policy; failed state retained");
-              item.receipts = [];
-              for (const task of assigned) {
-                const receipt = await drivers[agent].execute(task);
-                item.receipts.push(receipt);
-                report.conflicts += receipt.conflicts;
-              }
+              const receipt = await drivers[agent].execute(node);
+              item.receipts = [receipt];
+              report.conflicts += receipt.conflicts;
             }
             item.status = "settled";
+            return item.receipt;
           } catch (error) {
             Object.assign(item, {
               status: "error",
@@ -321,26 +404,95 @@ export async function runConcurrent(
             controller.abort(error);
             throw error;
           } finally {
+            deliverySignal.removeEventListener("abort", abortDelivery);
             item.elapsedMs = performance.now() - started - item.startedMs;
-            await save();
+            // Bound progress I/O independently of the number of tiny deliveries.
+            // Full state is saved at each drained barrier and on every exit.
+            if (performance.now() - lastProgressSave >= 5000) {
+              lastProgressSave = performance.now();
+              await save();
+            }
           }
-        });
-        const settling = Promise.allSettled(executions);
+        }
+        const readSource = () => readSharedSource(workspace);
+        let stream;
         await save();
-        const results = await settling;
-        const error = results.find((result) => result.status === "rejected");
-        if (error) throw signal.reason ?? error.reason;
+        if (barrierRepair && completed.size === nodes.length) {
+          const agent = rotation % agents;
+          rotation = (agent + 1) % agents;
+          await deliver({ id: round.id }, agent, signal, { writers: new Set([round.id]) }, true);
+          const repaired = checkpoint.revalidate(await readSource(), {
+            completed,
+            started: startedAtoms,
+          });
+          completed = repaired.completed;
+          state.invalidated.push(...repaired.invalidated);
+          stream = { status: completed.size === nodes.length ? "pass" : "blocked", failed: [] };
+        } else {
+          stream = await runAtomicStream(nodes, {
+            agents,
+            completed,
+            started: startedAtoms,
+            rotation,
+            signal,
+            checkInputs: async (node, deliverySignal, context) => {
+              for (const dependency of node.dependencies) {
+                const checked = await checkpoint.observe(readSource, dependency, context, {
+                  signal: deliverySignal,
+                });
+                if (checked.status !== "pass") return decision(checked);
+              }
+              // An already-started atom gets a continuation even if its own
+              // partial write is no longer a valid fresh input. No successor gets
+              // this waiver; every prerequisite above must still be verified.
+              if (context.started.has(node.id)) return true;
+              const output = await checkpoint.observe(readSource, node.id, context, {
+                signal: deliverySignal,
+              });
+              if (output.status === "pass") return true;
+              return decision(
+                await checkpoint.observe(readSource, node.id, context, {
+                  signal: deliverySignal,
+                  input: true,
+                }),
+              );
+            },
+            execute: (node, agent, deliverySignal, context) =>
+              deliver(node, agent, deliverySignal, context),
+            verify: async (node, deliverySignal, _receipt, context) => {
+              const checked = await checkpoint.observe(readSource, node.id, context, {
+                signal: deliverySignal,
+              });
+              executions.get(node.id).atomicCheck = {
+                status: checked.status,
+                reason: checked.reason ?? null,
+              };
+              return decision(checked);
+            },
+          });
+          completed = stream.completed;
+          startedAtoms = stream.started;
+          rotation = stream.rotation;
+        }
+        state.completed = [...completed];
+        state.failed = stream.failed;
+        await save();
         signal.throwIfAborted();
+        if (!report.executions.some((item) => item.round === round.id && item.attempt === attempt))
+          throw Error("Atomic inputs could not be observed before any delivery opportunity");
         try {
-          await grade(`${round.id}-attempt-${attempt}`, round.id);
+          await grade(`${round.id}-attempt-${attempt}`, round.id, {
+            atomicBlocked: stream.status !== "pass",
+          });
           failure = null;
           report.acceptedRounds++;
-          report.acceptedTasks += round.assignments.length;
+          report.acceptedTasks += parentTasks.length;
           await save();
           break;
         } catch (error) {
           if (!["structure", "build", "behavior"].includes(error.category)) throw error;
           failure = error;
+          barrierRepair = completed.size === nodes.length;
           log(
             `FAIL ${round.id}: attempt ${attempt}/${MULTI_AGENT_MAX_ATTEMPTS} [${error.category}]`,
           );
@@ -397,10 +549,18 @@ export async function runConcurrent(
     externalSignal?.removeEventListener("abort", abort);
   }
   if (!live && report.status === "pass") {
+    const acceptedAtomicEdits = new Set(report.executions.map((item) => item.atomicId)).size;
+    assert.equal(
+      acceptedAtomicEdits,
+      report.atomic.edits,
+      "Reference did not dispatch the complete atomic inventory",
+    );
     const proof = {
       status: "pass",
       protocol: report.protocol,
       policy: report.policy,
+      atomic: report.atomic,
+      acceptedAtomicEdits,
       agents,
       workloadSha256: report.workloadSha256,
       scheduleSha256: report.scheduleSha256,

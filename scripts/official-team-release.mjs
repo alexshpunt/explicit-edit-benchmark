@@ -4,6 +4,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { suiteVerifier } from "./run-multi-agent-batch.mjs";
+import { validateAtomicIdentity } from "./normalized-team-protocol.mjs";
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_POLICY,
@@ -65,6 +66,17 @@ export async function approvedTeamRelease(root = process.cwd()) {
     evidence.release.runPolicy.oracleRecoveries,
     MULTI_AGENT_POLICY.oracleRecoveries,
     "Reference correction budget differs",
+  );
+  validateAtomicIdentity(evidence.release.atomic);
+  assert.deepEqual(
+    evidence.reference.atomic,
+    evidence.release.atomic,
+    "Reference atomic identity differs",
+  );
+  assert.equal(
+    evidence.reference.acceptedAtomicEdits,
+    evidence.release.atomic.edits,
+    "Reference atomic inventory is incomplete",
   );
   assert.match(evidence.sourceCommit, /^[a-f0-9]{40}$/);
   assert.match(evidence.reference.reportSha256, /^[a-f0-9]{64}$/);

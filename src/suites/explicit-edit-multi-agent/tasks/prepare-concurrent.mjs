@@ -8,6 +8,8 @@ import { contractTransition, dependencyGraph, rotatingSchedule } from "./concurr
 
 import { checkpointContracts } from "../grading/concurrent-contracts.mjs";
 import { MULTI_AGENT_POLICY } from "../results.mjs";
+import { assembleAtomicBundle, atomicCheckpoints } from "./atomic-bundle.mjs";
+import { ATOMIC_DISPATCH_POLICY } from "../execution/atomic-stream.mjs";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const normalized = (contract) => ({
   ...contract,
@@ -47,6 +49,31 @@ export async function prepareConcurrent(coherentPath, outputPath) {
     assert.equal(digest(bytes), source.contractHashes[id]);
     contracts.set(id, JSON.parse(bytes));
   }
+  const namingPlans = new Map();
+  for (const task of tasks.filter((item) => item.phase === "names")) {
+    const bytes = await readFile(path.join(coherent, "naming-plans", `${task.id}.json`));
+    assert.equal(
+      digest(bytes),
+      source.namingPlanHashes?.[task.id],
+      "Unsealed atomic binding preparation",
+    );
+    namingPlans.set(task.id, JSON.parse(bytes));
+  }
+  const atomic = assembleAtomicBundle(initial, tasks, { namingPlans, contracts });
+  assert.equal(
+    treeIdentity(atomic.tree),
+    source.final,
+    "Atomic preparation changed the final restoration",
+  );
+  const atomicBytes = JSON.stringify(atomic.workload) + "\n";
+  const batchBytes = JSON.stringify(atomic.batches) + "\n";
+  const atomicIdentity = {
+    version: ATOMIC_DISPATCH_POLICY.version,
+    workloadSha256: digest(atomicBytes),
+    batchesSha256: digest(batchBytes),
+    dispatchPolicySha256: digest(JSON.stringify(ATOMIC_DISPATCH_POLICY)),
+    edits: atomic.workload.nodes.length,
+  };
   let previous = contracts.get("initial");
   const transitions = tasks.map((task) => {
     const after = contracts.get(task.id);
@@ -80,10 +107,21 @@ export async function prepareConcurrent(coherentPath, outputPath) {
     for (const round of schedule)
       assert.deepEqual(normalized(forward.get(round.id)), normalized(reverse.get(round.id)));
     assert.deepEqual(normalized(forward.get(schedule.at(-1).id)), normalized(previous));
+    if (agents === graph.width) {
+      const stream = atomicCheckpoints(initial, atomic.workload, atomic.batches, schedule, forward);
+      assert.equal(
+        treeIdentity(stream.tree),
+        source.final,
+        "Atomic schedule changed the final restoration",
+      );
+    }
   }
   await mkdir(output);
   await mkdir(path.join(output, "contracts"));
   await mkdir(path.join(output, "transitions"));
+  await mkdir(path.join(output, "atomic"));
+  await writeFile(path.join(output, "atomic/tasks.json"), atomicBytes);
+  await writeFile(path.join(output, "atomic/batches.json"), batchBytes);
   await writeTree(path.join(output, "initial"), initial);
   await writeFile(path.join(output, "tasks.json"), taskBytes);
   await copyFile(
@@ -101,6 +139,7 @@ export async function prepareConcurrent(coherentPath, outputPath) {
   const manifest = {
     version: "renderer-concurrent-v2",
     scope: "complete-coherent-workload",
+    atomic: atomicIdentity,
     initial: source.initial,
     workloadSha256: source.tasksSha256,
     graphSha256: digest(graphBytes),

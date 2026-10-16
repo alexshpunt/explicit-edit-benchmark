@@ -1,4 +1,5 @@
 import path from "node:path";
+import { teamDeliveryDirectory } from "./normalized-team-protocol.mjs";
 import { rm, writeFile } from "node:fs/promises";
 import {
   closeHarness,
@@ -21,14 +22,14 @@ export function harnessParticipant(adapter, { workspace, state, artifacts }) {
     get closed() {
       return closed;
     },
-    async execute(prompt, { signal, round, attempt }) {
+    async execute(prompt, { signal, round, attempt, atomicId }) {
       if (closed || closing) throw Error("Harness participant is closed");
       const current = delivered
         ? adapter.driver?.persistent
           ? { ...adapter, seedFiles: {}, stateFiles: {} }
           : recoveryAdapter(adapter, true)
         : adapter;
-      const directory = path.join(artifacts, `${round}-attempt-${attempt}`);
+      const directory = path.join(artifacts, teamDeliveryDirectory(round, attempt, atomicId));
       let execution, failure;
       try {
         execution = await runHarness(current, {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { ATOMIC_DISPATCH_POLICY } from "../src/suites/explicit-edit-multi-agent/execution/atomic-stream.mjs";
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_PROTOCOL,
@@ -26,6 +27,75 @@ function keys(value, expected) {
   );
 }
 
+/** Validate the public hashes of the atomic workload, private bindings and dispatch contract.
+ * Only hashes leave the controller; prepared token plans and expected source stay private.
+ */
+export function validateAtomicIdentity(atomic) {
+  assert.ok(atomic && typeof atomic === "object", "Missing atomic stream identity");
+  keys(atomic, ["version", "workloadSha256", "batchesSha256", "dispatchPolicySha256", "edits"]);
+  assert.equal(atomic.version, ATOMIC_DISPATCH_POLICY.version, "Unsupported atomic stream version");
+  for (const field of ["workloadSha256", "batchesSha256", "dispatchPolicySha256"])
+    assert.match(atomic[field], /^[a-f0-9]{64}$/, `Invalid atomic identity: ${field}`);
+  assert.equal(
+    atomic.dispatchPolicySha256,
+    digest(ATOMIC_DISPATCH_POLICY),
+    "Atomic dispatch policy changed",
+  );
+  assert.ok(Number.isSafeInteger(atomic.edits) && atomic.edits > 0, "Invalid atomic edit count");
+}
+/** Name one native delivery directory without allowing atom IDs to escape its artifact root. */
+export function teamDeliveryDirectory(round, attempt, atomicId) {
+  assert.match(round, /^round-\d{3}$/);
+  assert.ok(Number.isInteger(attempt) && attempt >= 1 && attempt <= MULTI_AGENT_MAX_ATTEMPTS);
+  if (atomicId === undefined) return `${round}-attempt-${attempt}`;
+  assert.ok(typeof atomicId === "string");
+  assert.match(atomicId, /^task-\d{3}[-_:][A-Za-z0-9][A-Za-z0-9._:-]*$/);
+  return `${round}-${atomicId}-attempt-${attempt}`;
+}
+
+/** Bind an atomic delivery to exactly one original task in its joint grading barrier. */
+export function validateAtomicDelivery(atomicId, taskIds, barrierTasks) {
+  assert.ok(
+    Array.isArray(taskIds) && taskIds.length === 1,
+    "Atomic delivery needs one parent task",
+  );
+  const task = taskIds[0];
+  assert.ok(barrierTasks.includes(task), "Atomic delivery has an unscheduled parent task");
+  assert.ok(typeof atomicId === "string", "Missing atomic delivery ID");
+  assert.match(atomicId, /^task-\d{3}[-_:][A-Za-z0-9][A-Za-z0-9._:-]*$/);
+  assert.ok(
+    atomicId.startsWith(`${task}-`) ||
+      atomicId.startsWith(`${task}_`) ||
+      atomicId.startsWith(`${task}:`),
+    "Atomic delivery ID contradicts its parent task",
+  );
+}
+
+/** Bind either one atomic edit or one retained-state global correction to its barrier. */
+export function validateStreamDelivery(delivery, taskIds, barrierTasks, attempt) {
+  if (!Object.hasOwn(delivery, "deliveryKind")) {
+    validateAtomicDelivery(delivery.atomicId, taskIds, barrierTasks);
+    return;
+  }
+  assert.equal(delivery.deliveryKind, "barrier-repair", "Unsupported stream delivery kind");
+  assert.ok(!Object.hasOwn(delivery, "atomicId"), "Global repair cannot name an atomic ID");
+  assert.ok(attempt > 1, "Global repair cannot be an initial delivery");
+  assert.ok(Array.isArray(taskIds));
+  assert.deepEqual(
+    [...taskIds].sort(),
+    [...barrierTasks].sort(),
+    "Global repair needs every barrier parent exactly once",
+  );
+}
+
+function failedNativeReceipt(delivery) {
+  return Boolean(
+    delivery.providerFailure ||
+    delivery.timedOut ||
+    delivery.eventErrors ||
+    (delivery.exitCode !== null && delivery.exitCode !== 0),
+  );
+}
 /** Validate the maximal-team protocol, fixed policy and workload/schedule bindings. */
 export function validateTeamSuite(suite, contract, policy) {
   keys(suite, [
@@ -38,7 +108,9 @@ export function validateTeamSuite(suite, contract, policy) {
     "scheduleSha256",
     "schedule",
     "observations",
+    ...(Object.hasOwn(suite, "atomic") ? ["atomic"] : []),
   ]);
+  if (Object.hasOwn(suite, "atomic")) validateAtomicIdentity(suite.atomic);
   assert.equal(suite.id, MULTI_AGENT_BENCHMARK);
   assert.equal(suite.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent protocol");
   assert.equal(contract, MULTI_AGENT_PROTOCOL);
@@ -101,6 +173,9 @@ export function validateTeamSuite(suite, contract, policy) {
 export function validateTeamTables(suite, profiles, trials, rounds) {
   assert.equal(suite.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent protocol");
   const maxAttempts = MULTI_AGENT_MAX_ATTEMPTS;
+  const atomic = rounds.some(
+    (item) => Object.hasOwn(item, "atomicId") || Object.hasOwn(item, "deliveryKind"),
+  );
   assert.deepEqual(
     suite.observations.map((item) => item.profileId).sort(),
     profiles.map((item) => item.profileId).sort(),
@@ -120,21 +195,60 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
       const deliveries = rounds.filter((item) => item.trialId === trial.trialId);
       if (stopped) assert.equal(deliveries.length, 0, "Team continued after an unaccepted barrier");
       const attempts = new Map();
-      for (const delivery of deliveries) {
+      for (const [index, delivery] of deliveries.entries()) {
         assert.ok(
           Number.isInteger(delivery.barrierAttempt) &&
             delivery.barrierAttempt >= 0 &&
             delivery.barrierAttempt < maxAttempts,
         );
-        const assigned = barrier.assignments
-          .filter((item) => item.agent === delivery.agent)
-          .map((item) => item.task);
-        assert.ok(assigned.length > 0, "Unscheduled participant");
-        assert.deepEqual(delivery.taskIds, assigned);
+        assert.ok(
+          Number.isInteger(delivery.agent) && delivery.agent >= 0 && delivery.agent < suite.agents,
+          "Participant outside team pool",
+        );
+        if (atomic) {
+          validateStreamDelivery(
+            delivery,
+            delivery.taskIds,
+            trial.taskIds,
+            delivery.barrierAttempt + 1,
+          );
+          if (delivery.deliveryKind) {
+            const previous = attempts.get(delivery.barrierAttempt - 1);
+            const earlier = deliveries
+              .slice(0, index)
+              .filter((item) => Object.hasOwn(item, "atomicId"));
+            const retained = new Map(earlier.map((item) => [item.atomicId, item]));
+            assert.ok(
+              previous?.length && previous[0].difference === "other" && !previous[0].exactPassed,
+              "Global repair lacks a failed barrier",
+            );
+            assert.ok(
+              [...retained.values()].every((item) => !failedNativeReceipt(item)),
+              "Global repair has failed retained atomic receipts",
+            );
+            assert.ok(
+              trial.taskIds.every((task) => earlier.some((item) => item.taskIds[0] === task)),
+              "Global repair lacks retained parent deliveries",
+            );
+          }
+        } else {
+          const assigned = barrier.assignments
+            .filter((item) => item.agent === delivery.agent)
+            .map((item) => item.task);
+          assert.ok(assigned.length > 0, "Unscheduled participant");
+          assert.deepEqual(delivery.taskIds, assigned);
+        }
         assert.notEqual(delivery.difference, "eof", "Team grading has no EOF-only success");
         const group = attempts.get(delivery.barrierAttempt) ?? [];
+        if (atomic && (delivery.deliveryKind || group.some((item) => item.deliveryKind)))
+          assert.equal(group.length, 0, "Mixed or duplicate global repair delivery");
         assert.ok(
-          !group.some((item) => item.agent === delivery.agent),
+          !group.some((item) =>
+            atomic
+              ? (item.deliveryKind ?? item.atomicId) ===
+                (delivery.deliveryKind ?? delivery.atomicId)
+              : item.agent === delivery.agent,
+          ),
           "Duplicate participant delivery",
         );
         group.push(delivery);
@@ -154,10 +268,34 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
           ),
           "Contradictory joint grade",
         );
-        if (attempt < ordered.at(-1) || group[0].difference !== "unknown")
+        if (!atomic && (attempt < ordered.at(-1) || group[0].difference !== "unknown"))
           assert.equal(group.length, participantCount, "Incomplete jointly graded barrier");
         if (group[0].exactPassed)
           assert.equal(attempt, ordered.at(-1), "Corrections after joint acceptance");
+      }
+      if (atomic) {
+        assert.equal(trial.firstExactPassed, attempts.get(0)?.[0].exactPassed ?? false);
+        assert.equal(
+          trial.finalExactPassed,
+          attempts.get(ordered.at(-1))?.[0].exactPassed ?? false,
+        );
+        if (trial.finalExactPassed) {
+          const latest = new Map(
+            deliveries.map((item) => [item.deliveryKind ?? item.atomicId, item]),
+          );
+          assert.ok(
+            trial.taskIds.every((task) =>
+              deliveries.some(
+                (item) => Object.hasOwn(item, "atomicId") && item.taskIds[0] === task,
+              ),
+            ),
+            "Joint accepted barrier lacks parent task deliveries",
+          );
+          assert.ok(
+            [...latest.values()].every((item) => !failedNativeReceipt(item)),
+            "Joint accepted barrier has failed native receipts",
+          );
+        }
       }
       if (!trial.finalExactPassed) {
         stopped = true;
