@@ -345,6 +345,7 @@ export async function runConcurrent(
           attempt,
           retained: [...completed],
           invalidated: retained.invalidated,
+          inputChecks: [],
           completed: null,
           failed: [],
         };
@@ -436,26 +437,62 @@ export async function runConcurrent(
             rotation,
             signal,
             checkInputs: async (node, deliverySignal, context) => {
-              for (const dependency of node.dependencies) {
-                const checked = await checkpoint.observe(readSource, dependency, context, {
+              // Keep readiness evidence private and separate from verified
+              // outputs or native deliveries; a continuation is only a waiver.
+              const trace = {
+                atomicId: node.id,
+                startedMs: performance.now() - started,
+                decision: "checking",
+                observations: [],
+              };
+              state.inputChecks.push(trace);
+              const observed = (atomicId, mode, checked) => {
+                trace.observations.push({
+                  atomicId,
+                  mode,
+                  status: checked.status,
+                  reason: checked.reason ?? null,
+                });
+              };
+              const finish = (value) => {
+                trace.decision = value === true ? "pass" : value === false ? "fail" : "pending";
+                return value;
+              };
+              try {
+                for (const dependency of node.dependencies) {
+                  const checked = await checkpoint.observe(readSource, dependency, context, {
+                    signal: deliverySignal,
+                  });
+                  observed(dependency, "prerequisite-output", checked);
+                  if (checked.status !== "pass") return finish(decision(checked));
+                }
+                // An already-started atom gets a continuation even if its own
+                // partial write is no longer a valid fresh input. No successor gets
+                // this waiver; every prerequisite above must still be verified.
+                if (context.started.has(node.id)) {
+                  observed(node.id, "continuation", {
+                    status: "waived",
+                    reason: "already-started",
+                  });
+                  return finish(true);
+                }
+                const output = await checkpoint.observe(readSource, node.id, context, {
                   signal: deliverySignal,
                 });
-                if (checked.status !== "pass") return decision(checked);
-              }
-              // An already-started atom gets a continuation even if its own
-              // partial write is no longer a valid fresh input. No successor gets
-              // this waiver; every prerequisite above must still be verified.
-              if (context.started.has(node.id)) return true;
-              const output = await checkpoint.observe(readSource, node.id, context, {
-                signal: deliverySignal,
-              });
-              if (output.status === "pass") return true;
-              return decision(
-                await checkpoint.observe(readSource, node.id, context, {
+                observed(node.id, "current-output", output);
+                if (output.status === "pass") return finish(true);
+                const input = await checkpoint.observe(readSource, node.id, context, {
                   signal: deliverySignal,
                   input: true,
-                }),
-              );
+                });
+                observed(node.id, "current-input", input);
+                return finish(decision(input));
+              } catch (error) {
+                trace.decision = deliverySignal.aborted ? "aborted" : "error";
+                throw error;
+              } finally {
+                trace.elapsedMs = performance.now() - started - trace.startedMs;
+              }
             },
             execute: (node, agent, deliverySignal, context) =>
               deliver(node, agent, deliverySignal, context),

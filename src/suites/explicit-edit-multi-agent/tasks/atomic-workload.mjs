@@ -24,10 +24,14 @@ function certifiedGroups(operation) {
     );
     if (
       !mapping ||
-      Object.keys(group).some((key) => !["mapping", "selectors"].includes(key)) ||
+      Object.keys(group).some((key) => !["mapping", "selectors", "bindingCount"].includes(key)) ||
       Object.keys(group.mapping).some((key) => !["from", "to"].includes(key)) ||
       !Array.isArray(group.selectors) ||
-      !group.selectors.length
+      !group.selectors.length ||
+      !Number.isSafeInteger(group.bindingCount) ||
+      group.bindingCount < 1 ||
+      group.bindingCount > group.selectors.length ||
+      (group.bindingCount > 1 && group.selectors.some((selector) => selector.kind !== "function"))
     )
       throw Error("Atomic binding certification does not cover the original mappings");
     covered.add(mapping.from);
@@ -73,10 +77,12 @@ function certifiedGroups(operation) {
   return groups;
 }
 
-function goal(operations) {
+function goal(operations, bindingCount = 1) {
   const operation = operations[0];
   if (operation.phase === "names") {
     const [{ from, to }] = operation.mapping;
+    if (bindingCount > 1)
+      return `Rename the ${bindingCount} selected compiler-certified inseparable overload bindings from ${from} to ${to} together. Update their declarations and shared bound uses, and preserve all other bindings.`;
     return `Rename the selected binding from ${from} to ${to}. Update its declarations and bound uses, and preserve all other bindings.`;
   }
   if (operation.action === "header")
@@ -206,7 +212,7 @@ function compileNaming(task, add, depend) {
     const { bindingGroups: _groups, bindingCertification: _certification, ...original } = operation;
     for (const [bindingGroup, group] of groups.entries()) {
       const current = { ...original, mapping: [{ ...group.mapping }], selectors: group.selectors };
-      const node = add([current], [operationIndex]);
+      const node = add([current], [operationIndex], group.bindingCount);
       node.bindingGroup = bindingGroup;
       mappingNodes.get(group.mapping.from).push(node);
       local.push(node);
@@ -313,7 +319,10 @@ function compileStructure(task, add, depend) {
  * plan in preparation; plans never enter the delivered operation or prompt.
  * The certificate checksum detects changed groups, not untrusted provenance:
  * callers must seal the originating source and compiler evidence separately.
- * renameMappings counts original requirements, namingBindings counts deliveries.
+ * renameMappings counts original requirements; namingBindings counts semantic
+ * bindings, namingEdits counts their deliveries and coupledNamingEdits counts
+ * certified inseparable overload deliveries. Every naming group requires its
+ * compiler-sealed bindingCount; multiple bindings remain one logical delivery.
  * Dependencies are sparse and local to a scoring group. The caller retains the
  * existing group/barrier graph and must pass structural gates before unlocking
  * successors. Cyclic sequential renames fail closed instead of changing meaning.
@@ -337,12 +346,13 @@ export function atomicWorkload(tasks) {
       throw Error("Invalid atomic workload group");
     const operations = structuredClone(task.operations);
     let ordinal = 0;
-    const add = (current, sourceOperations) => {
+    const add = (current, sourceOperations, bindingCount) => {
       const node = {
         id: `${task.id}-edit-${String(++ordinal).padStart(5, "0")}`,
         taskId: task.id,
         operations: current,
-        prompt: coherentTaskPrompt(goal(current), current),
+        prompt: coherentTaskPrompt(goal(current, bindingCount), current),
+        ...(bindingCount === undefined ? {} : { bindingCount }),
         dependencies: [],
         sourceOperations,
       };
@@ -365,6 +375,7 @@ export function atomicWorkload(tasks) {
   }
   for (const node of nodes) node.dependencies = [...edges.get(node.id)].sort();
   validateGraph(nodes);
+  const naming = nodes.filter((node) => node.operations[0].phase === "names");
   return {
     version: "renderer-atomic-workload-v1",
     nodes,
@@ -376,7 +387,9 @@ export function atomicWorkload(tasks) {
         (sum, task) => sum + task.operations.reduce((n, op) => n + (op.mapping?.length ?? 0), 0),
         0,
       ),
-      namingBindings: nodes.filter((node) => node.operations[0].phase === "names").length,
+      namingBindings: naming.reduce((sum, node) => sum + node.bindingCount, 0),
+      namingEdits: naming.length,
+      coupledNamingEdits: naming.filter((node) => node.bindingCount > 1).length,
       dependencyEdges: nodes.reduce((sum, node) => sum + node.dependencies.length, 0),
       maximumPromptChars: Math.max(...nodes.map((node) => node.prompt.length)),
     },

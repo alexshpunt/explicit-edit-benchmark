@@ -41,6 +41,9 @@ export function unitDeclarator(source, unit) {
  * Positions are UTF-16 offsets into this exact source. Literals and directives stay intact.
  * Layout selection may expose individual declarations inside namespace-level conditionals;
  * implementation extraction keeps those blocks whole. This is syntax, not binding resolution.
+ * Leading template heads remain part of each unit but do not determine its kind.
+ * Non-type defaults containing angle operators must be parenthesized; unsupported
+ * head syntax rejects rather than guessing a declaration boundary.
  */
 export function cppStructure(source, { expandNamespaceConditionals = false } = {}) {
   const protectedTokens = cppTokens(source).filter((token) => !/^[A-Za-z_]\w*$/.test(token.text));
@@ -102,6 +105,59 @@ export function cppStructure(source, { expandNamespaceConditionals = false } = {
       else if (kind === "endif" && --depth === 0) return index + 1;
     }
     throw new Error("Unclosed conditional source block");
+  }
+  // Read template heads before classifying the actual declaration. Angle tokens
+  // in non-type defaults are expressions, not nested template parameter lists;
+  // require those expressions to be parenthesized rather than guess at them.
+  function templateHead(start) {
+    let index = start + 2,
+      angles = 0,
+      parameter = index,
+      defaultValue = false;
+    while (index < tokens.length) {
+      const item = tokens[index];
+      if (item.kind === "directive") throw new Error("Directive interrupts a template head");
+      if (item.kind === "literal") {
+        index++;
+        continue;
+      }
+      if (item.text === "template" && tokens[index + 1]?.text === "<") {
+        index = templateHead(index);
+        continue;
+      }
+      if (["(", "["].includes(item.text)) {
+        const closing = [item.text === "(" ? ")" : "]"];
+        while (++index < tokens.length && closing.length) {
+          const nested = tokens[index];
+          if (nested.kind === "literal") continue;
+          const pair = { "(": ")", "[": "]", "{": "}" }[nested.text];
+          if (pair) closing.push(pair);
+          else if ([")", "]", "}"].includes(nested.text)) {
+            if (closing.pop() !== nested.text) throw new Error("Unbalanced template parameter");
+          }
+        }
+        if (closing.length) throw new Error("Unclosed template parameter");
+        continue;
+      }
+      if (
+        defaultValue &&
+        !["class", "typename", "template"].includes(tokens[parameter].text) &&
+        (item.text === "<" || (item.text === ">" && tokens[index + 1]?.text === ">"))
+      )
+        throw new Error("Unsupported template parameter default: parenthesize angle expressions");
+      if (item.text === "<") angles++;
+      else if (item.text === ">") {
+        if (!angles) return index + 1;
+        angles--;
+      } else if (!angles && item.text === "=") defaultValue = true;
+      else if (!angles && item.text === ",") {
+        parameter = index + 1;
+        defaultValue = false;
+      } else if (["{", "}", ";", ")", "]"].includes(item.text))
+        throw new Error("Unsupported template parameter syntax");
+      index++;
+    }
+    throw new Error("Unclosed template head");
   }
   function scope(start, names, using, close = false) {
     const scopeName = names.join("::");
@@ -170,6 +226,9 @@ export function cppStructure(source, { expandNamespaceConditionals = false } = {
         }
       }
       const begin = index;
+      while (tokens[index]?.text === "template" && tokens[index + 1]?.text === "<")
+        index = templateHead(index);
+      const declarationBegin = index;
       let round = 0,
         square = 0,
         braces = 0,
@@ -200,8 +259,10 @@ export function cppStructure(source, { expandNamespaceConditionals = false } = {
               `Incomplete namespace-level source unit near ${source.slice(tokens[begin].start, tokens[begin].start + 180)}`,
             );
           if (!braces && !round && !square && sawBody) {
-            const prefix = tokens.slice(begin, index).findIndex((entry) => entry.text === "{");
-            const header = tokens.slice(begin, begin + prefix);
+            const prefix = tokens
+              .slice(declarationBegin, index)
+              .findIndex((entry) => entry.text === "{");
+            const header = tokens.slice(declarationBegin, declarationBegin + prefix);
             let nesting = 0;
             const declaration = header.some((entry) => {
               if (entry.text === "(") nesting++;

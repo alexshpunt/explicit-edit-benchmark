@@ -30,17 +30,26 @@ function containsPack(node) {
 }
 
 /** Refine compiler rename edits only for direct unresolved calls whose selected
- * function is provably impossible by fixed arity. AST identities/redeclarations,
- * not spelling or signatures, identify families. Every observation of the same
+ * function is provably impossible by fixed arity or a trusted compiler witness
+ * proves deduction impossible or a visible viable sibling strictly dominates it.
+ * AST identities/redeclarations, not spelling or signatures, identify families. Every observation of the same
  * source token must support exclusion; resolved selected references and unknown
- * shapes retain the edit. Defaults, variadics, packs, macros and explicit template
- * callee ranges are deliberately unsupported and stay unchanged. The returned
- * predicate is KEEP: false removes only the surplus edit, never declarations.
+ * shapes retain the edit. Defaults, variadics, packs and macros stay unchanged.
+ * Unqualified explicit-template callees support only fixed-arity exclusion;
+ * qualified or otherwise unsupported ranges and same-arity calls stay unchanged.
+ * The returned predicate is KEEP: false removes only the surplus edit, never
+ * declarations.
  * AST/entry offsets are bytes; edit.start is a JavaScript UTF-16 source offset.
  * This private snapshot filter must be applied per selected declaration before
  * merging semantic edits, in both certification and current-task planning.
+ * A same-arity witness may inspect the same compiler document asynchronously;
+ * unknown cases remain KEEP and resolved selected uses still veto exclusion.
+ * The returned predicate also exposes sharedCall({required, allowed, edit}), a
+ * synchronous private proof of genuinely shared resolved generic-call use. It
+ * never merges plans and returns false for incomplete or unsupported evidence.
+ * @param {{ canExclude?: (input: { selectedFunctions: object[], candidateFamilies: object[][], call: object }) => boolean | Promise<boolean> }} [options]
  */
-export function createDirectCallEditFilter(roots, source) {
+export function createDirectCallEditFilter(roots, source, options = {}) {
   const bytes = Buffer.from(source);
   const nodes = new Map();
   walk(roots, (node) => {
@@ -92,23 +101,44 @@ export function createDirectCallEditFilter(roots, source) {
     if (node.kind !== "FunctionDecl") continue;
     const key = familyOf(node.id);
     if (!key) continue;
-    const family = families.get(key) ?? { safe: !unsafeTemplates.has(key), count: undefined };
+    const family = families.get(key) ?? {
+      safe: !unsafeTemplates.has(key),
+      callSafe: !unsafeTemplates.has(key),
+      count: undefined,
+      functions: [],
+    };
+    family.functions.push(node);
     const parameters = (node.inner ?? []).filter((child) => child.kind === "ParmVarDecl");
     const count = parameters.length;
-    family.safe &&=
+    const defaults = parameters.some(
+      (parameter) =>
+        parameter.init !== undefined ||
+        parameter.defaultArg !== undefined ||
+        parameter.hasInheritedDefaultArg,
+    );
+    const fixed =
       plainLocation(node.loc) &&
       !!node.range &&
       Array.isArray(node.inner) &&
       !node.variadic &&
       parameters.every(
-        (parameter) =>
-          parameter.init === undefined &&
-          parameter.defaultArg === undefined &&
-          !parameter.hasInheritedDefaultArg &&
-          !parameter.isParameterPack &&
-          !parameter.type?.qualType?.includes("..."),
+        (parameter) => !parameter.isParameterPack && !parameter.type?.qualType?.includes("..."),
       ) &&
       (family.count === undefined || family.count === count);
+    family.safe &&= fixed && !defaults;
+    // Positive resolved-call evidence can use defaults; arity-based exclusion
+    // still requires the stricter flag above and never guesses about defaults.
+    family.callSafe &&= fixed;
+    const firstDefault = parameters.findIndex(
+      (parameter) =>
+        parameter.init !== undefined ||
+        parameter.defaultArg !== undefined ||
+        parameter.hasInheritedDefaultArg,
+    );
+    family.minimumCount = Math.min(
+      family.minimumCount ?? count,
+      firstDefault < 0 ? count : firstDefault,
+    );
     family.count ??= count;
     families.set(key, family);
     if (plainLocation(node.loc)) {
@@ -134,12 +164,27 @@ export function createDirectCallEditFilter(roots, source) {
       !identifier.test(name ?? "") ||
       !plainLocation(begin) ||
       !plainLocation(end) ||
+      begin.offset < 0 ||
       end.offset < begin.offset ||
-      end.tokLen !== Buffer.byteLength(name) ||
-      bytes.subarray(end.offset, end.offset + end.tokLen).toString("utf8") !== name
+      !Number.isSafeInteger(end.tokLen) ||
+      end.tokLen < 1 ||
+      end.offset + end.tokLen > bytes.length
     )
       return undefined;
-    return { name, offset: end.offset };
+    const length = Buffer.byteLength(name);
+    if (
+      end.tokLen === length &&
+      bytes.subarray(end.offset, end.offset + length).toString("utf8") === name
+    )
+      return { name, offset: end.offset };
+    if (
+      begin.tokLen === length &&
+      bytes.subarray(begin.offset, begin.offset + length).toString("utf8") === name &&
+      /^\s*</.test(bytes.subarray(begin.offset + length, end.offset).toString("utf8")) &&
+      /^>+$/.test(bytes.subarray(end.offset, end.offset + end.tokLen).toString("utf8"))
+    )
+      return { name, offset: begin.offset, explicitTemplate: true };
+    return undefined;
   }
   function unknown(node) {
     const name = nameOf(node);
@@ -205,6 +250,32 @@ export function createDirectCallEditFilter(roots, source) {
     if (!positions.size) unknownNames.add(name);
     for (const offset of positions) add(offset, { kind: "unknown" });
   }
+  function boundedRange(range) {
+    const begin = range?.begin,
+      end = range?.end;
+    return (
+      plainLocation(begin) &&
+      plainLocation(end) &&
+      begin.offset >= 0 &&
+      end.offset >= begin.offset &&
+      Number.isSafeInteger(end.tokLen) &&
+      end.tokLen > 0 &&
+      end.offset + end.tokLen <= bytes.length
+    );
+  }
+  function macroObservation(node) {
+    const locations = [node.loc, node.range?.begin, node.range?.end];
+    return (
+      locations.some(
+        (location) =>
+          location &&
+          (location.spellingLoc ||
+            location.expansionLoc ||
+            location.includedFrom ||
+            location.isMacroArgExpansion),
+      ) || (node.inner ?? []).some(macroObservation)
+    );
+  }
   walk(roots, (call) => {
     if (call.kind !== "CallExpr" || !call.inner?.length) return;
     let callee = call.inner[0];
@@ -214,15 +285,41 @@ export function createDirectCallEditFilter(roots, source) {
     const token = exactToken(callee);
     if (!token || call.inner.slice(1).some(containsPack)) return;
     classified.add(callee);
+    const defaults = call.inner.slice(1).filter((node) => node.kind === "CXXDefaultArgExpr");
+    if (
+      defaults.length &&
+      (callee.kind !== "DeclRefExpr" ||
+        defaults.some(
+          (node) =>
+            node.inner?.length ||
+            typeof node.type?.qualType !== "string" ||
+            [node.range?.begin, node.range?.end].some(
+              (location) => !location || Object.keys(location).length !== 0,
+            ),
+        ))
+    ) {
+      add(token.offset, { kind: "unknown" });
+      return;
+    }
+    const arguments_ = call.inner.slice(1).filter((node) => node.kind !== "CXXDefaultArgExpr");
+    const safeCall =
+      boundedRange(call.range) &&
+      [call.inner[0], ...arguments_].every((node) => boundedRange(node.range)) &&
+      !macroObservation(call);
     if (callee.kind === "UnresolvedLookupExpr") {
       if (!Array.isArray(callee.lookups)) {
         add(token.offset, { kind: "unknown" });
         return;
       }
+      const candidates = callee.lookups.map((lookup) => familyOf(lookup.id));
       add(token.offset, {
         kind: "unresolved",
-        count: call.inner.length - 1,
-        candidates: new Set(callee.lookups.map((lookup) => familyOf(lookup.id)).filter(Boolean)),
+        explicitTemplate: token.explicitTemplate === true,
+        call,
+        safeCall,
+        count: arguments_.length,
+        completeCandidates: candidates.length > 0 && candidates.every(Boolean),
+        candidates: new Set(candidates.filter(Boolean)),
       });
     } else {
       const ids = [callee.foundReferencedDecl?.id, callee.referencedDecl?.id].filter(Boolean);
@@ -231,14 +328,20 @@ export function createDirectCallEditFilter(roots, source) {
         resolved.length && resolved.every((item) => item && item === resolved[0])
           ? resolved[0]
           : undefined;
-      add(token.offset, { kind: "resolved", family: key });
+      add(token.offset, {
+        kind: "resolved",
+        family: key,
+        safeCall,
+        count: arguments_.length,
+        totalCount: call.inner.length - 1,
+      });
     }
   });
   walk(roots, (node) => {
     if (references.has(node.kind) && !classified.has(node)) unknown(node);
   });
   const offsets = new Map();
-  return (entry, edit) => {
+  const keep = (entry, edit) => {
     if (
       unlocatedUnknown ||
       entry.role !== "function" ||
@@ -258,10 +361,120 @@ export function createDirectCallEditFilter(roots, source) {
       offsets.set(edit.start, Buffer.byteLength(source.slice(0, edit.start)));
     const rows = observations.get(offsets.get(edit.start));
     if (!rows?.some((row) => row.kind === "unresolved" && row.candidates.has(key))) return true;
-    return !rows.every((row) =>
+    const excluded = (row) =>
       row.kind === "unresolved"
         ? row.count !== family.count
-        : row.kind === "resolved" && row.family && row.family !== key,
-    );
+        : row.kind === "resolved" && row.family && row.family !== key;
+    if (rows.every(excluded)) return false;
+    const canExclude = options.canExclude;
+    if (!canExclude) return true;
+    return (async () => {
+      for (const row of rows) {
+        if (excluded(row)) continue;
+        if (row.kind !== "unresolved" || row.explicitTemplate || !row.candidates.has(key))
+          return true;
+        const candidateFamilies = [...row.candidates]
+          .map((candidate) => families.get(candidate))
+          .filter((candidate) => candidate?.safe && candidate.count === family.count)
+          .map((candidate) => candidate.functions);
+        if (
+          !(await canExclude({
+            selectedFunctions: family.functions,
+            candidateFamilies,
+            call: row.call,
+          }))
+        )
+          return true;
+      }
+      return false;
+    })();
   };
+  /** Prove genuine shared direct-call use, not mere overlapping rename coverage.
+   * Entries use compiler byte declaration offsets; edit.start is joined UTF-16.
+   * Every required canonical family needs its own resolved observation at this
+   * exact token. All resolved and potentially viable lookup families must stay
+   * inside allowed; unknown or unsupported observations veto the proof.
+   * This is private certification evidence, not permission to merge plans.
+   */
+  keep.sharedCall = (input) => {
+    const { required, allowed, edit } = input ?? {};
+    if (
+      unlocatedUnknown ||
+      !Array.isArray(required) ||
+      !Array.isArray(allowed) ||
+      !identifier.test(edit?.old ?? "") ||
+      !identifier.test(edit?.new ?? "") ||
+      edit.old === edit.new ||
+      !Number.isSafeInteger(edit.start) ||
+      edit.start < 0 ||
+      source.slice(edit.start, edit.start + edit.old.length) !== edit.old ||
+      unknownNames.has(edit.old)
+    )
+      return false;
+    const group = (entries) => {
+      const selected = new Set();
+      for (const entry of entries) {
+        if (
+          entry?.role !== "function" ||
+          entry.name !== edit.old ||
+          entry.newName !== edit.new ||
+          !Number.isSafeInteger(entry.offset) ||
+          entry.offset < 0 ||
+          bytes
+            .subarray(entry.offset, entry.offset + Buffer.byteLength(entry.name))
+            .toString("utf8") !== entry.name
+        )
+          return undefined;
+        const keys = declarations.get(entry.offset);
+        if (keys?.size !== 1) return undefined;
+        const key = [...keys][0],
+          family = families.get(key);
+        if (!family?.callSafe || !Number.isSafeInteger(family.count)) return undefined;
+        selected.add(key);
+      }
+      return selected;
+    };
+    const needed = group(required),
+      permitted = group(allowed);
+    if (!needed || needed.size < 2 || !permitted || [...needed].some((key) => !permitted.has(key)))
+      return false;
+    const offset = Buffer.byteLength(source.slice(0, edit.start));
+    const rows = observations.get(offset);
+    if (!rows?.length) return false;
+    const resolved = new Set();
+    let generic = false;
+    for (const row of rows) {
+      if (
+        !row.safeCall ||
+        !Number.isSafeInteger(row.count) ||
+        [...needed].some((key) => {
+          const family = families.get(key);
+          return row.count < family.minimumCount || row.count > family.count;
+        })
+      )
+        return false;
+      if (row.kind === "resolved") {
+        if (
+          !row.family ||
+          !permitted.has(row.family) ||
+          row.totalCount !== families.get(row.family).count ||
+          row.count < families.get(row.family).minimumCount ||
+          row.count > families.get(row.family).count
+        )
+          return false;
+        resolved.add(row.family);
+      } else if (row.kind === "unresolved") {
+        if (!row.completeCandidates) return false;
+        generic = true;
+        for (const key of row.candidates) {
+          const family = families.get(key);
+          if (!family?.callSafe || !Number.isSafeInteger(family.count)) return false;
+          if (row.count >= family.minimumCount && row.count <= family.count && !permitted.has(key))
+            return false;
+        }
+      } else return false;
+    }
+    return generic && [...needed].every((key) => resolved.has(key));
+  };
+  return keep;
 }
