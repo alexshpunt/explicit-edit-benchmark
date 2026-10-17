@@ -43,9 +43,9 @@ They must preserve function bodies, literals, macros, inactive branches and
 previously accepted edits. See the [source provenance and licenses](fixtures/explicit-edit-multi-agent/PROVENANCE.md).
 
 The 15 persistent agents share one live workspace, with separate histories and
-rotating assignments. Each free agent receives one ready edit: a compiler-certified
-binding rename or a structural move with its inseparable cleanup. Lightweight
-checks verify each edit before it can unlock dependent work.
+rotating assignments. Each free agent receives one ready atomic request: a
+compiler-certified naming unit or a structural move with its inseparable cleanup.
+Lightweight checks verify each edit before it can unlock dependent work.
 
 The **28 full barriers** drain active edits, check the combined source, build a
 fresh project and render two scenes twice. Every image must match the original

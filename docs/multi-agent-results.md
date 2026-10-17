@@ -32,6 +32,9 @@ invented.
 The manifest's `suite` binds the workload, graph, schedule and fixed 15-agent
 policy. For the current stream, `suite.atomic` also records the atomic version,
 `workloadSha256`, `batchesSha256`, `dispatchPolicySha256` and `edits` inventory count.
+That count measures atomic units, not semantic bindings: a compiler-certified
+inseparable overload group is one unit even though it contains several bindings.
+Neither count changes the 71-group Score denominator.
 The private batch hash binds compiler-certified plans and expected-state data;
 those contents stay on the controller. Only safe identities and counts enter the
 bundle. Per-profile `observations` preserve execution status, wall-clock

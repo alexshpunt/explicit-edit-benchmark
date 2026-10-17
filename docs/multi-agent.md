@@ -14,9 +14,13 @@ rendered output unchanged.
 
 A scored run always uses **15 persistent agents and all 71 scoring groups**, with
 28 full verification barriers. Each free participant receives one ready atomic
-request. A rename targets one compiler-certified binding and its bound uses, not
-just one textual mapping. A structural request moves one definition or a genuinely
-inseparable unit with its required cleanup.
+request. A rename normally targets one compiler-certified binding and its bound
+uses, not just one textual mapping. A minimal group of overloads can form one
+naming unit only when the compiler proves that they share required call tokens
+and cannot be renamed independently. Overlapping rename plans alone are not proof.
+Semantic binding counts and atomic delivery counts remain separate. A structural
+request moves one definition or a genuinely inseparable unit with its required
+cleanup.
 
 The atomic graph follows code dependencies and selector readiness, not task
 numbering. Independent edits can run together in the same file. Only a passed
