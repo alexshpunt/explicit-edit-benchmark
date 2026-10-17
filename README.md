@@ -28,30 +28,35 @@
 Multi Edit ([Explicit Edit — Multi-Agent](docs/multi-agent.md),
 `explicit-edit-multi-agent`) tests whether agents can make precise, atomic edits
 and leave the product working, even while other agents change the same code.
-Each requested edit is feasible and checked with a scripted reference engine.
-A dependency graph determines which edits are independent and can run together;
-not every task can start at once, and not all 15 agents are busy at every round.
+A matching scripted reference must pass before measured execution. A dependency
+graph releases edits only after their prerequisites have been verified; unrelated
+ready edits can continue while other agents are busy.
 
 ### Methodology
 
 We take pinned C++ source from [Yocto/GL](https://github.com/xelatihy/yocto-gl),
 prepare a comment-free project, pack its modules into one monolith, shuffle
 function definitions and rename declarations and their bound uses. Agents must
-restore that prepared project through **71 restoration tasks**: refactor the
+restore that prepared project through **71 scoring groups**: refactor the
 monolith into working headers and implementation files and restore the names.
 They must preserve function bodies, literals, macros, inactive branches and
 previously accepted edits. See the [source provenance and licenses](fixtures/explicit-edit-multi-agent/PROVENANCE.md).
 
-The 15 agents share one live workspace, with separate histories and rotating
-assignments. A scripted reference engine proves the full parallel schedule
-before measured agents start. After each round, the verifier checks the combined
-edits, builds a fresh project and renders two scenes twice. Every image must
-match the original pixels exactly.
+The 15 persistent agents share one live workspace, with separate histories and
+rotating assignments. Each free agent receives one ready edit: a compiler-certified
+binding rename or a structural move with its inseparable cleanup. Lightweight
+checks verify each edit before it can unlock dependent work.
 
-A failed round allows three corrections without resetting the source or agent
-histories. **Score is the percentage of all 71 tasks jointly accepted.** Local
-runs have no overall or per-delivery deadline. Preparation is model-free but
-CPU-heavy; read the [run guide](docs/multi-agent.md) before starting.
+The **28 full barriers** drain active edits, check the combined source, build a
+fresh project and render two scenes twice. Every image must match the original
+pixels exactly. Only these barriers award credit to the 71 scoring groups;
+individual atomic completions do not add Score tasks.
+
+A failed barrier allows **five corrections after the initial attempt**, without
+resetting the source or histories. **Score = 75% first-pass + 25% eventual-pass**,
+weighted over the same 71 groups. Local runs have no overall or per-delivery
+deadline. Preparation is model-free but CPU-heavy; read the
+[run guide](docs/multi-agent.md) before starting.
 
 <p align="center">
   <img src="assets/logo.png" alt="Explicit Edit 1.0" width="560">
@@ -228,9 +233,10 @@ npm run benchmark -- run --local --suite explicit-edit-multi-agent \
 
 Each selected configuration first passes a one-task model/auth smoke check.
 The original suite then runs independent trials. Multi-Agent also prepares the
-renderer and proves the parallel schedule with scripted editors before measured
-agents start. It allows three corrections per failed barrier, keeps failed edits
-and histories, and stops when those corrections are exhausted. Legitimate early
+renderer and requires a matching atomic-stream proof from scripted editors before
+measured agents start. Free participants receive short ready edits; full barriers
+award joint task credit. It allows five corrections per failed barrier, keeps the
+workspace and histories, and stops when those corrections are exhausted. Legitimate early
 stops retain the accepted prefix; they are results, not runs to hide.
 
 The command exports and validates the common safe bundle, then opens a Dataset

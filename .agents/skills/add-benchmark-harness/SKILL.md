@@ -58,10 +58,13 @@ Resolve suite selection through `publish-benchmark-observation`; do not embed a
 task count, concurrency, timeout or suite-specific prompt into the adapter.
 Use the common config and result protocol for each supported suite.
 
-For Multi-Agent, exercise several assignments in each participant's own history,
-including simultaneous deliveries, native errors, cancellation and cleanup.
-A one-task auth smoke is not proof of shared-project continuation or isolation.
-Keep public task credit separate from native delivery metrics.
+For Multi-Agent, verify many short atomic assignments in each participant's own
+history, including overlapping participants, retained corrections, global barrier
+repair, native errors, cancellation and cleanup. Keep distinct per-delivery
+artifacts and count native metrics once, including retained receipts. A one-task
+auth smoke is not proof of shared-project continuation or isolation. Keep joint
+scoring-task credit separate from atomic/native delivery counts. Read
+`docs/multi-agent-results.md` for the evidence contract.
 
 ## Verify
 
