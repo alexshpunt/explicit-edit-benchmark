@@ -205,9 +205,11 @@ function inventory(tree) {
   return entries;
 }
 
-// Check bounded standard import context, not arbitrary C++ namespace equivalence.
-// Aliases, broad namespace directives and conditional imports stay physical.
-function standardUsingContext(tree, record, omitOwn = false) {
+/** Check bounded standard import context for private structural graders.
+ * This is not arbitrary C++ namespace equivalence: aliases, broad namespace
+ * directives and conditional imports remain physical requirements.
+ */
+export function standardUsingContext(tree, record, omitOwn = false) {
   if (record.kind !== "using" || record.conditions.length) return false;
   const spelling = record.tokens.join("");
   const literalNamespace = spelling === "usingnamespacestd::string_literals;";

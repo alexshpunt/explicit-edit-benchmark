@@ -17,6 +17,7 @@ import {
   applyScopedNamePlan,
   currentNamingSelectors,
 } from "../cpp/scoped-names.mjs";
+import { coherentNamingPlans } from "./coherent-naming-plans.mjs";
 
 /** Prepare a separate coherent route and private cumulative obligation ledger from
  * the verified full inventory. No pairwise swaps are delivered. Scripted reference
@@ -37,8 +38,10 @@ export async function prepareCoherent(proofPath, outputPath, { signal } = {}) {
   assert.equal(treeIdentity(initial), audit.initial);
   await mkdir(output);
   await mkdir(path.join(output, "contracts"));
+  await mkdir(path.join(output, "naming-plans"));
   await writeTree(path.join(output, "initial"), initial);
   const contractHashes = {};
+  const namingPlanHashes = {};
   const seal = async (id, tree) => {
     const content = JSON.stringify(prepareCoherentContract(tree)) + "\n";
     contractHashes[id] = createHash("sha256").update(content).digest("hex");
@@ -105,8 +108,20 @@ export async function prepareCoherent(proofPath, outputPath, { signal } = {}) {
       if (entries[0].operation.category === "functions-types") {
         const directory = path.join(output, `owners-${tasks.length}`);
         await mkdir(directory);
-        const origins = entries.map((entry) =>
-          entry.origins.map((origin) => ({
+        const groups = entries.flatMap((entry) => [
+          entry.origins,
+          ...entry.certification.atoms.map((atom) => {
+            const origins = entry.origins.filter((origin) =>
+              atom.plan.edits.some(
+                (edit) => edit.file === origin.file && edit.start === origin.start,
+              ),
+            );
+            assert.ok(origins.length, "Certified binding has no selected declaration origin");
+            return origins;
+          }),
+        ]);
+        const origins = groups.map((group) =>
+          group.map((origin) => ({
             ...origin,
             start:
               origin.start +
@@ -116,10 +131,24 @@ export async function prepareCoherent(proofPath, outputPath, { signal } = {}) {
                 .reduce((sum, edit) => sum + edit.new.length - edit.old.length, 0),
           })),
         );
-        const selectors = await currentNamingSelectors(current, origins, directory);
-        for (const [index, entry] of entries.entries())
-          entry.operation = { ...entry.operation, selectors: selectors[index] };
+        const refreshed = await currentNamingSelectors(
+          current,
+          origins,
+          directory,
+          entries.map((entry) => entry.certification),
+          applied,
+        );
+        for (const [index, entry] of entries.entries()) {
+          entry.certification = refreshed.certifications[index];
+          entry.operation = entry.certification.operation;
+        }
       }
+      const privatePlans = coherentNamingPlans(
+        current,
+        entries.map((entry) => entry.plan),
+        applied,
+        entries.map((entry) => entry.certification),
+      );
       for (const entry of entries) {
         current = applyScopedNamePlan(current, entry.plan, applied);
         applied.push(entry.plan);
@@ -130,6 +159,9 @@ export async function prepareCoherent(proofPath, outputPath, { signal } = {}) {
         subsystem,
         entries.map((entry) => entry.operation),
       );
+      const planBytes = JSON.stringify(privatePlans) + "\n";
+      namingPlanHashes[item.id] = createHash("sha256").update(planBytes).digest("hex");
+      await writeFile(path.join(output, "naming-plans", `${item.id}.json`), planBytes);
       await seal(item.id, current);
       console.log(`PREPARED ${item.id}: ${subsystem}, ${entries.length} owner groups`);
     }
@@ -155,13 +187,20 @@ export async function prepareCoherent(proofPath, outputPath, { signal } = {}) {
         });
         sessionKey = key;
       }
-      const plan = await session.plan(operation);
+      const certification = await session.atomicPlans(operation);
+      const plan = certification.plan;
       const counts = new Map();
       for (const origin of selectedOrigins)
         counts.set(origin.file, (counts.get(origin.file) ?? 0) + 1);
       const ordered = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
       if (!ordered.length) throw Error("Missing current naming owner module");
-      pending.push({ operation, plan, subsystem: ordered[0][0], origins: selectedOrigins });
+      pending.push({
+        operation: certification.operation,
+        certification,
+        plan,
+        subsystem: ordered[0][0],
+        origins: selectedOrigins,
+      });
     }
     await flush();
   } finally {
@@ -184,6 +223,7 @@ export async function prepareCoherent(proofPath, outputPath, { signal } = {}) {
         tasksSha256: createHash("sha256").update(taskBytes).digest("hex"),
         tasks: tasks.length,
         contractHashes,
+        namingPlanHashes,
         targets: tasks.reduce((sum, task) => sum + task.operations.length, 0),
         omittedLayoutSwaps: requests.filter((item) => item.action === "swap-definitions").length,
         final: treeIdentity(current),

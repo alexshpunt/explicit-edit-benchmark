@@ -11,7 +11,13 @@ import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_MAX_ATTEMPTS,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
-import { validateTeamSuite, validateTeamTables } from "./normalized-team-protocol.mjs";
+import {
+  teamDeliveryDirectory,
+  validateStreamDelivery,
+  validateTeamSuite,
+  validateTeamTables,
+  validateAtomicIdentity,
+} from "./normalized-team-protocol.mjs";
 
 export const NORMALIZED_SCHEMA_VERSION = 2;
 
@@ -253,6 +259,17 @@ function safeProfile(profileId, adapter, configuration) {
   };
 }
 
+function settledStreamDelivery(delivery) {
+  const receipt = delivery.receipt ?? {};
+  return (
+    delivery.status === "settled" &&
+    !receipt.providerFailure &&
+    !receipt.timedOut &&
+    !receipt.eventErrors &&
+    (receipt.exitCode === undefined || receipt.exitCode === null || receipt.exitCode === 0)
+  );
+}
+
 /** Project a shared team report into the common trial and delivery tables.
  * A trial is a jointly graded barrier; taskIds carry its task credit. A round is
  * one participant delivery, so costs and native events are never repeated per task.
@@ -262,6 +279,9 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
   const trials = [];
   const rounds = [];
   const scheduledTasks = new Set();
+  const atomic = report.executions.some(
+    (item) => Object.hasOwn(item, "atomicId") || Object.hasOwn(item, "deliveryKind"),
+  );
   const checks = new Map();
   for (const check of report.checks) {
     if (checks.has(check.label)) throw Error("Duplicate team grade label");
@@ -282,9 +302,14 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
     }
     const deliveries = report.executions
       .filter((item) => item.round === barrier.id)
-      .sort((left, right) => left.attempt - right.attempt || left.agent - right.agent);
+      .sort(
+        (left, right) => left.attempt - right.attempt || (atomic ? 0 : left.agent - right.agent),
+      );
+    if (atomic && stopped && deliveries.length)
+      throw Error("Team continued after an unaccepted barrier");
     const trialId = `${barrier.id}__${profile.profileId}`;
     const deliveryKeys = new Set();
+    const attemptDeliveries = new Map();
     for (const [ordinal, item] of deliveries.entries()) {
       if (
         !Number.isInteger(item.attempt) ||
@@ -295,14 +320,39 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
         item.agent >= report.agents
       )
         throw Error("Invalid participant delivery position");
-      const key = `${item.attempt}:${item.agent}`;
+      if (atomic) {
+        validateStreamDelivery(item, item.tasks, taskIds, item.attempt);
+        const group = attemptDeliveries.get(item.attempt) ?? [];
+        if ((item.deliveryKind || group.some((prior) => prior.deliveryKind)) && group.length)
+          throw Error("Mixed or duplicate global repair delivery");
+        if (item.deliveryKind) {
+          const priorGrade = checks.get(`${barrier.id}-attempt-${item.attempt - 1}`);
+          const earlier = deliveries
+            .slice(0, ordinal)
+            .filter((prior) => Object.hasOwn(prior, "atomicId"));
+          const retained = new Map(earlier.map((prior) => [prior.atomicId, prior]));
+          if (
+            priorGrade?.status !== "fail" ||
+            !["structure", "build", "behavior"].includes(priorGrade.category) ||
+            [...retained.values()].some((prior) => !settledStreamDelivery(prior)) ||
+            taskIds.some((task) => !earlier.some((prior) => prior.tasks[0] === task))
+          )
+            throw Error("Global repair lacks retained atomic outputs and failed barrier evidence");
+        }
+        group.push(item);
+        attemptDeliveries.set(item.attempt, group);
+        if (!["settled", "error"].includes(item.status))
+          throw Error("Invalid atomic delivery status");
+      } else {
+        const assigned = barrier.assignments
+          .filter((assignment) => assignment.agent === item.agent)
+          .map((assignment) => assignment.task);
+        if (!assigned.length || JSON.stringify(assigned) !== JSON.stringify(item.tasks))
+          throw Error("Participant delivery contradicts scheduled tasks");
+      }
+      const key = `${item.attempt}:${atomic ? (item.deliveryKind ?? item.atomicId) : item.agent}`;
       if (deliveryKeys.has(key)) throw Error("Duplicate participant delivery");
       deliveryKeys.add(key);
-      const assigned = barrier.assignments
-        .filter((assignment) => assignment.agent === item.agent)
-        .map((assignment) => assignment.task);
-      if (!assigned.length || JSON.stringify(assigned) !== JSON.stringify(item.tasks))
-        throw Error("Participant delivery contradicts scheduled tasks");
       const grade = checks.get(`${barrier.id}-attempt-${item.attempt}`);
       const exactPassed = grade?.status === "pass";
       const receipt = item.receipt ?? {};
@@ -322,6 +372,11 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
         round: ordinal,
         agent: item.agent,
         barrierAttempt: item.attempt - 1,
+        ...(atomic
+          ? item.deliveryKind
+            ? { deliveryKind: item.deliveryKind }
+            : { atomicId: item.atomicId }
+          : {}),
         taskIds: item.tasks,
         exactPassed,
         normalizedPassed: exactPassed,
@@ -348,13 +403,36 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
     }
     const firstAttempt = deliveries[0]?.attempt;
     const lastAttempt = deliveries.at(-1)?.attempt;
+    if (
+      atomic &&
+      deliveries.some(
+        (item) =>
+          item.attempt < lastAttempt &&
+          checks.get(`${barrier.id}-attempt-${item.attempt}`)?.status === "pass",
+      )
+    )
+      throw Error("Stream continued after joint acceptance");
     const finalExactPassed = checks.get(`${barrier.id}-attempt-${lastAttempt}`)?.status === "pass";
     if (finalExactPassed) {
       if (stopped) throw Error("Joint accepted progress is not a verified prefix");
       const last = deliveries.filter((item) => item.attempt === lastAttempt);
-      const participants = new Set(barrier.assignments.map((item) => item.agent));
-      if (last.length !== participants.size || last.some((item) => item.status !== "settled"))
-        throw Error("Joint accepted barrier has unsettled participants");
+      if (atomic) {
+        const latest = new Map(
+          deliveries.map((item) => [item.deliveryKind ?? item.atomicId, item]),
+        );
+        if (
+          [...latest.values()].some((item) => !settledStreamDelivery(item)) ||
+          taskIds.some(
+            (task) =>
+              !deliveries.some((item) => Object.hasOwn(item, "atomicId") && item.tasks[0] === task),
+          )
+        )
+          throw Error("Joint accepted barrier has unsettled atoms");
+      } else {
+        const participants = new Set(barrier.assignments.map((item) => item.agent));
+        if (last.length !== participants.size || last.some((item) => item.status !== "settled"))
+          throw Error("Joint accepted barrier has unsettled participants");
+      }
       acceptedRounds++;
       acceptedTasks += taskIds.length;
     } else stopped = true;
@@ -440,6 +518,13 @@ export async function exportNormalizedRun(rootDirectory, outputDirectory, option
         throw Error("Incomplete team workload");
       if (suite.schedule && JSON.stringify(suite.schedule) !== JSON.stringify(report.schedule))
         throw Error("Team profiles have different schedules");
+      if (
+        Boolean(report.atomic) !== Boolean(suite.atomic) ||
+        (suite.atomic &&
+          Object.keys(suite.atomic).some((field) => report.atomic[field] !== suite.atomic[field]))
+      )
+        throw Error("Team report contradicts atomic identity");
+      if (report.atomic) validateAtomicIdentity(report.atomic);
       suite.schedule = report.schedule;
       suite.observations.push({
         profileId: profile.profileId,
@@ -455,7 +540,11 @@ export async function exportNormalizedRun(rootDirectory, outputDirectory, option
           directory,
           "deliveries",
           `agent-${round.agent}`,
-          `${projected.trials.find((trial) => trial.trialId === round.trialId).taskId}-attempt-${round.barrierAttempt + 1}`,
+          teamDeliveryDirectory(
+            projected.trials.find((trial) => trial.trialId === round.trialId).taskId,
+            round.barrierAttempt + 1,
+            round.atomicId,
+          ),
         );
         const native = await readCallsFile(path.join(delivery, "tool-calls.json"));
         round.toolCallsObserved = native.observed;

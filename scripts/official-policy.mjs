@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { validateAtomicIdentity } from "./normalized-team-protocol.mjs";
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_PROTOCOL,
@@ -36,10 +37,11 @@ function validateTeamRelease(suites) {
   const suite = suites[MULTI_AGENT_BENCHMARK];
   exactKeys(
     suite,
-    ["runner", "graphSha256", "scheduleSha256", "runPolicy"],
+    ["runner", "graphSha256", "scheduleSha256", "runPolicy", "atomic"],
     "policy.suites.multi-agent",
   );
   validateRunner(suite.runner, "policy.suites.multi-agent.runner");
+  validateAtomicIdentity(suite.atomic);
   if (
     suite.runner.contract !== MULTI_AGENT_PROTOCOL ||
     !SHA256.test(suite.graphSha256) ||
