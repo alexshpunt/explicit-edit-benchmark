@@ -13,6 +13,7 @@ import { atomicWorkload } from "../../src/suites/explicit-edit-multi-agent/tasks
 import { applyCoherentStructure } from "../../src/suites/explicit-edit-multi-agent/reference/coherent-edit.mjs";
 
 function fixtureCertification(operation, bindingGroups) {
+  bindingGroups = bindingGroups.map((group) => ({ bindingCount: 1, ...group }));
   return {
     ...operation,
     bindingGroups,

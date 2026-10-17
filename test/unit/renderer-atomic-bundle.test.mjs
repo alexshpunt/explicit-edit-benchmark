@@ -29,6 +29,7 @@ function fixture() {
     { from: "b", to: "right" },
   ];
   const groups = mappings.map((mapping) => ({
+    bindingCount: 1,
     mapping,
     selectors: [
       {

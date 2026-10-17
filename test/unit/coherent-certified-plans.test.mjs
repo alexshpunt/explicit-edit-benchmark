@@ -12,6 +12,7 @@ import { applyScopedNamePlan } from "../../src/suites/explicit-edit-multi-agent/
 
 function certified(source, mappings) {
   const groups = mappings.map(({ from, to }) => ({
+    bindingCount: 1,
     mapping: { from, to },
     selectors: [{ kind: "variable", scope: from }],
   }));

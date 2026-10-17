@@ -93,10 +93,10 @@ test("defaults, variadics and parameter packs never justify discarding a call", 
   }
 });
 
-test("pack-expanded calls, explicit template names and macro observations remain conservative", async (t) => {
+test("pack-expanded calls, qualified explicit template names and macros remain conservative", async (t) => {
   for (const [caller, call] of [
     ["template<class... T> void caller(T... value) { old(0, value...); }", "old(0, value...)"],
-    ["template<class T> void caller(T value) { old<T>(0, value, 0); }", "old<T>"],
+    ["template<class T> void caller(T value) { frond::old<T>(0, value, 0); }", "old<T>"],
     [
       "#define APPLY(value) old(0, value, 0)\ntemplate<class T> void caller(T value) { APPLY(value); }",
       "old(0, value, 0)",
@@ -106,6 +106,26 @@ test("pack-expanded calls, explicit template names and macro observations remain
     assert.equal(data.keep(data.entry("void (int, T, int)"), data.edit(call)), true);
     assert.equal(data.keep(data.entry("void (int, T)"), data.edit(call)), true);
   }
+});
+
+test("explicit template calls permit fixed-arity exclusion but never a same-arity witness", async (t) => {
+  const data = await fixture(
+    t,
+    overloads +
+      "template<class T> void caller(T value) { old<T>(0, value, {}); }\n}\nint main() {}\n",
+  );
+  const edit = data.edit("old<T>");
+  assert.equal(data.keep(data.entry("void (int, T)"), edit), false);
+  assert.equal(data.keep(data.entry("void (int, T, int)"), edit), true);
+  let consulted = false;
+  const keep = createDirectCallEditFilter(data.roots, data.source, {
+    canExclude: () => {
+      consulted = true;
+      return true;
+    },
+  });
+  assert.equal(await keep(data.entry("void (int, T, int)"), edit), true);
+  assert.equal(consulted, false);
 });
 
 test("contradictory, unclassified and missing observations cannot remove an edit", async (t) => {
@@ -183,7 +203,7 @@ test("same-arity call exclusions require an explicit asynchronous compiler witne
   const edit = data.edit("old(0, value, 0)");
   let observations = 0;
   const keep = createDirectCallEditFilter(data.roots, data.source, {
-    isDominated: async ({ selectedFunctions, candidateFamilies, call }) => {
+    canExclude: async ({ selectedFunctions, candidateFamilies, call }) => {
       observations++;
       assert.ok(selectedFunctions.every((node) => node.kind === "FunctionDecl"));
       assert.ok(candidateFamilies.some((family) => family.includes(selectedFunctions[0])));
@@ -194,7 +214,7 @@ test("same-arity call exclusions require an explicit asynchronous compiler witne
   assert.equal(await keep(entry, edit), false);
   assert.ok(observations > 0);
   const unknown = createDirectCallEditFilter(data.roots, data.source, {
-    isDominated: async () => false,
+    canExclude: async () => false,
   });
   assert.equal(await unknown(entry, edit), true);
 });
@@ -206,7 +226,7 @@ test("a resolved selected use vetoes an asynchronous sibling witness", async (t)
       "template<class T> void caller(T value) { old(0, value, 0); }\n}\nint main() { frond::caller(1); }\n",
   );
   const keep = createDirectCallEditFilter(data.roots, data.source, {
-    isDominated: async () => true,
+    canExclude: async () => true,
   });
   assert.equal(await keep(data.entry("void (int, T, int)"), data.edit("old(0, value, 0)")), true);
 });

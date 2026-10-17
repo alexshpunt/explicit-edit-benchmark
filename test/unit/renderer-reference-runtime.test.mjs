@@ -34,6 +34,7 @@ await test("clustered reference runtimes stage only editing dependencies and can
     "cpp/direct-call-edits.mjs",
     "cpp/template-call-witness.mjs",
     "cpp/reference-call-witness.mjs",
+    "cpp/atomic-binding-coupling.mjs",
     "cpp/joined-project.mjs",
     "cpp/clangd-renames.mjs",
     "cpp/compiler-ast.mjs",
