@@ -4,7 +4,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { cppTokens, treeIdentity, writeTree } from "./generator.mjs";
 import { semanticEdits } from "../cpp/clangd-renames.mjs";
-import { projectAst } from "../cpp/compiler-ast.mjs";
+import {
+  projectAst,
+  writtenFunctionSignatures,
+  isFunctionInstantiation,
+} from "../cpp/compiler-ast.mjs";
 import { byteToCharacter } from "../cpp/cpp-offsets.mjs";
 import { assignNames, namingSummary, vocabularyIdentity } from "./name-vocabulary.mjs";
 
@@ -158,14 +162,18 @@ function candidates(roots, bytes, sourcePath, category) {
 
 // Local references carry an exact declaration ID in Clang's AST. Use it only
 // in memory; neither compiler IDs nor unrelated same-spelling tokens are edited.
-/** @param {((a: string, b: string) => void) | null} merge */
-function localEdits(roots, selection, source, merge = null) {
+/**
+ * @param {((a: string, b: string) => void) | null} merge
+ * @param {Map<number, string> | null} writtenSignatures
+ */
+function localEdits(roots, selection, source, merge = null, writtenSignatures = null) {
   const byOffset = new Map(selection.map((entry) => [entry.offset, entry]));
   const bindings = new Map();
   const nodes = new Map();
   const bytes = Buffer.from(source);
   const characterOffset = byteToCharacter(source);
   function declarations(node) {
+    if (writtenSignatures && isFunctionInstantiation(node, writtenSignatures)) return;
     if (["VarDecl", "ParmVarDecl"].includes(node.kind)) {
       nodes.set(node.id, node);
       const entry = byOffset.get(node.loc?.offset);
@@ -210,6 +218,7 @@ function localEdits(roots, selection, source, merge = null) {
     if (entry && node.loc && !node.isImplicit) add(entry, node.loc);
   }
   function references(node, captureInitializer = false) {
+    if (writtenSignatures && isFunctionInstantiation(node, writtenSignatures)) return;
     if (node.kind === "DeclRefExpr") {
       const entry = bindings.get(node.referencedDecl?.id);
       const location = node.range?.end;
@@ -235,10 +244,13 @@ function localEdits(roots, selection, source, merge = null) {
 
 /** Resolve selected current variable declarations and their compiler-bound uses.
  * Selection offsets address this exact live compiler view, not generation records.
- * Implicit lambda capture punctuation is not an editable identifier.
+ * Implicit lambda capture punctuation is not an editable identifier. Match the
+ * selector's written-function view: substituted template copies can attach body
+ * uses to prototype parameter locations that do not own those written uses.
+ * Generation keeps its separate, instantiation-aware family coupling unchanged.
  */
 export function variableBindingEdits(roots, selection, source) {
-  return localEdits(roots, selection, source);
+  return localEdits(roots, selection, source, null, writtenFunctionSignatures(roots));
 }
 // Instantiations can bind one physical template token to parameters declared
 // at different sites. Join only families connected by actual compiler-bound uses.
