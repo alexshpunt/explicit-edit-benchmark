@@ -19,11 +19,14 @@ Original Explicit Edit runs 226 independent tasks. Its submit defaults are five
 Oracle recoveries, concurrency 10 and a 120-second delivery timeout. Supported
 overrides are recorded and compared under their matching policy.
 
-Multi-Agent runs all 71 tasks with a fixed 15-agent team. Model-free preparation
-and a matching parallel reference proof precede measured execution. It allows
-three retained-state corrections per failed barrier and has no local overall or
-delivery deadline. It accepts no scored task subset or smaller team. Read the
-[run guide](multi-agent.md) for compiler requirements and costs.
+Multi-Agent runs all 71 scoring groups with a fixed 15-agent team. Participants
+receive individual ready edits, not entire groups. Model-free preparation and a
+matching atomic-stream reference proof precede measured execution. It allows
+five retained-state corrections after the initial barrier attempt and has no
+local overall or delivery deadline. Score weights first-pass success at 75% and
+eventual success at 25% over the same 71 groups, not the atomic delivery count.
+It accepts no scored task subset or smaller team. Read the
+[run guide](multi-agent.md) for verification levels, compiler requirements and costs.
 
 The automatic smoke is a model/auth check, not proof that a model can solve the
 selected suite. It can lead directly into the full paid run, so approve both
