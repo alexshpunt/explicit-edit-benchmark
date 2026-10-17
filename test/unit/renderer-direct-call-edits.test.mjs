@@ -174,6 +174,42 @@ test("nameless unsupported references veto exclusions at their source range", as
   }
 });
 
+test("same-arity call exclusions require an explicit asynchronous compiler witness", async (t) => {
+  const data = await fixture(
+    t,
+    overloads + "template<class T> void caller(T value) { old(0, value, 0); }\n}\nint main() {}\n",
+  );
+  const entry = data.entry("void (int, T, int)");
+  const edit = data.edit("old(0, value, 0)");
+  let observations = 0;
+  const keep = createDirectCallEditFilter(data.roots, data.source, {
+    isDominated: async ({ selectedFunctions, candidateFamilies, call }) => {
+      observations++;
+      assert.ok(selectedFunctions.every((node) => node.kind === "FunctionDecl"));
+      assert.ok(candidateFamilies.some((family) => family.includes(selectedFunctions[0])));
+      assert.equal(call.kind, "CallExpr");
+      return true;
+    },
+  });
+  assert.equal(await keep(entry, edit), false);
+  assert.ok(observations > 0);
+  const unknown = createDirectCallEditFilter(data.roots, data.source, {
+    isDominated: async () => false,
+  });
+  assert.equal(await unknown(entry, edit), true);
+});
+
+test("a resolved selected use vetoes an asynchronous sibling witness", async (t) => {
+  const data = await fixture(
+    t,
+    overloads +
+      "template<class T> void caller(T value) { old(0, value, 0); }\n}\nint main() { frond::caller(1); }\n",
+  );
+  const keep = createDirectCallEditFilter(data.roots, data.source, {
+    isDominated: async () => true,
+  });
+  assert.equal(await keep(data.entry("void (int, T, int)"), data.edit("old(0, value, 0)")), true);
+});
 test("a repeated shallow AST stub cannot erase complete declaration metadata", async (t) => {
   const data = await fixture(
     t,

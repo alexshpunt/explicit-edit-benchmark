@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { runCoherent } from "../../src/suites/explicit-edit-multi-agent/execution/coherent-run.mjs";
@@ -18,6 +18,30 @@ import {
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const quiet = () => {};
+
+function assertInputTrace(report) {
+  for (const barrier of report.atomicBarriers) {
+    assert.ok(Array.isArray(barrier.inputChecks), "Every barrier retains its actual input checks");
+    for (const check of barrier.inputChecks) {
+      assert.ok(typeof check.atomicId === "string");
+      assert.ok(check.startedMs >= 0 && check.elapsedMs >= 0);
+      assert.ok(["pass", "fail", "pending", "aborted", "error"].includes(check.decision));
+      assert.ok(Array.isArray(check.observations));
+      for (const observation of check.observations) {
+        assert.deepEqual(Object.keys(observation).sort(), ["atomicId", "mode", "reason", "status"]);
+        assert.ok(
+          ["prerequisite-output", "current-output", "current-input", "continuation"].includes(
+            observation.mode,
+          ),
+        );
+        if (observation.mode === "continuation") {
+          assert.equal(observation.status, "waived");
+          assert.equal(observation.reason, "already-started");
+        }
+      }
+    }
+  }
+}
 
 async function prepareFixture(root) {
   const names = ["North", "South", "West"];
@@ -232,6 +256,21 @@ await test(
         assert.equal(new Set(drivers.calls.map((row) => row.atomicId)).size, 3);
         assert.equal(drivers.histories.filter((history) => history.length === 2).length, 1);
         assert.ok(report.agentsClosed.every(Boolean));
+        assertInputTrace(report);
+        assert.ok(
+          report.atomicBarriers[0].inputChecks.some(
+            (check) =>
+              check.decision === "pass" &&
+              check.observations.some(
+                (row) => row.mode === "current-input" && row.status === "pass",
+              ) &&
+              check.observations.some(
+                (row) => row.mode === "current-output" && row.status === "fail",
+              ),
+          ),
+        );
+        const saved = JSON.parse(await readFile(path.join(root, "live/report.json"), "utf8"));
+        assert.deepEqual(saved.atomicBarriers[0].inputChecks, report.atomicBarriers[0].inputChecks);
         assert.deepEqual(await readTree(path.join(root, "live/workspace")), expected);
         assert.deepEqual(report.checks.at(-1).pixels, pixels);
       },
@@ -272,6 +311,18 @@ await test(
             "The failed atom must get its first opportunity before spending a correction",
           );
           assert.equal(report.repairs, drivers.calls.filter((row) => row.attempt > 1).length);
+          assertInputTrace(report);
+          const north = byGuard("NORTH_H")[0].atomicId;
+          assert.ok(
+            report.atomicBarriers[1].inputChecks.some(
+              (check) =>
+                check.atomicId === north &&
+                check.decision === "pass" &&
+                check.observations.some(
+                  (row) => row.mode === "continuation" && row.status === "waived",
+                ),
+            ),
+          );
           assert.equal(report.acceptedTasks, 2);
           assert.equal(
             report.checks.find((check) => check.status === "fail").category,
@@ -309,6 +360,12 @@ await test(
         assert.equal(report.deliveries, 4);
         assert.equal(report.repairs, 1);
         assert.equal(report.acceptedTasks, 2);
+        assertInputTrace(report);
+        assert.deepEqual(
+          report.atomicBarriers[1].inputChecks,
+          [],
+          "Global repair must not fabricate atom eligibility checks",
+        );
         const atoms = report.executions.filter((row) => row.atomicId);
         assert.equal(atoms.length, 3);
         assert.ok(atoms.every((row) => row.attempt === 1 && row.atomicCheck.status === "pass"));
@@ -319,6 +376,64 @@ await test(
         assert.deepEqual(repairs[0].tasks, ["task-001", "task-002"]);
         assert.equal(report.checks.find((check) => check.status === "fail").category, "build");
         assert.deepEqual(await readTree(path.join(root, "barrier-repair/workspace")), expected);
+      },
+    );
+
+    await t.test(
+      "saved input checks identify a controlled prerequisite before dependent dispatch",
+      async () => {
+        const selected = path.join(root, "dependent-prepared");
+        await cp(preparation, selected, {
+          recursive: true,
+          errorOnExist: true,
+          force: false,
+          filter: (file) => path.basename(file) !== "verification-2.json",
+        });
+        const taskFile = path.join(selected, "atomic/tasks.json");
+        const workload = JSON.parse(await readFile(taskFile, "utf8"));
+        const byGuard = (guard) =>
+          workload.nodes.find((node) => node.operations[0].guard === guard);
+        const north = byGuard("NORTH_H");
+        const south = byGuard("SOUTH_H");
+        // This controlled graph makes an input requirement explicit. Produce a
+        // fresh real reference proof instead of relabelling the original proof.
+        south.dependencies.push(north.id);
+        workload.summary.dependencyEdges++;
+        const bytes = JSON.stringify(workload) + "\n";
+        await writeFile(taskFile, bytes);
+        const manifestFile = path.join(selected, "manifest.json");
+        const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
+        manifest.atomic.workloadSha256 = digest(bytes);
+        await writeFile(manifestFile, JSON.stringify(manifest));
+        const reference = await runConcurrent(selected, path.join(root, "dependent-reference"), {
+          log: quiet,
+        });
+        assert.equal(reference.status, "pass", JSON.stringify(reference.terminal));
+        const drivers = deterministicDrivers();
+        const output = path.join(root, "dependent-live");
+        const report = await runConcurrent(selected, output, { ...drivers, log: quiet });
+        assert.equal(report.status, "pass", JSON.stringify(report.terminal));
+        assert.equal(report.deliveries, 3);
+        assertInputTrace(report);
+        const checks = report.atomicBarriers[0].inputChecks.filter(
+          (check) => check.atomicId === south.id,
+        );
+        const passed = checks.find((check) => check.decision === "pass");
+        assert.ok(passed);
+        assert.deepEqual(passed.observations[0], {
+          atomicId: north.id,
+          mode: "prerequisite-output",
+          status: "pass",
+          reason: null,
+        });
+        const dependent = report.executions.find((row) => row.atomicId === south.id);
+        assert.ok(passed.startedMs + passed.elapsedMs <= dependent.startedMs);
+        assert.equal(
+          report.executions.find((row) => row.atomicId === north.id).atomicCheck.status,
+          "pass",
+        );
+        const saved = JSON.parse(await readFile(path.join(output, "report.json"), "utf8"));
+        assert.deepEqual(saved.atomicBarriers[0].inputChecks, report.atomicBarriers[0].inputChecks);
       },
     );
 
