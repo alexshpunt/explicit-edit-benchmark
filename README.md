@@ -47,7 +47,7 @@ Thank you to everyone who shares benchmark observations. Your work makes this pu
 | [@dirac-run](https://huggingface.co/dirac-run)             |             4 |              4 |
 | [@TreyThomasCodes](https://huggingface.co/TreyThomasCodes) |             7 |              7 |
 | [@user2221](https://huggingface.co/user2221)               |             5 |              5 |
-| [@xuankunv1](https://huggingface.co/xuankunv1)             |             6 |              6 |
+| [@xuankunv1](https://huggingface.co/xuankunv1)             |            12 |              9 |
 | [@Yugimob](https://huggingface.co/Yugimob)                 |            23 |             23 |
 
 ## Accepted harnesses
@@ -67,9 +67,9 @@ Thank you to everyone who shares benchmark observations. Your work makes this pu
 | [`oh-my-pi-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Aoh-my-pi-default%40latest)                               |             3 |              7 |
 | [`opencode-default`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Aopencode-default%40latest)                               |             2 |              6 |
 | [`personal-pi-extensions-opencode`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Apersonal-pi-extensions-opencode%40latest) |             1 |              1 |
-| [`pi-agent-ide`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-agent-ide%40latest)                                       |            26 |             28 |
+| [`pi-agent-ide`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-agent-ide%40latest)                                       |            45 |             47 |
 | [`pi-apply-patch`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-apply-patch%40latest)                                   |             1 |              1 |
-| [`pi-better-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-better-edit%40latest)                                   |             7 |              7 |
+| [`pi-better-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-better-edit%40latest)                                   |            13 |             10 |
 | [`pi-better-read-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-better-read-edit%40latest)                         |             1 |              1 |
 | [`pi-codex-conversion`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-codex-conversion%40latest)                         |             1 |              1 |
 | [`pi-codex-edit`](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-codex-edit%40latest)                                     |             1 |              1 |
