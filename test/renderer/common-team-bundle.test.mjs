@@ -84,6 +84,7 @@ await test(
         workloadSha256: input.workloadSha256,
         graphSha256: input.graphSha256,
         scheduleSha256: report.scheduleSha256,
+        atomic: input.atomic,
       },
     });
     await json("summary.json", {
@@ -96,7 +97,8 @@ await test(
     const manifest = await validateNormalizedRun(normalized);
     assert.equal(manifest.schemaVersion, 3);
     assert.equal(manifest.counts.trials, 28);
-    assert.equal(manifest.counts.rounds, 71);
+    assert.deepEqual(manifest.suite.atomic, input.atomic);
+    assert.equal(manifest.counts.rounds, input.atomic.edits);
     const projected = (await readFile(path.join(normalized, "trials.jsonl"), "utf8"))
       .trim()
       .split("\n")

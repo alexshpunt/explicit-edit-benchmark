@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { atomicIdentity } from "../helpers/atomic-identity.mjs";
 import { createAggregateState, materializeAggregateState } from "../../scripts/aggregate-state.mjs";
 import { aggregateExactConfigurations } from "../../scripts/result-aggregation.mjs";
 import { submissionMetadata } from "../../scripts/benchmark-submit.mjs";
@@ -219,12 +220,14 @@ await test("the common exporter and validator carry a team bundle without duplic
     workloadSha256: "b".repeat(64),
     graphSha256: "c".repeat(64),
     scheduleSha256,
+    atomic: atomicIdentity(),
   };
   Object.assign(report, {
     workloadSha256: suite.workloadSha256,
     graphSha256: suite.graphSha256,
     scheduleSha256,
     graphWidth: 15,
+    atomic: suite.atomic,
   });
   const adapter = {
     ...seedProfile,
@@ -280,9 +283,20 @@ await test("the common exporter and validator carry a team bundle without duplic
       ]),
     );
   }
+  for (const field of ["workloadSha256", "batchesSha256", "dispatchPolicySha256", "edits"]) {
+    const changed = structuredClone(report);
+    changed.atomic[field] = field === "edits" ? report.atomic.edits + 1 : "f".repeat(64);
+    await writeFile(path.join(directory, "report.json"), JSON.stringify(changed));
+    await assert.rejects(
+      exportNormalizedRun(raw, path.join(root, `bad-atomic-${field}`)),
+      /contradicts atomic identity/,
+    );
+  }
+  await writeFile(path.join(directory, "report.json"), JSON.stringify(report));
   const output = path.join(root, "normalized");
   const manifest = await exportNormalizedRun(raw, output);
   assert.equal(manifest.schemaVersion, 3);
+  assert.deepEqual(manifest.suite.atomic, suite.atomic);
   assert.equal(manifest.policy.concurrency, 15);
   assert.equal(manifest.policy.timeoutMs, null);
   assert.equal(manifest.taskSetSha256, suite.workloadSha256);
@@ -317,6 +331,7 @@ await test("the common exporter and validator carry a team bundle without duplic
   assert.equal(official.lifecycle.observedTrials, 2);
   assert.equal(official.lifecycle.infrastructureFailures, 0);
   assert.equal(official.normalized.tasks.length, 71);
+  assert.deepEqual(official.normalized.atomic, suite.atomic);
   const officialFile = path.join(root, "official-manifest.json");
   await writeFile(officialFile, JSON.stringify(official));
   const policyFile = path.join(root, "official-policy.json");
@@ -335,6 +350,7 @@ await test("the common exporter and validator carry a team bundle without duplic
     graphSha256: suite.graphSha256,
     scheduleSha256,
     runPolicy: { partialRuns: true, ...manifest.policy },
+    atomic: suite.atomic,
   };
   policy.suites = { [MULTI_AGENT_BENCHMARK]: approved };
   await writeFile(policyFile, JSON.stringify(policy));
@@ -361,6 +377,24 @@ await test("the common exporter and validator carry a team bundle without duplic
       /does not match/,
     );
   }
+  for (const field of ["workloadSha256", "batchesSha256", "edits"]) {
+    const changed = structuredClone(policy);
+    changed.suites[MULTI_AGENT_BENCHMARK].atomic[field] =
+      field === "edits" ? suite.atomic.edits + 1 : "e".repeat(64);
+    await writeFile(policyFile, JSON.stringify(changed));
+    await assert.rejects(
+      validateOfficialManifest(officialFile, output, policyFile, signing.signerSha),
+      /atomic identity does not match/,
+    );
+  }
+  const wrongDispatch = structuredClone(policy);
+  wrongDispatch.suites[MULTI_AGENT_BENCHMARK].atomic.dispatchPolicySha256 = "e".repeat(64);
+  await writeFile(policyFile, JSON.stringify(wrongDispatch));
+  await assert.rejects(loadOfficialPolicy(policyFile), /Atomic dispatch policy changed/);
+  const noAtomicPolicy = structuredClone(policy);
+  delete noAtomicPolicy.suites[MULTI_AGENT_BENCHMARK].atomic;
+  await writeFile(policyFile, JSON.stringify(noAtomicPolicy));
+  await assert.rejects(loadOfficialPolicy(policyFile), /expected fields.*atomic/);
   const wrongFixture = structuredClone(policy);
   wrongFixture.suites[MULTI_AGENT_BENCHMARK].runner.tasks[0].fixtureSha256 = "e".repeat(64);
   await writeFile(policyFile, JSON.stringify(wrongFixture));
