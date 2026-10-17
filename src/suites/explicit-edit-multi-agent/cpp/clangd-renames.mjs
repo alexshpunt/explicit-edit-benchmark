@@ -83,6 +83,7 @@ export async function semanticSession(sourcePath, source, flags) {
   for (let index = 0; index < source.length; index++)
     if (source[index] === "\n") starts.push(index + 1);
   const offset = (position) => starts[position.line] + position.character;
+  const usingDeclarations = new Map();
   try {
     await client.request("initialize", {
       processId: process.pid,
@@ -101,9 +102,48 @@ export async function semanticSession(sourcePath, source, flags) {
   }
   return {
     close: () => client.close(),
+    /** Inspect structured types in this unchanged compiler document.
+     * @param {{ start: { line: number, character: number }, end: { line: number, character: number } }} [range]
+     */
+    ast(range) {
+      return client.request("textDocument/ast", { textDocument: { uri }, range });
+    },
+    /** Resolve distinct compiler entities at a UTF-16 document position.
+     * Remove only AST-confirmed using-declaration wrappers; preserve aliases.
+     * @param {{ line: number, character: number }} position
+     */
+    async symbols(position) {
+      const result = await client.request("textDocument/symbolInfo", {
+        textDocument: { uri },
+        position,
+      });
+      if (!Array.isArray(result)) return result;
+      const seen = new Set();
+      const entities = [];
+      for (const symbol of result) {
+        const declaration = symbol?.declarationRange;
+        if (declaration?.uri === uri && declaration.range) {
+          const key = JSON.stringify(declaration.range);
+          if (!usingDeclarations.has(key)) {
+            const node = await client.request("textDocument/ast", {
+              textDocument: { uri },
+              range: declaration.range,
+            });
+            usingDeclarations.set(key, node?.role === "declaration" && node.kind === "Using");
+          }
+          if (usingDeclarations.get(key)) continue;
+        }
+        if (typeof symbol?.usr === "string" && symbol.usr) {
+          if (seen.has(symbol.usr)) continue;
+          seen.add(symbol.usr);
+        }
+        entities.push(symbol);
+      }
+      return entities;
+    },
     /** Narrow compiler edits with trusted AST evidence before per-binding plans
      * merge. keepEdit never adds edits; unknown cases must remain accepted.
-     * @param {{ keepEdit?: (entry: {name: string, offset: number, role?: string}, edit: {start: number, old: string, new: string}) => boolean }} [options]
+     * @param {{ keepEdit?: (entry: {name: string, offset: number, role?: string}, edit: {start: number, old: string, new: string}) => boolean | Promise<boolean> }} [options]
      */
     async edits(selection, options = {}) {
       const keepEdit = options.keepEdit ?? (() => true);
@@ -131,7 +171,7 @@ export async function semanticSession(sourcePath, source, flags) {
               new: change.newText,
               families: [entry.family],
             };
-            if (!keepEdit(entry, edit)) continue;
+            if (!(await keepEdit(entry, edit))) continue;
             const previous = edits.get(begin);
             if (previous && (previous.old !== edit.old || previous.new !== edit.new))
               throw new Error(`Conflicting semantic edits: ${entry.name}`);

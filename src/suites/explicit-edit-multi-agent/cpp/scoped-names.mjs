@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { joinedProject } from "./joined-project.mjs";
 import {
   projectAst,
@@ -13,6 +13,9 @@ import { variableBindingEdits } from "../generation/semantic-names.mjs";
 import { semanticSession } from "./clangd-renames.mjs";
 import { assertNeutralSource } from "../generation/origin-markers.mjs";
 import { createDirectCallEditFilter } from "./direct-call-edits.mjs";
+import { createTemplateCallWitness } from "./template-call-witness.mjs";
+import { createReferenceCallWitness } from "./reference-call-witness.mjs";
+import { coupleAtomicBindings, validateAtomicBindingCoupling } from "./atomic-binding-coupling.mjs";
 
 function matchesPublicSelector(entry, category, selector) {
   const owner = entry.owner;
@@ -273,6 +276,11 @@ export async function currentNamingSelectors(
     for (const [index, atom] of atoms.entries()) {
       const group = bindingGroups[index];
       if (
+        !Number.isSafeInteger(group?.bindingCount) ||
+        group.bindingCount < 1 ||
+        group.bindingCount > (group.selectors?.length ?? 0) ||
+        (group.bindingCount > 1 &&
+          group.selectors.some((selector) => selector.kind !== "function")) ||
         atom.bindingGroup !== index ||
         JSON.stringify(atom.operation) !==
           JSON.stringify({
@@ -288,6 +296,7 @@ export async function currentNamingSelectors(
         !atom.declarations?.length
       )
         throw Error("Invalid certified declaration binding");
+      validateAtomicBindingCoupling(atom, group.bindingCount);
       for (const edit of atom.plan.edits) {
         const key = JSON.stringify([edit.file, edit.start]);
         if (allEdits.has(key) || edit.old !== group.mapping.from || edit.new !== group.mapping.to)
@@ -326,7 +335,11 @@ export async function currentNamingSelectors(
           "Refreshed selector does not select the same declarations of its certified binding",
         );
       selectors.push(publicSelectors);
-      newGroups.push({ mapping: { ...group.mapping }, selectors: publicSelectors });
+      newGroups.push({
+        mapping: { ...group.mapping },
+        selectors: publicSelectors,
+        bindingCount: group.bindingCount,
+      });
       newAtoms.push({
         ...atom,
         operation: { ...original, mapping: [{ ...group.mapping }], selectors: publicSelectors },
@@ -379,8 +392,16 @@ export async function scopedNamingSession(
   await writeFile(sourcePath, image.source);
   const flags = ["-std=c++17", "-pthread"];
   const roots = await projectAst(sourcePath, flags);
-  const keepEdit = createDirectCallEditFilter(roots, image.source);
   let compiler;
+  const inspector = {
+    ast: (range) => compiler.ast(range),
+    symbols: (position) => compiler.symbols(position),
+  };
+  const templateWitness = createTemplateCallWitness(roots, image.source, inspector);
+  const referenceWitness = createReferenceCallWitness(roots, image.source, inspector);
+  const keepEdit = createDirectCallEditFilter(roots, image.source, {
+    canExclude: async (evidence) => (await templateWitness(evidence)) || referenceWitness(evidence),
+  });
   const consumed = new Set();
   const renamed = new Map();
   const siteKey = (edit) => JSON.stringify([edit.file, edit.start]);
@@ -459,12 +480,15 @@ export async function scopedNamingSession(
     },
     /** Certify the next delivered naming request against this unchanged snapshot.
      * Identical semantic edit sets are one binding, including alias-spelled
-     * redeclarations. Disjoint sets are separate atoms; partial overlaps and
-     * publicly indistinguishable bindings fail before consuming any origin.
+     * redeclarations. Disjoint sets are separate atoms. Only positive compiler
+     * evidence of shared instantiated calls permits a minimal inseparable overload
+     * group; unknown overlaps and indistinguishable bindings fail before consumption.
      * Returns { operation, plan, atoms }. operation.bindingGroups and its checksum
-     * contain public mappings/selectors only. Each atom is indexed by bindingGroup
+     * contain public mappings/selectors and the honest semantic bindingCount.
+     * Each atom is indexed by bindingGroup
      * and contains a single-mapping public operation plus its PRIVATE physical plan
-     * and declarations: [{ file, start, role }]. These original compiler-selected
+     * and declarations: [{ file, start, role }]. Coupled atoms also retain PRIVATE
+     * coupling evidence tied to the joined compiler snapshot. These selected
      * sites let currentNamingSelectors verify a later rebased selector refresh.
      * plan is the union equivalent to the original request, so callers do not call
      * plan(request) a second time. Successful certification consumes that union
@@ -494,10 +518,15 @@ export async function scopedNamingSession(
       const id = request.id ?? request.target;
       const cache = new Map();
       const bySignature = new Map();
-      const occupied = new Map();
+      const nativePlans = new Map();
+      const entryKey = (entry) => JSON.stringify([entry.offset, entry.newName]);
       async function entryPlan(entry) {
-        const key = JSON.stringify([entry.offset, entry.newName]);
-        if (!cache.has(key)) cache.set(key, physicalPlan(id, await editsFor([entry])));
+        const key = entryKey(entry);
+        if (!cache.has(key)) {
+          const edits = await editsFor([entry]);
+          nativePlans.set(key, edits);
+          cache.set(key, physicalPlan(id, edits));
+        }
         return cache.get(key);
       }
       for (const entry of selection) {
@@ -505,16 +534,135 @@ export async function scopedNamingSession(
         const signature = planSignature(plan);
         let binding = bySignature.get(signature);
         if (!binding) {
-          for (const edit of plan.edits)
-            if (occupied.has(siteKey(edit)))
-              throw Error("Partially overlapping compiler binding plans cannot be atomic edits");
-          binding = { plan, entries: [], mapping: { from: entry.name, to: entry.newName } };
+          binding = {
+            plan,
+            signature,
+            entries: [],
+            mapping: { from: entry.name, to: entry.newName },
+            joinedSites: new Map(),
+          };
           bySignature.set(signature, binding);
-          for (const edit of plan.edits) occupied.set(siteKey(edit), signature);
         }
         binding.entries.push(entry);
+        for (const edit of nativePlans.get(entryKey(entry))) {
+          const origin = image.physical(
+            Buffer.byteLength(image.source.slice(0, edit.start)),
+            Buffer.byteLength(edit.old),
+          );
+          const key = siteKey(origin);
+          const views = binding.joinedSites.get(key) ?? new Map();
+          views.set(edit.start, { start: edit.start, old: edit.old, new: edit.new });
+          binding.joinedSites.set(key, views);
+        }
       }
-      const bindings = [...bySignature.values()].sort(
+      const origin = (entry) => ({
+        ...image.physical(entry.offset, Buffer.byteLength(entry.name)),
+        role: entry.role,
+      });
+      const sourceSha256 = createHash("sha256").update(image.source).digest("hex");
+      const probes = new Map();
+      const proofKey = ({ required, allowed, edit }) => JSON.stringify({ required, allowed, edit });
+      let coupled;
+      for (;;) {
+        const unresolved = [];
+        try {
+          coupled = coupleAtomicBindings([...bySignature.values()], {
+            sharedCall: (evidence) => {
+              if (keepEdit.sharedCall(evidence)) return true;
+              const key = proofKey(evidence);
+              if (probes.has(key)) return probes.get(key)?.sharedCall(evidence) === true;
+              unresolved.push(evidence);
+              return false;
+            },
+            origin,
+            sourceSha256,
+          });
+          break;
+        } catch (error) {
+          const missing = unresolved.at(-1);
+          if (
+            error.diagnostic?.reason !== "Shared call lacks positive compiler binding evidence" ||
+            !missing ||
+            probes.has(proofKey(missing))
+          )
+            throw error;
+          // Controller-only certification may force a private instantiation of an
+          // otherwise uninstantiated original template. The live .plan() path
+          // never loads this module or receives its source/proof artifacts.
+          const { proveSharedCallInstantiation } = await import("./shared-call-instantiation.mjs");
+          const proof = await proveSharedCallInstantiation({
+            roots,
+            source: image.source,
+            ...missing,
+            directory,
+            sourcePath,
+          });
+          if (!proof) throw error;
+          const overlay = await readFile(proof.evidence.overlayFile, "utf8");
+          const expectedOverlay = JSON.stringify({
+            version: 0,
+            "use-external-names": false,
+            roots: [
+              { type: "file", name: sourcePath, "external-contents": proof.evidence.probeFile },
+            ],
+          });
+          if (
+            proof.evidence.logicalFile !== sourcePath ||
+            overlay !== expectedOverlay ||
+            createHash("sha256").update(overlay).digest("hex") !== proof.evidence.overlaySha256
+          )
+            throw Error("Private instantiation overlay differs from the original logical file", {
+              cause: error,
+            });
+          if (
+            proof.evidence.sourceSha256 !== sourceSha256 ||
+            createHash("sha256")
+              .update(image.source + proof.evidence.suffix)
+              .digest("hex") !== proof.evidence.probeSha256 ||
+            proof.evidence.calleeOffset !==
+              Buffer.byteLength(image.source.slice(0, missing.edit.start)) ||
+            !proof.sharedCall(missing)
+          )
+            throw Error("Private instantiation proof differs from its original compiler view", {
+              cause: error,
+            });
+          probes.set(proofKey(missing), {
+            ...proof,
+            input: missing,
+            evidence: { ...proof.evidence, callStart: missing.edit.start },
+          });
+        }
+      }
+      for (const binding of coupled) {
+        if (!binding.coupling) continue;
+        const instantiations = [];
+        for (const proof of probes.values()) {
+          if (!proof) continue;
+          const site = image.physical(
+            Buffer.byteLength(image.source.slice(0, proof.evidence.callStart)),
+            Buffer.byteLength(binding.mapping.from),
+          );
+          if (
+            binding.coupling.sites.some(
+              (shared) => shared.file === site.file && shared.start === site.start,
+            )
+          )
+            instantiations.push({
+              site,
+              proof: proof.evidence,
+              declarations: [
+                ...new Map(
+                  proof.input.required.map((entry) => {
+                    const declaration = origin(entry);
+                    return [siteKey(declaration), declaration];
+                  }),
+                ).values(),
+              ],
+            });
+        }
+        if (instantiations.length) binding.coupling.instantiations = instantiations;
+      }
+      const bindings = coupled.sort(
         (a, b) =>
           request.mapping.findIndex((mapping) => mapping.from === a.mapping.from) -
           request.mapping.findIndex((mapping) => mapping.from === b.mapping.from),
@@ -522,6 +670,8 @@ export async function scopedNamingSession(
       const {
         bindingGroups: _oldGroups,
         bindingCertification: _oldCertification,
+        prompt: _legacyPrompt,
+        dependsOn: _legacyDependencies,
         ...original
       } = request;
       const atoms = [];
@@ -553,10 +703,20 @@ export async function scopedNamingSession(
           )
           .map((entry) => ({ ...entry, newName: binding.mapping.to, family: id }));
         if (!addressed.length) throw Error("Public selector cannot address one atomic binding");
-        for (const entry of addressed)
-          if (planSignature(await entryPlan(entry)) !== planSignature(binding.plan))
+        const addressedPlans = new Set();
+        for (const entry of addressed) {
+          const signature = planSignature(await entryPlan(entry));
+          if (!binding.memberSignatures.has(signature))
             throw Error("Public selector identifies indistinguishable independent bindings");
-        bindingGroups.push({ mapping: { ...binding.mapping }, selectors: operation.selectors });
+          addressedPlans.add(signature);
+        }
+        if (addressedPlans.size !== binding.memberSignatures.size)
+          throw Error("Public selector omits a certified binding");
+        bindingGroups.push({
+          mapping: { ...binding.mapping },
+          selectors: operation.selectors,
+          bindingCount: binding.bindingCount,
+        });
         const declarations = new Map(
           addressed.map((entry) => {
             const origin = {
@@ -571,7 +731,9 @@ export async function scopedNamingSession(
           operation,
           plan: binding.plan,
           declarations: [...declarations.values()],
+          ...(binding.coupling ? { coupling: binding.coupling } : {}),
         });
+        validateAtomicBindingCoupling(atoms.at(-1), binding.bindingCount);
       }
       const physical = new Map(
         atoms.flatMap((atom) => atom.plan.edits).map((edit) => [siteKey(edit), edit]),

@@ -70,6 +70,11 @@ function namingBindings(tree, task, nodes, record) {
       "Invalid atomic binding group index",
     );
     const atom = binding?.atoms[node.bindingGroup];
+    assert.equal(
+      node.bindingCount,
+      binding?.operation.bindingGroups[node.bindingGroup]?.bindingCount,
+      "Atomic binding count differs from its certified group",
+    );
     assert.ok(
       atom && atom.bindingGroup === node.bindingGroup,
       "Missing certified atomic binding plan",

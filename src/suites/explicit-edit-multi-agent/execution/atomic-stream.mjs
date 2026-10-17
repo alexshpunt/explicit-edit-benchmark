@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 export const ATOMIC_DISPATCH_POLICY = Object.freeze({
   version: "renderer-atomic-stream-v1",
   assignment: "next-free-rotating",
-  unit: "certified-binding-or-structural-unit",
+  unit: "certified-binding-or-inseparable-overload-group-or-structural-unit",
   dependencyCompletion: "verified-output",
   checkpoints: "drained-parent-barriers",
   barrierRecovery: "single-global-delivery",
