@@ -27,6 +27,8 @@ export async function prepareMultiAgent(outputDirectory, { coherentProof, signal
       "--bind",
       "/",
       "/",
+      "--dev",
+      "/dev",
       "--unshare-pid",
       "--proc",
       "/proc",
