@@ -221,10 +221,10 @@ export async function currentNamingSelectors(
     const key = declarationSiteKey(site);
     const previous = declarations.get(key);
     const { offset: _offset, ...identity } = entry;
-    if (previous && JSON.stringify(previous.identity) !== JSON.stringify(identity))
-      throw Error(`Ambiguous current declaration owner: ${key}`);
-    if (previous) return;
-    declarations.set(key, { entry, site, identity });
+    const signature = JSON.stringify(identity);
+    if (previous?.identities.has(signature)) return;
+    if (previous) previous.identities.add(signature);
+    else declarations.set(key, { entry, site, identities: new Set([signature]) });
     if (!byName.has(entry.name)) byName.set(entry.name, []);
     byName.get(entry.name).push({ entry, site });
   });
@@ -233,6 +233,8 @@ export async function currentNamingSelectors(
     for (const origin of origins) {
       const declaration = declarations.get(declarationSiteKey(origin));
       if (!declaration) throw Error("Missing refreshed current declaration owner");
+      if (declaration.identities.size !== 1)
+        throw Error(`Ambiguous current declaration owner: ${declarationSiteKey(origin)}`);
       const selector = publicNamingSelector(declaration.entry, category);
       selectors.set(JSON.stringify(selector), selector);
     }
