@@ -218,6 +218,100 @@ test("refresh rejects a new shadowed binding that the rebased public selector wo
     );
   }, true);
 });
+
+test("unrelated lambda-local observations do not block a certified function selector refresh", async () => {
+  await withEarlierTypeRename(async ({ current, certification, groups, applied, directory }) => {
+    const extra = {
+      ...current,
+      "main.cpp":
+        current["main.cpp"] +
+        `
+namespace unrelated {
+int calculate(int value) {
+  auto transform = [](int argument) {
+    int local = argument + 1;
+    return local;
+  };
+  return transform(value);
+}
+}
+`,
+    };
+    const { certifications } = await currentNamingSelectors(
+      extra,
+      groups,
+      directory,
+      [certification],
+      applied,
+    );
+    const [runtime] = await scopedNamingPlan(
+      extra,
+      [certifications[0].atoms[0].operation],
+      directory,
+    );
+    assert.deepEqual(
+      applyScopedNamePlan(extra, runtime),
+      applyScopedNamePlan(extra, certification.plan, applied),
+    );
+    checkCpp(applyScopedNamePlan(extra, runtime));
+    await assert.rejects(
+      currentNamingSelectors(
+        extra,
+        [
+          [
+            {
+              file: "main.cpp",
+              start: extra["main.cpp"].indexOf("local ="),
+              role: "variable",
+            },
+          ],
+        ],
+        directory,
+      ),
+      /Ambiguous current declaration owner/,
+    );
+  });
+});
+
+test("refresh retains later lambda-local identities when checking for extra selected bindings", async () => {
+  const tree = {
+    "main.cpp": `namespace frond {
+int calculate(int value) {
+  struct Local { int member; };
+  return value;
+}
+}
+`,
+  };
+  const request = {
+    id: "local-type",
+    phase: "names",
+    category: "functions-types",
+    mapping: [{ from: "Local", to: "Restored" }],
+    selectors: [{ kind: "type", scope: "frond::calculate::Local" }],
+  };
+  await withSession(tree, request, async (session, directory) => {
+    const certification = await session.atomicPlans(request);
+    session.close();
+    const origins = certification.atoms[0].declarations;
+    const extra = {
+      "main.cpp": tree["main.cpp"].replace(
+        "return value;",
+        `auto transform = [](int argument) {
+    struct Local { int member; };
+    return argument;
+  };
+  return transform(value);`,
+      ),
+    };
+    checkCpp(extra);
+    await assert.rejects(
+      currentNamingSelectors(extra, [origins, origins], directory, [certification]),
+      /same declarations|selector.*binding/i,
+    );
+  });
+});
+
 test("one snapshot certifies separate overload atoms and their union matches the original plan", async () => {
   const tree = {
     "main.cpp": `namespace frond {
