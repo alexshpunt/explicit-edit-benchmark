@@ -75,3 +75,23 @@ test("clearing or mutating returned structural frontiers cannot preserve stale s
   assert.deepEqual(checkpoint.expected(new Set()).tree, initial);
   assert.equal(checkpoint.check(initial, nodes[0].id, { input: true }).status, "pass");
 });
+
+test("speculative outputs and reused input metadata never change current-source requirements", () => {
+  const { initial, nodes, checkpoint } = fixture();
+  const completed = new Set([nodes[0].id]);
+  const context = { completed, settled: completed, started: completed, writers: new Set() };
+  const current = checkpoint.expected(completed).tree;
+  for (const index of [3, 1, 2, 1]) {
+    const id = nodes[index].id;
+    assert.notEqual(checkpoint.check(current, id, context).status, "pass");
+    assert.equal(checkpoint.check(current, id, { ...context, input: true }).status, "pass");
+    const changed = { "main.cpp": current["main.cpp"].replaceAll("int value", "double value") };
+    assert.notEqual(checkpoint.check(changed, id, { ...context, input: true }).status, "pass");
+    assert.equal(checkpoint.check(current, id, { ...context, input: true }).status, "pass");
+    assert.deepEqual(checkpoint.expected(completed).tree, current);
+  }
+  completed.clear();
+  assert.equal(checkpoint.check(initial, nodes[0].id, { ...context, input: true }).status, "pass");
+  checkpoint.clearCaches();
+  assert.deepEqual(checkpoint.expected(completed).tree, initial);
+});
