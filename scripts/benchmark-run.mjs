@@ -74,10 +74,10 @@ export function parseRunOptions(args) {
     throw Error("Run provider must match the provider-qualified model id");
   if (!/^\d+$/.test(values.concurrency) || Number(values.concurrency) < 1)
     throw Error("Run concurrency must be a positive integer");
-  adapterDefinition(values.harness);
+  const adapter = adapterDefinition(values.harness);
   if (values.official && !values["agent-version"])
     throw Error("Official run requires the exact installed --agent-version");
-  if (values.official && values.harness === "pi-agent-ide" && !values["harness-version"])
+  if (values.official && adapter.extensionPackage && !values["harness-version"])
     throw Error("Pi Agent IDE requires the exact installed --harness-version");
   if (values.official && values.harness === "oh-my-pi-default" && !values["runtime-version"])
     throw Error("Oh My Pi requires the exact installed --runtime-version");

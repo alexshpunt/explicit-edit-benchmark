@@ -4,6 +4,7 @@ import { cp, mkdir, copyFile, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { finished } from "node:stream/promises";
 import readline from "node:readline";
+import { missingProfileTools } from "./pi-codemode-profile.mjs";
 
 const persistentHarnesses = new Map();
 
@@ -43,6 +44,7 @@ export function recoveryAdapter(adapter, continuation) {
         "pi-default",
         "baseline-agent",
         "pi-agent-ide",
+        "pi-agent-ide-codemode",
       ].includes(adapter.kind)
     )
       args = ["--continue", ...args];
@@ -348,7 +350,15 @@ export async function inspectHarnessOutput(kind, file) {
     calls = events.filter((e) => e.type === "tool_use");
     rounds = events.filter((e) => e.type === "step_finish").length;
     errors.push(...events.filter((e) => e.type === "error"));
-  } else if (["oh-my-pi-default", "pi-default", "baseline-agent", "pi-agent-ide"].includes(kind)) {
+  } else if (
+    [
+      "oh-my-pi-default",
+      "pi-default",
+      "baseline-agent",
+      "pi-agent-ide",
+      "pi-agent-ide-codemode",
+    ].includes(kind)
+  ) {
     calls = events.filter((e) => e.type === "tool_execution_start");
     rounds = events.filter(
       (e) => e.type === "message_end" && e.message?.role === "assistant",
@@ -367,11 +377,30 @@ export async function inspectHarnessOutput(kind, file) {
     rounds = events.filter((e) => e.type === "assistant.turn_start").length;
     errors.push(...events.filter((e) => e.type === "session.error"));
   }
+  if (kind === "pi-agent-ide-codemode") {
+    try {
+      const profile = JSON.parse(
+        await readFile(path.join(path.dirname(file), "codemode-profile.json"), "utf8"),
+      );
+      if (profile.phase !== "model" || missingProfileTools(profile.tools).length)
+        throw Error("Codemode and standalone tool declarations were not verified");
+    } catch (error) {
+      errors.push({ type: "profile_error", message: error.message });
+    }
+  }
   let usage = null;
   let costUsd = null;
   let failedToolCalls = null;
   let invalidToolCalls = null;
-  if (["oh-my-pi-default", "pi-default", "baseline-agent", "pi-agent-ide"].includes(kind)) {
+  if (
+    [
+      "oh-my-pi-default",
+      "pi-default",
+      "baseline-agent",
+      "pi-agent-ide",
+      "pi-agent-ide-codemode",
+    ].includes(kind)
+  ) {
     const assistantEnds = events.filter(
       (event) => event.type === "message_end" && event.message?.role === "assistant",
     );

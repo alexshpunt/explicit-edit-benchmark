@@ -241,7 +241,7 @@ function canonicalIdentity({
   const agentFamily = ADAPTERS[harness]?.agentFamily;
   if (!agentFamily)
     throw Error(`Unsupported adapter: ${harness}. Use one of: ${ADAPTER_IDS.join(", ")}`);
-  if (harness === "pi-agent-ide" && !harnessVersion)
+  if (ADAPTERS[harness].extensionPackage && !harnessVersion)
     throw Error("The Pi Agent IDE adapter requires --harness-version for the installed package");
   const exactVersion = String(version).split(/\r?\n/, 1)[0];
   return {
@@ -259,17 +259,27 @@ function canonicalIdentity({
       tools:
         harness === "baseline-agent"
           ? ["bash"]
-          : harness === "pi-agent-ide"
-            ? ["pi-agent-ide"]
-            : ["default"],
+          : harness === "pi-agent-ide-codemode"
+            ? ["pi-agent-ide", "codemode"]
+            : harness === "pi-agent-ide"
+              ? ["pi-agent-ide"]
+              : ["default"],
       extensions:
         harness === "baseline-agent"
           ? ["pi-baseline-agent@1"]
-          : harness === "pi-agent-ide"
-            ? [`pi-agent-ide@${harnessVersion}`]
+          : ADAPTERS[harness].extensionPackage
+            ? [
+                `pi-agent-ide@${harnessVersion}`,
+                ...(harness === "pi-agent-ide-codemode"
+                  ? ["builtin:codemode", "pi-codemode-profile@1"]
+                  : []),
+              ]
             : [],
       rules: [],
-      runtimeFlags: [`thinking=${thinking}`],
+      runtimeFlags: [
+        `thinking=${thinking}`,
+        ...(harness === "pi-agent-ide-codemode" ? ["codemode.mode=on", "tools=+codemode"] : []),
+      ],
       environment: provider?.apiKeyEnv ? [provider.apiKeyEnv] : [],
     },
   };
@@ -305,8 +315,10 @@ export function makeAdapter({
   switch (harness) {
     case "pi-default":
     case "baseline-agent":
-    case "pi-agent-ide": {
-      if (harness === "pi-agent-ide" && !idePackage)
+    case "pi-agent-ide":
+    case "pi-agent-ide-codemode": {
+      const codemode = harness === "pi-agent-ide-codemode";
+      if (ADAPTERS[harness].extensionPackage && !idePackage)
         throw Error("IDE requires --ide-package for the installed package");
       const installed = idePackage ? resolveIdePackage(idePackage) : null;
       if (installed) assertDeclaredIdeEntry(installed.entry);
@@ -330,14 +342,16 @@ export function makeAdapter({
           "--mode",
           "json",
           "-p",
+          ...(codemode ? ["--extension", "builtin:codemode", "--tools", "+codemode"] : []),
           ...(installed ? ["--extension", installed.entry] : []),
+          ...(codemode ? ["--extension", "/state/runner/pi-codemode-profile.mjs"] : []),
           "--",
           "{prompt}",
         ],
         env: {
           ...env,
           PI_CODING_AGENT_DIR: "/state/pi",
-          ...(harness === "pi-agent-ide" ? { SHELL: "/bin/bash" } : {}),
+          ...(ADAPTERS[harness].extensionPackage ? { SHELL: "/bin/bash" } : {}),
         },
         seedFiles: {
           ...auth("pi/auth.json"),
@@ -348,8 +362,23 @@ export function makeAdapter({
                 ),
               }
             : {}),
+          ...(codemode
+            ? {
+                "runner/pi-codemode-profile.mjs": fileURLToPath(
+                  new URL("./pi-codemode-profile.mjs", import.meta.url),
+                ),
+              }
+            : {}),
           ...(modelFile ? { "pi/models.json": path.resolve(modelFile) } : {}),
         },
+        ...(codemode
+          ? {
+              stateFiles: {
+                "pi/settings.json": JSON.stringify({ codemode: { mode: "on" } }) + "\n",
+              },
+              stateArtifacts: { "pi/codemode-profile.json": "codemode-profile.json" },
+            }
+          : {}),
       };
     }
     case "codex-cli-default": {

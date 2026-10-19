@@ -38,7 +38,7 @@ export const usage = `Usage:
   npm run benchmark:submit -- --harness NAME --model MODEL --thinking LEVEL [--concurrency N] [--timeout-seconds N]
   npm run benchmark:submit -- --config FILE [--concurrency N] [--timeout-seconds N]
 
-Ready adapters: pi-default, baseline-agent, pi-agent-ide, codex-cli-default, opencode-default, oh-my-pi-default, github-copilot-cli-default, dsh-standard, dsh-code.
+Ready adapters: pi-default, baseline-agent, pi-agent-ide, pi-agent-ide-codemode, codex-cli-default, opencode-default, oh-my-pi-default, github-copilot-cli-default, dsh-standard, dsh-code.
 
 Run policy:
   --concurrency N       parallel trials, default 10

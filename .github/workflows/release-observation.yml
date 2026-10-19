@@ -128,7 +128,7 @@ jobs:
           set -euo pipefail
           output="$RUNNER_TEMP/benchmark-submit.log"
           npm run benchmark:submit -- \
-            --harness pi-agent-ide \
+            --harness pi-agent-ide-codemode \
             --model "$MODEL" \
             --thinking "$THINKING" \
             --concurrency "$CONCURRENCY" \

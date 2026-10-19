@@ -25,6 +25,14 @@ export const ADAPTERS = Object.freeze({
     credential: "pi",
     repositoryUrl: "https://github.com/alexshpunt/pi-agent-ide",
   },
+  "pi-agent-ide-codemode": {
+    agentFamily: "pi",
+    binary: "pi",
+    package: "@earendil-works/pi-coding-agent",
+    extensionPackage: "pi-agent-ide",
+    credential: "pi",
+    repositoryUrl: "https://github.com/alexshpunt/pi-agent-ide",
+  },
   "codex-cli-default": {
     agentFamily: "codex-cli",
     binary: "codex",
