@@ -218,13 +218,37 @@ await test(
     const root = await mkdtemp(path.resolve(".tmp/atomic-stream-runner-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     const { preparation, expected, pixels } = await prepareFixture(root);
+    const caseEvents = [];
     const reference = await runConcurrent(preparation, path.join(root, "reference"), {
       log: quiet,
+      onCase: (event) => caseEvents.push(event),
     });
     assert.equal(reference.status, "pass", JSON.stringify(reference.terminal));
     assert.equal(reference.deliveries, 3);
     assert.equal(reference.acceptedTasks, 2);
     assert.equal(reference.acceptedRounds, 1);
+    assert.equal(caseEvents.length, 6);
+    for (const execution of reference.executions)
+      assert.deepEqual(
+        caseEvents.filter((event) => event.id === execution.atomicId),
+        [
+          {
+            event: "case-start",
+            id: execution.atomicId,
+            phase: "atomic",
+            round: "round-001",
+            attempt: 1,
+          },
+          {
+            event: "case-end",
+            id: execution.atomicId,
+            phase: "atomic",
+            status: "pass",
+            round: "round-001",
+            attempt: 1,
+          },
+        ],
+      );
     assert.equal(new Set(reference.executions.map((row) => row.receipts[0].lifetime)).size, 2);
     assert.ok(reference.executions.some((row) => row.receipts[0].delivered === 2));
     const proofFile = path.join(preparation, "verification-2.json");

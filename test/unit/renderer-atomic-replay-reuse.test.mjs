@@ -126,6 +126,25 @@ await test("file relocation and additional physical copies invalidate the previo
   assert.deepEqual(replay(tree, ["A"]), applyAtomicNamingBatch(tree, batch, ["A"]));
 });
 
+await test("changing peer files preserves current context and complete owner inventories", () => {
+  const { tree, batch } = fixture();
+  tree["peer.cpp"] = "// retained\nint peer(int);\nint peer(int);\n";
+  const replay = createAtomicNamingReplay(batch);
+  replay(tree, ["A"]);
+  tree["peer.cpp"] = "#if OTHER\nint peer(double);\n#else\nint peer(int);\n#endif\n";
+  assert.deepEqual(replay(tree, ["B"]), applyAtomicNamingBatch(tree, batch, ["B"]));
+  tree["peer.cpp"] = "int malformed(";
+  assert.throws(() => replay(tree, ["A"]));
+  tree["peer.cpp"] = "int recovered;\n";
+  assert.deepEqual(replay(tree, ["A"]), applyAtomicNamingBatch(tree, batch, ["A"]));
+  const reordered = Object.fromEntries(Object.entries(tree).reverse());
+  assert.deepEqual(replay(reordered, ["B"]), applyAtomicNamingBatch(reordered, batch, ["B"]));
+  delete tree["peer.cpp"];
+  assert.deepEqual(replay(tree, ["A", "B"]), applyAtomicNamingBatch(tree, batch, ["A", "B"]));
+  replay.clear();
+  assert.deepEqual(replay(tree, ["B"]), applyAtomicNamingBatch(tree, batch, ["B"]));
+});
+
 await test("a warm baseline still validates selections and every private batch field", () => {
   const { tree, batch } = fixture();
   const replay = createAtomicNamingReplay(batch);

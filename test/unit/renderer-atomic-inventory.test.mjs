@@ -58,6 +58,58 @@ await test("malformed and changed inactive source cannot reuse a passing invento
   assert.throws(() => read(tree));
 });
 
+await test("editing one file reuses only unchanged current file inventories", () => {
+  const read = createAtomicInventory();
+  const tree = {
+    "first.cpp": "int first() { return 1; }\n",
+    "second.cpp": "int second() { return 2; }\n",
+  };
+  const first = read(tree);
+  const original = first.obligations.find((record) => record.file === "first.cpp");
+  const unchanged = first.obligations.find((record) => record.file === "second.cpp");
+  tree["first.cpp"] = tree["first.cpp"].replace("1", "3");
+  const changed = read(tree);
+  assert.equal(
+    changed.obligations.find((record) => record.file === "second.cpp"),
+    unchanged,
+  );
+  assert.notEqual(
+    changed.obligations.find((record) => record.file === "first.cpp"),
+    original,
+  );
+  assert.deepEqual(changed, prepareCoherentContract(tree));
+  delete tree["second.cpp"];
+  assert.deepEqual(read(tree), prepareCoherentContract(tree));
+  tree["second.cpp"] = "int second() { return 2; }\n";
+  const returned = read(tree);
+  assert.notEqual(
+    returned.obligations.find((record) => record.file === "second.cpp"),
+    unchanged,
+  );
+  assert.deepEqual(returned, prepareCoherentContract(tree));
+  read.clear();
+  assert.notEqual(read(tree).obligations[0], returned.obligations[0]);
+});
+
+await test("file reuse preserves inventory order and rejects malformed peer files", () => {
+  const read = createAtomicInventory();
+  const tree = {
+    "second.cpp": "#if MODE\nint value;\n#else\nint value;\n#endif\n",
+    "first.cpp": "// protected\nint repeat(int);\nint repeat(int);\n",
+  };
+  assert.deepEqual(read(tree), prepareCoherentContract(tree));
+  tree["first.cpp"] += "int added;\n";
+  assert.deepEqual(read(tree), prepareCoherentContract(tree));
+  tree["second.cpp"] = "int broken(";
+  assert.throws(() => read(tree));
+  assert.throws(() => read(tree));
+  tree["second.cpp"] = "int repaired;\n";
+  const repaired = read(tree);
+  assert.deepEqual(repaired, prepareCoherentContract(tree));
+  const reversed = Object.fromEntries(Object.entries(tree).reverse());
+  assert.deepEqual(read(reversed), prepareCoherentContract(reversed));
+});
+
 await test("binding decisions remain fresh while unchanged lexical records are reused", () => {
   const readInventory = createAtomicInventory();
   const expected = prepareCoherentContract({ "main.cpp": source });

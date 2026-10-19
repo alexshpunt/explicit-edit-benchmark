@@ -50,6 +50,82 @@ function fixture() {
   return { tree, checkpoint, started, writers, completed, settled, context };
 }
 
+test("stable source spans are not interleaved with another expensive observation", async () => {
+  const { tree, checkpoint, context } = fixture();
+  const reads = [];
+  const observe = (id) =>
+    checkpoint.observe(
+      async () => {
+        reads.push(id);
+        await new Promise((resolve) => setImmediate(resolve));
+        return tree;
+      },
+      id,
+      context,
+      { input: true },
+    );
+  const results = await Promise.all([observe("A"), observe("B")]);
+  assert.ok(results.every((result) => result.status === "pass"));
+  assert.deepEqual(reads, ["A", "A", "B", "B"]);
+});
+
+test("a cancelled queued observation does not read source or poison the next span", async () => {
+  const { tree, checkpoint, context } = fixture();
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  let firstReads = 0;
+  const first = checkpoint.observe(
+    async () => {
+      if (++firstReads === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      return tree;
+    },
+    "A",
+    context,
+    { input: true },
+  );
+  await entered.promise;
+  const controller = new AbortController();
+  let queuedReads = 0;
+  const queued = checkpoint.observe(
+    async () => {
+      queuedReads++;
+      return tree;
+    },
+    "B",
+    context,
+    { input: true, signal: controller.signal },
+  );
+  controller.abort(Error("queued case deadline"));
+  const rejected = assert.rejects(queued, /queued case deadline/);
+  release.resolve();
+  const [result] = await Promise.all([first, rejected]);
+  assert.equal(result.status, "pass");
+  assert.equal(queuedReads, 0);
+  assert.equal(
+    (await checkpoint.observe(async () => tree, "B", context, { input: true })).status,
+    "pass",
+  );
+});
+
+test("a failed observation releases its source span without hiding the I/O error", async () => {
+  const { tree, checkpoint, context } = fixture();
+  const failure = Object.assign(Error("disk unavailable"), { code: "EIO" });
+  const bad = checkpoint.observe(
+    async () => {
+      throw failure;
+    },
+    "A",
+    context,
+    { input: true },
+  );
+  const good = checkpoint.observe(async () => tree, "B", context, { input: true });
+  await assert.rejects(bad, (error) => error === failure);
+  assert.equal((await good).status, "pass");
+});
+
 test("writer startup alone cannot invalidate a passing observation of unchanged source", async () => {
   for (const input of [false, true]) {
     const { tree, checkpoint, started, writers, context } = fixture();

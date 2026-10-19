@@ -56,6 +56,23 @@ function gates(checkpoint, read) {
   };
 }
 
+await test("an unchanged expected frontier still applies current peer and completion reservations", () => {
+  const { checkpoint } = setup();
+  const settled = new Set(["a", "b"]);
+  const tree = checkpoint.expected(settled).tree;
+  const partial = { "main.cpp": tree["main.cpp"].replaceAll("right", "wrongPeer") };
+  const context = { completed: new Set(["a"]), started: settled, settled };
+  assert.equal(checkpoint.check(partial, "a", context).status, "pass");
+  assert.notEqual(checkpoint.check(partial, "b", context).status, "pass");
+  assert.equal(checkpoint.check(partial, "a", context).status, "pass");
+  assert.notEqual(
+    checkpoint.check(partial, "a", { ...context, completed: settled }).status,
+    "pass",
+  );
+  assert.equal(checkpoint.check(partial, "a", context).status, "pass");
+  assert.equal(checkpoint.check(tree, "a", { ...context, completed: settled }).status, "pass");
+});
+
 await test("clearing checkpoint caches preserves retained completions and fresh regression checks", () => {
   const { checkpoint } = setup();
   const completed = new Set(["a", "b", "c"]);
