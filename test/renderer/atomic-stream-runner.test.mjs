@@ -151,13 +151,28 @@ async function waitForPeer(ready, signal) {
     signal.removeEventListener("abort", abort);
   }
 }
-function deterministicDrivers({ skipFirstNorth = false, breakBuild = false } = {}) {
+function deterministicDrivers({
+  skipFirstNorth = false,
+  breakBuild = false,
+  precompletedSouth = false,
+} = {}) {
   const histories = [];
   const calls = [];
   let writes = Promise.resolve();
   const both = Promise.withResolvers();
   const peer = Promise.withResolvers();
   const createDriver = async (workspace, _state, agent) => {
+    if (precompletedSouth && agent === 0) {
+      const edited = applyCoherentStructure(await readTree(workspace), {
+        phase: "structure",
+        action: "header",
+        file: "south.h",
+        guard: "SOUTH_H",
+        includes: [],
+      });
+      for (const [file, source] of Object.entries(edited))
+        await writeFile(path.join(workspace, file), source);
+    }
     const history = [];
     histories[agent] = history;
     let closed = false;
@@ -190,7 +205,11 @@ function deterministicDrivers({ skipFirstNorth = false, breakBuild = false } = {
             await waitForPeer(peer.promise, options.signal);
           } else {
             writes = writes.then(async () => {
-              const edited = applyCoherentStructure(await readTree(workspace), operation);
+              const tree = await readTree(workspace);
+              const edited =
+                precompletedSouth && operation.guard === "SOUTH_H" && tree["south.h"]
+                  ? tree
+                  : applyCoherentStructure(tree, operation);
               if (breakBuild && operation.guard === "WEST_H")
                 edited["main.cpp"] = edited["main.cpp"].replace("#include <fstream>\n", "");
               for (const [file, source] of Object.entries(edited))
@@ -288,15 +307,45 @@ await test(
               check.observations.some(
                 (row) => row.mode === "current-input" && row.status === "pass",
               ) &&
-              check.observations.some(
-                (row) => row.mode === "current-output" && row.status === "fail",
-              ),
+              !check.observations.some((row) => row.mode === "current-output"),
           ),
+          "A valid structural input must not first materialize and grade its full output",
+        );
+        assert.ok(
+          report.atomicBarriers[0].inputChecks.every(
+            (check) =>
+              check.observations.find(
+                (row) => row.mode === "current-input" || row.mode === "current-output",
+              )?.mode !== "current-output",
+          ),
+          "Structural input observation comes before the already-correct output fallback",
         );
         const saved = JSON.parse(await readFile(path.join(root, "live/report.json"), "utf8"));
         assert.deepEqual(saved.atomicBarriers[0].inputChecks, report.atomicBarriers[0].inputChecks);
         assert.deepEqual(await readTree(path.join(root, "live/workspace")), expected);
         assert.deepEqual(report.checks.at(-1).pixels, pixels);
+      },
+    );
+
+    await t.test(
+      "an already-correct structural output remains eligible after its input check",
+      async () => {
+        const drivers = deterministicDrivers({ precompletedSouth: true });
+        const report = await runConcurrent(preparation, path.join(root, "already-correct"), {
+          agents: 2,
+          createDriver: drivers.createDriver,
+          log: quiet,
+        });
+        assert.equal(report.status, "pass");
+        assert.equal(report.acceptedTasks, 2);
+        assert.equal(new Set(drivers.calls.map((row) => row.atomicId)).size, 3);
+        const fallback = report.atomicBarriers[0].inputChecks.find((check) =>
+          check.observations.some((row) => row.mode === "current-output" && row.status === "pass"),
+        );
+        assert.ok(fallback, "Already-correct output is checked, not silently waived");
+        assert.equal(fallback.observations[0].mode, "current-input");
+        assert.notEqual(fallback.observations[0].status, "pass");
+        assert.ok(report.agentsClosed.every(Boolean));
       },
     );
 
