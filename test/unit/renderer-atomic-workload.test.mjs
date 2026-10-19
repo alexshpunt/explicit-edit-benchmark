@@ -84,6 +84,80 @@ test("same-spelling parameters in separate certified operations retain independe
   }
 });
 
+test("separately certified prototype and definition parameters stay independently ready", async () => {
+  await mkdir(".tmp", { recursive: true });
+  const root = await mkdtemp(path.resolve(".tmp/atomic-prototype-parameters-"));
+  const tree = {
+    "main.cpp": `namespace frond {
+template<typename T> T sample(const T& p1_param);
+template<typename T> T sample(const T& p1_param) { return p1_param; }
+}
+int main() { return frond::sample(1); }
+`,
+  };
+  await mkdir(path.join(root, "analysis"));
+  const session = await scopedNamingSession(tree, path.join(root, "analysis"));
+  try {
+    const certifications = [];
+    for (const definition of [false, true]) {
+      certifications.push(
+        await session.atomicPlans({
+          id: definition ? "definition-parameter" : "prototype-parameter",
+          phase: "names",
+          category: "locals-parameters",
+          mapping: [{ from: "p1_param", to: "p1" }],
+          selectors: [
+            { kind: "function", scope: "frond::sample", signature: "T (const T &)", definition },
+          ],
+        }),
+      );
+    }
+    session.close();
+    const task = {
+      id: "task-001",
+      phase: "names",
+      operations: certifications.map((item) => item.operation),
+    };
+    const { nodes } = atomicWorkload([task]);
+    assert.equal(nodes.length, 2);
+    assert.ok(nodes.every((node) => node.dependencies.length === 0));
+    for (const [orderIndex, order] of [
+      [0, 1],
+      [1, 0],
+    ].entries()) {
+      let current = tree;
+      for (const index of order) {
+        const directory = path.join(root, `runtime-${orderIndex}-${index}`);
+        await mkdir(directory);
+        const [plan] = await scopedNamingPlan(current, [nodes[index].operations[0]], directory);
+        current = applyScopedNamePlan(current, plan);
+        execFileSync("clang++", ["-std=c++17", "-x", "c++", "-fsyntax-only", "-"], {
+          input: current["main.cpp"],
+        });
+      }
+      assert.doesNotMatch(current["main.cpp"], /p1_param/);
+      assert.match(current["main.cpp"], /return p1;/);
+    }
+    for (const definition of [undefined, false, true]) {
+      const indistinguishable = structuredClone(task);
+      for (const operation of indistinguishable.operations) {
+        for (const group of operation.bindingGroups)
+          for (const selector of group.selectors) {
+            if (definition === undefined) delete selector.owner.definition;
+            else selector.owner.definition = definition;
+          }
+        operation.bindingCertification.sha256 = createHash("sha256")
+          .update(JSON.stringify(operation.bindingGroups))
+          .digest("hex");
+      }
+      assert.throws(() => atomicWorkload([indistinguishable]), /cycle/);
+    }
+  } finally {
+    session.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a local spelling cannot invalidate a global selector, but its type rename still waits for the old signature", () => {
   const parameter = locals("frond::consume", [{ from: "Old", to: "value" }]);
   parameter.selectors[0].signature = "int (frond::Old)";
@@ -111,6 +185,17 @@ test("a parameter used in a trailing return signature still waits for sibling se
   const parameter = (from) => nodes.find((node) => node.operations[0].mapping[0].from === from);
   assert.deepEqual(parameter("a").dependencies, [parameter("b").id]);
   assert.deepEqual(parameter("b").dependencies, []);
+});
+
+test("distinct prototype and definition owners still retain parameter-name signature reads", () => {
+  const writer = locals("frond::deduce", [{ from: "a", to: "left" }]);
+  const reader = locals("frond::deduce", [{ from: "b", to: "right" }]);
+  writer.selectors[0].signature = "auto (int, int) -> decltype(a)";
+  reader.selectors[0].signature = writer.selectors[0].signature;
+  reader.selectors[0].definition = false;
+  const { nodes } = atomicWorkload([namingTask([writer, reader])]);
+  assert.deepEqual(nodes[0].dependencies, [nodes[1].id]);
+  assert.deepEqual(nodes[1].dependencies, []);
 });
 
 test("an extern binding rename waits for another owner's signature consumer", () => {
