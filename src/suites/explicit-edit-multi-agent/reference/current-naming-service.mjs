@@ -36,7 +36,10 @@ const headerLocalRequest = (task) =>
  * header compiler errors remain errors. Header views exclude implementation
  * files and are reusable only for identical non-implementation input bytes;
  * including an implementation file is unsupported rather than hidden from that
- * identity. Full-project views keep their original complete-source identity.
+ * identity. A rejected header-view CAS may reuse the same current plan when
+ * those inputs are unchanged, merging it onto fresh implementation bytes; the
+ * next commit and acknowledgement still require a matching whole-source snapshot.
+ * Full-project views keep their original complete-source identity.
  * Candidate gates and full builds are unchanged; this view is never used for
  * preparation certification.
  */
@@ -133,9 +136,19 @@ export function currentNamingPlanner(directory, { signal } = {}) {
       );
       const key = JSON.stringify(task);
       const identity = treeIdentity(before);
-      if (pending?.key === key && pending.before === identity) {
-        statistics.pendingHits++;
-        return { after: pending.after, statistics: { ...statistics } };
+      if (pending?.key === key) {
+        if (pending.before === identity) {
+          statistics.pendingHits++;
+          return { after: pending.after, statistics: { ...statistics } };
+        }
+        if (pending.headerBefore && pending.headerBefore === viewIdentity(before, headerBindings)) {
+          // The failed whole-source CAS changed only files this compiler view
+          // cannot read. Keep its one consumed plan, not the stale peer bytes.
+          pending.before = identity;
+          pending.after = { ...before, ...headerTree(pending.after) };
+          statistics.pendingHits++;
+          return { after: pending.after, statistics: { ...statistics } };
+        }
       }
       if (pending) invalidate();
       const separateCurrent = async () => {
@@ -208,7 +221,14 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         applied.push(plan);
       }
       if (reused) statistics.cacheHits++;
-      pending = { key, before: identity, after, plans, types: state.types };
+      pending = {
+        key,
+        before: identity,
+        after,
+        plans,
+        types: state.types,
+        ...(state.file === headerBindings ? { headerBefore: state.expected } : {}),
+      };
       return { after, statistics: { ...statistics } };
     },
     acknowledge(before, after) {
