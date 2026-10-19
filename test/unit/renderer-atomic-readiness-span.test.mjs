@@ -156,3 +156,48 @@ test("cancelled readiness leaves the common observation lane usable", async () =
   assert.equal(reads, 0);
   assert.equal((await checkpoint.observe(async () => current, "A", context)).status, "pass");
 });
+
+test("crediting an already-settled structural peer does not change a stable readiness frontier", async () => {
+  const tree = {
+    "main.cpp": "void first();\nvoid second();\nvoid third();\nint keep() { return 1; }\n",
+  };
+  const nodes = ["first", "second", "third"].map((name, index) => ({
+    id: name,
+    dependencies: index === 2 ? ["first"] : [],
+    operations: [
+      {
+        phase: "structure",
+        action: "remove-generated-declaration",
+        file: "main.cpp",
+        selector: { scope: "::", declarator: `void${name}()`, definition: false },
+      },
+    ],
+  }));
+  for (const input of [true, false]) {
+    const checkpoint = createAtomicCheckpoint(tree, nodes, []);
+    const settled = new Set(["first", "second"]),
+      completed = new Set(["first"]);
+    const context = { settled, completed, started: settled, writers: new Set() };
+    const current = checkpoint.expected(settled).tree;
+    let reads = 0;
+    const readSource = async () => {
+      if (++reads === 2) completed.add("second");
+      return current;
+    };
+    const result = input
+      ? await checkpoint.observeInputs(readSource, "third", context)
+      : await checkpoint.observe(readSource, "first", context);
+    assert.equal(result.status, "pass");
+    assert.equal(reads, 2);
+    reads = 0;
+    const withdrawn = await checkpoint.observe(
+      async () => {
+        if (++reads === 2) completed.delete("second");
+        return current;
+      },
+      "first",
+      context,
+    );
+    assert.equal(withdrawn.status, "pending");
+  }
+});
