@@ -193,18 +193,30 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
     canonical = after;
   }
 
+  // Retain one trusted structural-only replay, never candidate bytes or credit.
+  // An extension may reuse it only when every earlier selected move stays in
+  // exactly the same order. Insertions and rollback replay from the baseline.
+  let structuralSnapshot;
+  function structuralFrontier(selection) {
+    const nodes = structuralNodes.filter((node) => selection.has(node.id));
+    if (nodes.length === structuralNodes.length) return canonical;
+    const extendsSnapshot =
+      structuralSnapshot &&
+      structuralSnapshot.ids.length <= nodes.length &&
+      structuralSnapshot.ids.every((id, index) => nodes[index].id === id);
+    let tree = extendsSnapshot ? structuralSnapshot.tree : initialTree;
+    const first = extendsSnapshot ? structuralSnapshot.ids.length : 0;
+    for (let index = first; index < nodes.length; index++) tree = move(tree, nodes[index]);
+    structuralSnapshot = { ids: nodes.map((node) => node.id), tree };
+    return tree;
+  }
   function replayExpected(selection, reservations = new Set()) {
     const selected = new Set(selection);
     for (const id of selected) assert.ok(byId.has(id), `Unknown atomic checkpoint node: ${id}`);
-    // Template construction already proved this exact full structural endpoint.
-    // Reuse it only when every structural atom is selected; partial frontiers
-    // still replay their own moves in dependency order before applying names.
-    const completeStructure = structuralNodes.every((node) => selected.has(node.id));
-    let tree = completeStructure ? canonical : initialTree;
+    let tree = structuralFrontier(selected);
     const structural = new Map();
     for (const node of ordered) {
       if (naming(node) || !selected.has(node.id)) continue;
-      if (!completeStructure) tree = move(tree, node);
       structural.set(node.id, {
         ...templates.get(node.id),
         resources: [...templates.get(node.id).resources],
@@ -479,6 +491,7 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
    */
   function clearCaches() {
     cached = undefined;
+    structuralSnapshot = undefined;
     readTrusted.clear();
     readCandidate.clear();
     for (const replay of replays.values()) replay.clear();
