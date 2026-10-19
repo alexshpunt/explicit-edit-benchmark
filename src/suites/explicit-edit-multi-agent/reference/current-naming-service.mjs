@@ -4,6 +4,24 @@ import path from "node:path";
 import { scopedNamingSession, applyScopedNamePlan } from "../cpp/scoped-names.mjs";
 import { treeIdentity } from "../generation/generator.mjs";
 
+const headerBindings = Symbol("current header local bindings");
+const headerRoot = "__reference_header_bindings.cpp";
+const headerPath = /^(?:[\w.-]+\/)*[\w.-]+\.h$/;
+const headerTree = (tree) =>
+  Object.fromEntries(Object.entries(tree).filter(([name]) => !name.endsWith(".cpp")));
+const viewIdentity = (tree, file) =>
+  treeIdentity(file === headerBindings ? headerTree(tree) : tree);
+const headerLocalRequest = (task) =>
+  task.operations.every(
+    (operation) =>
+      operation.category === "locals-parameters" &&
+      operation.selectors?.length &&
+      operation.selectors.every(
+        (selector) =>
+          selector.kind === "variable" && typeof selector.owner?.definition === "boolean",
+      ),
+  );
+
 /** Retain only compiler work generated from actually delivered public requests.
  * This reference-only cache never reads preparation plans, contracts or answers.
  * A snapshot is reusable only while committed reference plans exactly explain the
@@ -11,6 +29,16 @@ import { treeIdentity } from "../generation/generator.mjs";
  * Structural/unknown mutations, helper-view changes and type renames invalidate
  * reuse. Separate-TU fallback is deliberately disposable. No candidate mount may
  * contain this cache: run it inside the isolated reference service namespace.
+ * Owned-variable requests first compile the current headers alone, since
+ * unrelated implementation moves can temporarily leave other translation units
+ * unbuildable. The private root adds includes only, never declarations or saved
+ * answers. Missing header selections use ordinary current-project analysis;
+ * header compiler errors remain errors. Header views exclude implementation
+ * files and are reusable only for identical non-implementation input bytes;
+ * including an implementation file is unsupported rather than hidden from that
+ * identity. Full-project views keep their original complete-source identity.
+ * Candidate gates and full builds are unchanged; this view is never used for
+ * preparation certification.
  */
 export function currentNamingPlanner(directory, { signal } = {}) {
   let state,
@@ -33,7 +61,20 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     const analysis = path.join(directory, `snapshot-${++statistics.snapshotAttempts}`);
     analysisDirectory = analysis;
     await mkdir(analysis, { recursive: true });
-    return scopedNamingSession(tree, analysis, {
+    let current = tree;
+    if (file === headerBindings) {
+      assert.ok(!(headerRoot in tree), "Reserved reference header root already exists");
+      const headers = Object.keys(tree).filter((name) => headerPath.test(name));
+      current = {
+        ...headerTree(tree),
+        [headerRoot]: headers
+          .sort()
+          .map((name) => `#include "${name}"\n`)
+          .join(""),
+      };
+      file = headerRoot;
+    }
+    return scopedNamingSession(current, analysis, {
       file,
       allowAbsentOwners,
       onSelection: (origins) => {
@@ -44,7 +85,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
   const fresh = async (before, file) => {
     invalidate();
     const session = await open(before, file);
-    state = { session, file, expected: treeIdentity(before), applied: [], types: false };
+    state = { session, file, expected: viewIdentity(before, file), applied: [], types: false };
   };
   const separate = async (before, task) => {
     const merged = task.operations.map(() => new Map());
@@ -97,19 +138,37 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         return { after: pending.after, statistics: { ...statistics } };
       }
       if (pending) invalidate();
-      const file = task.operations[0].category === "helpers" ? task.operations[0].file : undefined;
-      let reused = Boolean(state && state.expected === identity && state.file === file);
+      const separateCurrent = async () => {
+        invalidate();
+        statistics.fallbacks++;
+        const after = await separate(before, task);
+        check();
+        pending = { key, before: identity, after, disposable: true };
+        return { after, statistics: { ...statistics } };
+      };
+      let file =
+        task.operations[0].category === "helpers"
+          ? task.operations[0].file
+          : headerLocalRequest(task) && Object.keys(before).some((name) => headerPath.test(name))
+            ? headerBindings
+            : undefined;
+      if (
+        file === headerBindings &&
+        state &&
+        state.file === undefined &&
+        state.expected === identity
+      )
+        file = undefined;
+      let reused = Boolean(
+        state && state.file === file && state.expected === viewIdentity(before, file),
+      );
       if (!reused) {
         try {
           await fresh(before, file);
         } catch (error) {
           invalidate();
           if (file || !error.message.startsWith("Compiler AST failed:")) throw error;
-          statistics.fallbacks++;
-          const after = await separate(before, task);
-          check();
-          pending = { key, before: identity, after, disposable: true };
-          return { after, statistics: { ...statistics } };
+          return separateCurrent();
         }
       }
       let plans;
@@ -120,11 +179,18 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         // The indexed public selector may have become stale after a known scope
         // or written signature rename. Reopen the ACTUAL source, never translate
         // a selector by broad text replacement or fall back to saved answers.
-        if (!reused) {
+        if (!reused && file !== headerBindings) {
           invalidate();
           throw error;
         }
-        await fresh(before, file);
+        try {
+          await fresh(before, file === headerBindings ? undefined : file);
+        } catch (freshError) {
+          invalidate();
+          if (file !== headerBindings || !freshError.message.startsWith("Compiler AST failed:"))
+            throw freshError;
+          return separateCurrent();
+        }
         reused = false;
         try {
           plans = [];
@@ -160,7 +226,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         return;
       }
       state.applied.push(...accepted.plans);
-      state.expected = treeIdentity(after);
+      state.expected = viewIdentity(after, state.file);
     },
     close() {
       stopped = true;
