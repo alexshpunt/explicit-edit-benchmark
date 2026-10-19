@@ -378,17 +378,29 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
     { input = false, signal } = {},
     grade = (tree) => check(tree, id, { ...context, input }),
   ) {
-    const snapshot = () => ({
-      verified: JSON.stringify([[...context.completed].sort(), [...context.settled].sort()]),
-      started: new Set(context.started ?? []),
-      writers: new Set(context.writers ?? []),
-    });
+    const snapshot = () => {
+      const completed = new Set(context.completed);
+      // Expected effects use completed UNION settled. Crediting a structural
+      // output already in that union changes no tree or mask. Naming completion
+      // still narrows peer allowances and must invalidate an earlier observation.
+      const selected = new Set([...completed, ...context.settled]);
+      const protectedBindings = [...completed].filter(
+        (id) => !byId.has(id) || naming(byId.get(id)),
+      );
+      return {
+        verified: JSON.stringify([[...selected].sort(), protectedBindings.sort()]),
+        completed,
+        started: new Set(context.started ?? []),
+        writers: new Set(context.writers ?? []),
+      };
+    };
     signal?.throwIfAborted();
     const revision = snapshot();
     const invalidated = () => {
       const current = snapshot();
       return (
         revision.verified !== current.verified ||
+        [...revision.completed].some((id) => !current.completed.has(id)) ||
         [...revision.started].some((id) => !current.started.has(id)) ||
         [...revision.writers].some((id) => !current.writers.has(id))
       );
