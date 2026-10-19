@@ -182,21 +182,29 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
     batches.map((entry) => [entry.taskId, createAtomicNamingReplay(entry.batch)]),
   );
   const templates = new Map();
+  const structuralNodes = ordered.filter((item) => !naming(item));
   let canonical = initialTree;
-  for (const node of ordered.filter((item) => !naming(item))) {
+  for (const node of structuralNodes) {
     const after = move(canonical, node);
-    templates.set(node.id, prepareAtomicGate(canonical, after, { writesOnly: true }));
+    templates.set(
+      node.id,
+      prepareAtomicGate(canonical, after, { writesOnly: true, readInventory: readTrusted }),
+    );
     canonical = after;
   }
 
-  function expected(selection, reservations = new Set()) {
+  function replayExpected(selection, reservations = new Set()) {
     const selected = new Set(selection);
     for (const id of selected) assert.ok(byId.has(id), `Unknown atomic checkpoint node: ${id}`);
-    let tree = initialTree;
+    // Template construction already proved this exact full structural endpoint.
+    // Reuse it only when every structural atom is selected; partial frontiers
+    // still replay their own moves in dependency order before applying names.
+    const completeStructure = structuralNodes.every((node) => selected.has(node.id));
+    let tree = completeStructure ? canonical : initialTree;
     const structural = new Map();
     for (const node of ordered) {
       if (naming(node) || !selected.has(node.id)) continue;
-      tree = move(tree, node);
+      if (!completeStructure) tree = move(tree, node);
       structural.set(node.id, {
         ...templates.get(node.id),
         resources: [...templates.get(node.id).resources],
@@ -238,10 +246,15 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
       .map((entry) => entry.taskId);
     const key = JSON.stringify([[...selection].sort(), groups]);
     if (cached?.key !== key) {
-      const result = expected(selection, reservations);
+      const result = replayExpected(selection, reservations);
       cached = { key, ...result, contract: readTrusted(result.tree) };
     }
     return cached;
+  }
+  /** Return a detached trusted frontier, never the reusable private metadata. */
+  function expected(selection, reservations = new Set()) {
+    const { tree, owners, structural } = frontier(selection, reservations);
+    return structuredClone({ tree, owners, structural });
   }
   function check(
     tree,
@@ -325,10 +338,14 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
     selected.delete(id);
     const before = frontier(selected).tree;
     const after = move(before, node);
-    return checkAtomicInputs(tree, prepareAtomicGate(before, after, { writesOnly: true }), {
-      activeWrites,
-      readInventory: readCandidate,
-    });
+    return checkAtomicInputs(
+      tree,
+      prepareAtomicGate(before, after, { writesOnly: true, readInventory: readTrusted }),
+      {
+        activeWrites,
+        readInventory: readCandidate,
+      },
+    );
   }
   /** Observe twice around grading; peer writes or frontier advancement defer the
    * result without spending a correction. Access live context getters after each
@@ -447,7 +464,7 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
   // Coarse scheduling must separate naming groups that touch the same physical
   // owner. Prove this before dispatch instead of failing a retained earlier group
   // only after a later group's baseline has overwritten its descriptor.
-  const complete = expected(new Set(byId.keys()));
+  const complete = frontier(new Set(byId.keys()));
   const finalContract = readTrusted(complete.tree);
   for (const owners of complete.owners.values())
     for (const owner of owners) {
@@ -457,7 +474,8 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
         throw Error("Distinct naming groups share an owner within one barrier", { cause: error });
       }
     }
-  /** Drop reusable inventories/frontiers, not caller-owned completion state.
+  /** Drop reusable inventories/selection frontiers, not fixed trusted baselines
+   * or caller-owned completion state.
    * Eager endpoint validation must clear these before retaining future intervals.
    * Active corrections may rebuild them without changing their gate requirements.
    */

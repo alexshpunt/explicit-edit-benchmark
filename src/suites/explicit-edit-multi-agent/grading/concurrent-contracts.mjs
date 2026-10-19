@@ -1,5 +1,5 @@
 import { applyCoherentStructure } from "../reference/coherent-edit.mjs";
-import { prepareCoherentContract } from "./coherent-grade.mjs";
+import { createAtomicInventory } from "./atomic-inventory.mjs";
 import { advanceContract } from "../tasks/concurrent-schedule.mjs";
 
 /** Build private checkpoint expectations from the untouched initial source and
@@ -22,6 +22,9 @@ export function checkpointContracts(
   const byId = new Map(tasks.map((task) => [task.id, task]));
   const contracts = new Map([["initial", initialContract]]);
   const changes = new Map(transitions.map((item) => [item.id, item]));
+  const readStructure = createAtomicInventory();
+  let structuralTree = initialTree;
+  let structuralCount = 0;
   for (const round of schedule) {
     for (const assignment of round.assignments) {
       if (done.has(assignment.task) || !byId.has(assignment.task))
@@ -33,10 +36,14 @@ export function checkpointContracts(
     const key = JSON.stringify(modules.map((task) => task.id));
     let contract = cache.get(key);
     if (!contract) {
-      let expected = initialTree;
-      for (const task of modules)
-        expected = task.operations.reduce(applyCoherentStructure, expected);
-      contract = modules.length ? prepareCoherentContract(expected) : initialContract;
+      // Completed structural tasks form an append-only prefix. Catch up missing
+      // moves even after cache hits, rather than replaying every earlier module.
+      for (; structuralCount < modules.length; structuralCount++)
+        structuralTree = modules[structuralCount].operations.reduce(
+          applyCoherentStructure,
+          structuralTree,
+        );
+      contract = modules.length ? readStructure(structuralTree) : initialContract;
       cache.set(key, contract);
     }
     for (const task of tasks.filter((task) => task.phase !== "structure" && done.has(task.id)))
