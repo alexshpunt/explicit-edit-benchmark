@@ -144,6 +144,12 @@ function batchFingerprint(frame) {
     .update(JSON.stringify([frame.scope, frame.kind, frame.opaque, frame.tokens]))
     .digest("hex");
 }
+
+const slotPlan = (sites) =>
+  sites
+    .map((site) => [site.nodeId, site.index, site.from, site.to])
+    .sort((left, right) => left[1] - right[1]);
+
 function ownerRecord(contract, unit, tokens) {
   const matches = contract.obligations.filter(
     (record) =>
@@ -273,7 +279,10 @@ export function prepareAtomicNamingBatch(beforeTree, bindings) {
  * rather than promoting ordinary owners to whole-file serialization.
  * Returns relocated owner descriptors with exact final coherent-contract tokens,
  * current contexts and ALL binding slots, including unselected nodes, for masked
- * gates. This operation does not verify candidate edits or unlock dependencies.
+ * gates. Identical copies are supported only when every physical copy is covered
+ * by an identical complete slot plan; extra, missing or nonuniform copies reject.
+ * Uniform projections coalesce by coherent identity without changing its count.
+ * This operation does not verify candidate edits or unlock dependencies.
  */
 export function applyAtomicNamingBatch(tree, batch, selectedIDs) {
   return createAtomicNamingReplay(batch)(tree, selectedIDs);
@@ -321,9 +330,9 @@ function replayAtomicNamingBatch(tree, batch, selectedIDs, inventory) {
   const known = new Set(batch.ids);
   for (const id of selected) if (!known.has(id)) throw Error("Unknown selected naming binding ID");
   const current = inventory(tree);
-  const edits = new Map();
-  const located = [];
-  const used = new Set();
+  const unitIDs = new Map(current.map((unit, index) => [unit, index]));
+  const locations = new Map();
+  const uniformFamilies = new Map();
   for (const frame of batch.owners) {
     if (batchFingerprint(frame) !== frame.fingerprint)
       throw Error("Corrupt naming batch owner fingerprint");
@@ -338,11 +347,29 @@ function replayAtomicNamingBatch(tree, batch, selectedIDs, inventory) {
       matches = matches.filter((unit) => unit.file === frame.fileHint);
     if (matches.length > 1 && frame.conditionsHint !== undefined)
       matches = matches.filter((unit) => same(unit.conditions, frame.conditionsHint));
-    if (matches.length !== 1)
-      throw Error(
-        matches.length ? "Ambiguous naming batch owner" : "Missing group-start naming batch owner",
-      );
-    const unit = matches[0];
+    if (!matches.length) throw Error("Missing group-start naming batch owner");
+    if (matches.length === 1) locations.set(frame, matches[0]);
+    else {
+      const key = JSON.stringify(matches.map((unit) => unitIDs.get(unit)));
+      if (!uniformFamilies.has(key)) uniformFamilies.set(key, { matches, frames: [] });
+      uniformFamilies.get(key).frames.push(frame);
+    }
+  }
+  for (const { matches, frames } of uniformFamilies.values()) {
+    // Every pairing has the same effect for every selected-ID subset only when
+    // all physical copies are covered by the same complete binding-slot plan.
+    if (
+      frames.length !== matches.length ||
+      frames.some((frame) => !same(slotPlan(frame.sites), slotPlan(frames[0].sites)))
+    )
+      throw Error("Ambiguous naming batch owner");
+    for (const [index, frame] of frames.entries()) locations.set(frame, matches[index]);
+  }
+  const edits = new Map();
+  const located = [];
+  const used = new Set();
+  for (const frame of batch.owners) {
+    const unit = locations.get(frame);
     if (used.has(unit)) throw Error("Repeated naming batch owner");
     used.add(unit);
     const stream = [...frame.tokens];
@@ -372,21 +399,34 @@ function replayAtomicNamingBatch(tree, batch, selectedIDs, inventory) {
     for (const edit of list.sort((left, right) => right.start - left.start))
       result[file] = result[file].slice(0, edit.start) + edit.text + result[file].slice(edit.end);
   const contract = prepareCoherentContract(result);
-  return {
-    tree: result,
-    owners: located.map(({ unit, stream, sites }) => {
-      const record = ownerRecord(contract, unit, stream);
-      return {
-        file: record.file,
-        scope: record.scope,
-        kind: record.kind,
-        opaque: unit.opaque,
-        conditions: record.conditions,
-        ...(record.macros !== undefined ? { macros: record.macros } : {}),
-        ...(record.selector !== undefined ? { selector: record.selector } : {}),
-        tokens: stream,
-        sites,
-      };
-    }),
-  };
+  const projected = new Map();
+  for (const { unit, stream, sites } of located) {
+    const record = ownerRecord(contract, unit, stream);
+    const owner = {
+      file: record.file,
+      scope: record.scope,
+      kind: record.kind,
+      opaque: unit.opaque,
+      conditions: record.conditions,
+      ...(record.macros !== undefined ? { macros: record.macros } : {}),
+      ...(record.selector !== undefined ? { selector: record.selector } : {}),
+      tokens: stream,
+      sites,
+    };
+    const previous = projected.get(record.id);
+    if (previous) {
+      if (
+        !same(
+          { ...previous, sites: slotPlan(previous.sites) },
+          { ...owner, sites: slotPlan(sites) },
+        )
+      )
+        throw Error("Nonuniform naming batch owner projection");
+      continue;
+    }
+    // The authoritative coherent record retains the complete physical count.
+    // Uniform copies need one mask projection, not duplicate record identities.
+    projected.set(record.id, owner);
+  }
+  return { tree: result, owners: [...projected.values()] };
 }

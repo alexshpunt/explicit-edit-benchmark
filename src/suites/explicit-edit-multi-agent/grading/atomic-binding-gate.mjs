@@ -212,6 +212,10 @@ function sameFamily(candidate, entry, header) {
  * success is not completion or credit. The controller must own repair eligibility
  * and verified prerequisites; never mask predecessor positions as peer work.
  * Protected tokens, context, owner identity and multiplicity remain mandatory.
+ * Uniform physical copies may appear as several inventory records while peer
+ * identifiers differ. Their counts must sum to the exact expected record count;
+ * every variant must satisfy every current mask. Each matching actual identity
+ * is reserved, so intersecting projections become unobservable on both sides.
  * With `physicalOnly: true`, all masks must be peer masks and at least one
  * must exist. This checks a structural owner's physical/context preservation
  * without granting any rename completion. It cannot be combined with input mode.
@@ -259,26 +263,34 @@ export function evaluateAtomicBindingGate(
         record.tokens.length === entry.record.tokens.length &&
         matches(record.tokens, entry.record.tokens, entry.masks),
     );
-    if (candidates.length !== 1 || candidates[0].count !== entry.record.count)
-      return { id: entry.record.id, status: "unobservable", reason: "owner-or-count" };
-    const [found] = candidates;
-    const previous = used.get(found.id);
-    if (previous) {
-      previous.status = "unobservable";
-      previous.reason = "ambiguous-owner";
-      return { id: entry.record.id, status: "unobservable", reason: "ambiguous-owner" };
+    const count = candidates.reduce((sum, record) => sum + record.count, 0);
+    const outcome =
+      !candidates.length || count !== entry.record.count
+        ? { id: entry.record.id, status: "unobservable", reason: "owner-or-count" }
+        : {
+            id: entry.record.id,
+            status:
+              input ||
+              candidates.every((record) =>
+                [...entry.masks.values()].every(
+                  (mask) => mask.role !== "current" || record.tokens[mask.index] === mask.to,
+                ),
+              )
+                ? "pass"
+                : "fail",
+          };
+    for (const found of candidates) {
+      let projections = used.get(found.id);
+      if (projections) {
+        for (const previous of projections)
+          Object.assign(previous, { status: "unobservable", reason: "ambiguous-owner" });
+        Object.assign(outcome, { status: "unobservable", reason: "ambiguous-owner" });
+      } else {
+        projections = new Set();
+        used.set(found.id, projections);
+      }
+      projections.add(outcome);
     }
-    const outcome = {
-      id: entry.record.id,
-      status:
-        input ||
-        [...entry.masks.values()].every(
-          (mask) => mask.role !== "current" || found.tokens[mask.index] === mask.to,
-        )
-          ? "pass"
-          : "fail",
-    };
-    used.set(found.id, outcome);
     return outcome;
   });
   for (const [index, entry] of entries.entries()) {
