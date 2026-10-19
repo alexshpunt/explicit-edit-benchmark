@@ -326,6 +326,8 @@ export function applyAtomicNamingBatch(tree, batch, selectedIDs) {
   return createAtomicNamingReplay(batch)(tree, selectedIDs);
 }
 
+const ownerLookupKey = (scope, kind, opaque, tokens) =>
+  JSON.stringify([scope, kind, opaque, tokens]);
 /** Reuse at most one exact trusted input tree's lexical owner inventory.
  * Each call hashes current paths and contents, including when the same object is
  * mutated. Changed source replaces the previous inventory; no frontier history,
@@ -347,9 +349,15 @@ export function createAtomicNamingReplay(batch) {
           contractTokens: contractTokens(source.slice(unit.start, unit.end)),
         })),
       );
-      baseline = { identity, current };
+      const byKey = new Map();
+      for (const unit of current) {
+        const key = ownerLookupKey(unit.scope, unit.kind, unit.opaque, texts(unit.contractTokens));
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push(unit);
+      }
+      baseline = { identity, byKey, unitIDs: new Map(current.map((unit, index) => [unit, index])) };
     }
-    return baseline.current;
+    return baseline;
   }
   const replay = (tree, selectedIDs) =>
     replayAtomicNamingBatch(tree, batch, selectedIDs, inventory);
@@ -367,20 +375,16 @@ function replayAtomicNamingBatch(tree, batch, selectedIDs, inventory) {
   const selected = new Set(selectedIDs);
   const known = new Set(batch.ids);
   for (const id of selected) if (!known.has(id)) throw Error("Unknown selected naming binding ID");
-  const current = inventory(tree);
-  const unitIDs = new Map(current.map((unit, index) => [unit, index]));
+  const { byKey, unitIDs } = inventory(tree);
   const locations = new Map();
   const uniformFamilies = new Map();
   for (const frame of batch.owners) {
     if (batchFingerprint(frame) !== frame.fingerprint)
       throw Error("Corrupt naming batch owner fingerprint");
-    let matches = current.filter(
-      (unit) =>
-        unit.scope === frame.scope &&
-        unit.kind === frame.syntaxKind &&
-        unit.opaque === frame.opaque &&
-        same(texts(unit.contractTokens), frame.tokens),
-    );
+    // Preserve the complete exact candidate set. Serialize each baseline owner
+    // once, not once for every frame/owner pair on every atomic observation.
+    let matches =
+      byKey.get(ownerLookupKey(frame.scope, frame.syntaxKind, frame.opaque, frame.tokens)) ?? [];
     if (matches.length > 1 && frame.fileHint !== undefined)
       matches = matches.filter((unit) => unit.file === frame.fileHint);
     if (matches.length > 1 && frame.conditionsHint !== undefined)

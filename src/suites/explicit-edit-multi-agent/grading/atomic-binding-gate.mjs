@@ -31,7 +31,7 @@ function conditionalIdentity(record) {
   );
 }
 
-function validateMasks(record, supplied) {
+function validateMasks(record, supplied, input = false) {
   assert.ok(Array.isArray(supplied), "Missing binding masks");
   const masks = new Map();
   for (const mask of supplied) {
@@ -52,7 +52,7 @@ function validateMasks(record, supplied) {
     );
     assert.ok(
       record.tokens[mask.index] === mask.to ||
-        (mask.role === "peer" && record.tokens[mask.index] === mask.from),
+        ((input || mask.role === "peer") && record.tokens[mask.index] === mask.from),
       "Binding mask differs from its trusted expected token",
     );
     masks.set(mask.index, mask);
@@ -102,7 +102,7 @@ function validateOccurrenceFiles(supplied = []) {
   return files;
 }
 
-function validateOccurrences(record, masks, files) {
+function validateOccurrences(record, masks, files, input) {
   if (record.occurrences === undefined) return;
   assert.ok(
     Array.isArray(record.occurrences) && record.occurrences.length === record.count,
@@ -127,7 +127,7 @@ function validateOccurrences(record, masks, files) {
       record.tokens,
       "Occurrence differs from its trusted expected record",
     );
-    const local = validateMasks(record, occurrence.masks);
+    const local = validateMasks(record, occurrence.masks, input);
     for (const mask of local.values()) {
       assert.ok(
         file.slots.has(occurrence.tokenStart + mask.index),
@@ -149,7 +149,7 @@ function validateOccurrences(record, masks, files) {
   return { file, occurrences };
 }
 
-function validate(records, physicalOnly, files) {
+function validate(records, physicalOnly, files, input) {
   assert.ok(Array.isArray(records) && records.length, "Missing private binding records");
   let current = 0;
   let reserved = 0;
@@ -190,8 +190,8 @@ function validate(records, physicalOnly, files) {
         : typeof record.selector === "string" && headerLength(record) !== undefined,
       "Invalid binding record declarator or conditional directives",
     );
-    const masks = validateMasks(record, record.masks);
-    const occurrence = validateOccurrences(record, masks, files);
+    const masks = validateMasks(record, record.masks, input);
+    const occurrence = validateOccurrences(record, masks, files, input);
     const groups = occurrence ? occurrence.occurrences.map((copy) => copy.masks) : [masks];
     for (const group of groups)
       for (const mask of group.values()) {
@@ -375,9 +375,11 @@ function occurrenceStatus(entry, actualRecords, tree, cache, input) {
  * exact. Missing/ambiguous/corrupt observations are unobservable, not attributed
  * current-edit failures. Active writers defer both failures and uncertainty.
  * With `input: true`, current slots also accept any identifier, allowing a partial
- * failed rename to receive a repair without requiring its old spelling. Input
- * success is not completion or credit. The controller must own repair eligibility
- * and verified prerequisites; never mask predecessor positions as peer work.
+ * failed rename to receive a repair without requiring its old spelling. Trusted
+ * input records may retain `from`, so ready atoms can share one unchanged expected
+ * frontier; output records still require `to`. Input success is not completion or
+ * credit. The controller must own repair eligibility and verified prerequisites;
+ * never mask predecessor positions as peer work.
  * Protected tokens, context, owner identity and multiplicity remain mandatory.
  * Uniform physical copies may appear as several inventory records while peer
  * identifiers differ. Their counts must sum to the exact expected record count;
@@ -423,7 +425,7 @@ export function evaluateAtomicBindingGate(
 ) {
   assert.ok(!(physicalOnly && input), "Physical-only projection is not an input gate");
   const files = validateOccurrenceFiles(occurrenceFiles);
-  const entries = validate(records, physicalOnly, files);
+  const entries = validate(records, physicalOnly, files, input);
   const references = trustedFamilies(records, familyRecords);
   let actual;
   try {
