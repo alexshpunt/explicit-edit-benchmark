@@ -276,6 +276,19 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
     const selected = new Set([...completed, ...settled, ...(namingInput ? [] : [id])]);
     const reservations = new Set([...started, ...writers, ...(namingInput ? [id] : [])]);
     const activeWrites = writers.size > 0;
+    if (input && !naming(node)) {
+      // A fresh structural input is checked before its move. Do not first replay
+      // the complete output frontier only to discard it; output verification
+      // still builds and checks that frontier after the edit settles.
+      selected.delete(id);
+      const before = frontier(selected).tree;
+      const after = move(before, node);
+      return checkAtomicInputs(
+        tree,
+        prepareAtomicGate(before, after, { writesOnly: true, readInventory: readTrusted }),
+        { activeWrites, readInventory: readCandidate },
+      );
+    }
     const combined = frontier(selected, reservations);
     if (naming(node)) {
       const contract = combined.contract;
@@ -305,47 +318,32 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
         { input, activeWrites, readInventory: readCandidate },
       );
     }
-    if (!input) {
-      const gate = projectAtomicGate(combined.tree, combined.structural.get(id), {
-        readInventory: readTrusted,
-      });
-      const expectedIds = new Set(gate.add.map((record) => record.id));
-      const contract = combined.contract;
-      const masksFor = (owner) =>
-        owner.sites
-          .filter(
-            (site) =>
-              !completed.has(site.nodeId) &&
-              (started.has(site.nodeId) || settled.has(site.nodeId) || writers.has(site.nodeId)),
-          )
-          .map((site) => ({ index: site.index, from: site.from, to: site.to, role: "peer" }));
-      const projection = bindingProjection(
-        combined,
-        (owner) =>
-          expectedIds.has(descriptorRecord(contract, owner).id) && masksFor(owner).length > 0,
-        masksFor,
-      );
-      return evaluateAtomicGate(tree, gate, {
-        activeWrites,
-        bindingRecords: projection.records,
-        occurrenceFiles: projection.occurrenceFiles,
-        familyRecords: contract.obligations,
-        readInventory: readCandidate,
-      });
-    }
-    // Inputs are checked before the current move. A settled descendant is not a
-    // fresh dispatch and must instead use combined-frontier output revalidation.
-    selected.delete(id);
-    const before = frontier(selected).tree;
-    const after = move(before, node);
-    return checkAtomicInputs(
-      tree,
-      prepareAtomicGate(before, after, { writesOnly: true, readInventory: readTrusted }),
-      {
-        activeWrites,
-        readInventory: readCandidate,
-      },
+    const gate = projectAtomicGate(combined.tree, combined.structural.get(id), {
+      readInventory: readTrusted,
+    });
+    const expectedIds = new Set(gate.add.map((record) => record.id));
+    const contract = combined.contract;
+    const masksFor = (owner) =>
+      owner.sites
+        .filter(
+          (site) =>
+            !completed.has(site.nodeId) &&
+            (started.has(site.nodeId) || settled.has(site.nodeId) || writers.has(site.nodeId)),
+        )
+        .map((site) => ({ index: site.index, from: site.from, to: site.to, role: "peer" }));
+    const projection = bindingProjection(
+      combined,
+      (owner) =>
+        expectedIds.has(descriptorRecord(contract, owner).id) && masksFor(owner).length > 0,
+      masksFor,
     );
+    return evaluateAtomicGate(tree, gate, {
+      activeWrites,
+      bindingRecords: projection.records,
+      occurrenceFiles: projection.occurrenceFiles,
+      familyRecords: contract.obligations,
+      readInventory: readCandidate,
+    });
   }
   /** Observe twice around grading; peer writes or frontier advancement defer the
    * result without spending a correction. Access live context getters after each
