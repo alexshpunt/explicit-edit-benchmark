@@ -481,9 +481,15 @@ export async function runConcurrent(
                   });
                   return finish(true);
                 }
-                // Naming inputs already admit every valid output spelling, as
-                // well as partial repairs. An output-first pass would rebuild the
-                // same private frontier twice without changing readiness.
+                // Check normal inputs first. Naming masks already admit valid
+                // outputs and partial repairs. Structural edits retain their
+                // already-correct output fallback only when input does not pass.
+                const input = await checkpoint.observe(readSource, node.id, context, {
+                  signal: deliverySignal,
+                  input: true,
+                });
+                observed(node.id, "current-input", input);
+                if (input.status === "pass") return finish(true);
                 if (!node.operations.every((operation) => operation.phase === "names")) {
                   const output = await checkpoint.observe(readSource, node.id, context, {
                     signal: deliverySignal,
@@ -491,11 +497,6 @@ export async function runConcurrent(
                   observed(node.id, "current-output", output);
                   if (output.status === "pass") return finish(true);
                 }
-                const input = await checkpoint.observe(readSource, node.id, context, {
-                  signal: deliverySignal,
-                  input: true,
-                });
-                observed(node.id, "current-input", input);
                 return finish(decision(input));
               } catch (error) {
                 trace.decision = deliverySignal.aborted ? "aborted" : "error";
