@@ -211,7 +211,12 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
   // source inventory each, never decisions: changed bytes must expose regressions.
   let cached;
   function frontier(selection, reservations = new Set()) {
-    const key = JSON.stringify([[...selection].sort(), [...reservations].sort()]);
+    // Reservations only decide which complete naming batches are present; the
+    // identity of the atom that reserved a batch does not change expected bytes.
+    const groups = batches
+      .filter((entry) => entry.batch.ids.some((id) => reservations.has(id)))
+      .map((entry) => entry.taskId);
+    const key = JSON.stringify([[...selection].sort(), groups]);
     if (cached?.key !== key) {
       const result = expected(selection, reservations);
       cached = { key, ...result, contract: readTrusted(result.tree) };
@@ -231,9 +236,14 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
   ) {
     const node = byId.get(id);
     assert.ok(node, `Unknown atomic checkpoint node: ${id}`);
-    const selected = new Set([...completed, ...settled, id]);
+    // Naming input masks admit old/new/partial identifiers. Share the unchanged
+    // current frontier across ready atoms instead of applying each unstarted
+    // atom merely to mask its new spelling again. Output checks still apply it.
+    const namingInput = input && naming(node);
+    const selected = new Set([...completed, ...settled, ...(namingInput ? [] : [id])]);
+    const reservations = new Set([...started, ...writers, ...(namingInput ? [id] : [])]);
     const activeWrites = writers.size > 0;
-    const combined = frontier(selected, new Set([...started, ...writers]));
+    const combined = frontier(selected, reservations);
     if (naming(node)) {
       const contract = combined.contract;
       const projection = bindingProjection(
@@ -305,24 +315,35 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
    * await. A stable snapshot is evidence at that instant, not a filesystem lock.
    */
   async function observe(readSource, id, context, { input = false, signal } = {}) {
-    const stamp = () =>
-      JSON.stringify([
-        [...context.completed].sort(),
-        [...(context.started ?? [])].sort(),
-        [...context.settled].sort(),
-        [...context.writers].sort(),
-      ]);
+    const snapshot = () => ({
+      verified: JSON.stringify([[...context.completed].sort(), [...context.settled].sort()]),
+      started: new Set(context.started ?? []),
+      writers: new Set(context.writers ?? []),
+    });
     signal?.throwIfAborted();
-    const revision = stamp();
+    const revision = snapshot();
+    const invalidated = () => {
+      const current = snapshot();
+      return (
+        revision.verified !== current.verified ||
+        [...revision.started].some((id) => !current.started.has(id)) ||
+        [...revision.writers].some((id) => !current.writers.has(id))
+      );
+    };
     try {
       const before = await readSource();
       signal?.throwIfAborted();
-      if (revision !== stamp()) return { status: "pending", reason: "frontier-changed" };
+      if (invalidated()) return { status: "pending", reason: "frontier-changed" };
       const result = check(before, id, { ...context, input });
       const after = await readSource();
       signal?.throwIfAborted();
-      if (revision !== stamp() || treeIdentity(before) !== treeIdentity(after))
+      if (invalidated() || treeIdentity(before) !== treeIdentity(after))
         return { status: "pending", reason: "source-or-frontier-changed" };
+      // New reservations only relax peer slots. An unchanged-source pass stays
+      // valid when another writer starts; verified-frontier changes and narrowed
+      // reservations still invalidate it. Non-passes must defer to active writers.
+      if (result.status !== "pass" && context.writers.size)
+        return { ...result, status: "pending", reason: result.reason ?? "active-writers" };
       return result;
     } catch (error) {
       signal?.throwIfAborted();
