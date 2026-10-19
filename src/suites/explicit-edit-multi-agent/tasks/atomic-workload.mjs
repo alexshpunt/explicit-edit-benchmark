@@ -150,7 +150,14 @@ function unrelatedLocalBindings(writer, reader) {
         if (
           consumer.owner &&
           (selector.owner.scope !== consumer.owner.scope ||
-            selector.owner.signature !== consumer.owner.signature)
+            selector.owner.signature !== consumer.owner.signature ||
+            // Prototype parameters and definition parameters are distinct bindings.
+            (selector.kind === "variable" &&
+              consumer.kind === "variable" &&
+              selector.scope === consumer.scope &&
+              typeof selector.owner.definition === "boolean" &&
+              typeof consumer.owner.definition === "boolean" &&
+              selector.owner.definition !== consumer.owner.definition))
         )
           return true;
         // A local variable cannot rename an unrelated qualified selector. Local
