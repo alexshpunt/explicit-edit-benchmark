@@ -73,6 +73,28 @@ await test("an unchanged expected frontier still applies current peer and comple
   assert.equal(checkpoint.check(tree, "a", { ...context, completed: settled }).status, "pass");
 });
 
+await test("returned expected frontiers cannot poison reused endpoint trees or binding descriptors", () => {
+  const { checkpoint } = setup();
+  const completed = new Set(["a", "b", "c"]);
+  const endpoint = checkpoint.expected(completed);
+  const correct = structuredClone(endpoint.tree);
+  endpoint.tree["main.cpp"] = endpoint.tree["main.cpp"].replace("left + right", "left - right");
+  for (const owner of endpoint.owners.get("names")) {
+    owner.tokens.fill("wrong");
+    owner.sites.length = 0;
+    owner.conditions.push(["wrong"]);
+  }
+  endpoint.owners.clear();
+  assert.deepEqual(checkpoint.expected(completed).tree, correct);
+  assert.equal(checkpoint.check(correct, "a", { completed }).status, "pass");
+  assert.notEqual(checkpoint.check(endpoint.tree, "a", { completed }).status, "pass");
+  const partial = checkpoint.expected(new Set(["a"])).tree;
+  assert.ok(partial["main.cpp"].includes("int b"));
+  assert.deepEqual(checkpoint.expected(completed).tree, correct);
+  checkpoint.clearCaches();
+  assert.deepEqual(checkpoint.expected(completed).tree, correct);
+});
+
 await test("clearing checkpoint caches preserves retained completions and fresh regression checks", () => {
   const { checkpoint } = setup();
   const completed = new Set(["a", "b", "c"]);
