@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdir, rm } from "node:fs/promises";
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { scopedNamingSession, applyScopedNamePlan } from "../cpp/scoped-names.mjs";
 import { treeIdentity } from "../generation/generator.mjs";
+import { cppTokens, includeDirectives } from "../cpp/cpp-tokens.mjs";
+import { joinedProject } from "../cpp/joined-project.mjs";
+
+const execFile = promisify(execFileCallback);
 
 const headerBindings = Symbol("current header local bindings");
 const headerRoot = "__reference_header_bindings.cpp";
@@ -34,7 +40,50 @@ const plainTypeRequest = (task) =>
       ),
   );
 
-function headerRequest(tree, task) {
+async function implementationHeaderContext(tree, spelling, readActiveMacros) {
+  const relevant = new Set();
+  const external = new Set();
+  const visit = (file, selected) => {
+    if (selected.has(file) || (selected === external && relevant.has(file))) return;
+    selected.add(file);
+    for (const include of includeDirectives(tree[file])) {
+      const relative = path.posix.normalize(
+        path.posix.join(path.posix.dirname(file), include.file),
+      );
+      const target = [relative, include.file, "support/" + include.file].find(
+        (name) => typeof tree[name] === "string",
+      );
+      if (target) visit(target, selected);
+    }
+  };
+  for (const [file, source] of Object.entries(tree))
+    if (headerPath.test(file) && spelling.test(source)) visit(file, relevant);
+  for (const file of Object.keys(tree)) if (file.endsWith(".cpp")) visit(file, external);
+  const names = new Set(
+    [...relevant].flatMap((file) => cppTokens(tree[file]).map((token) => token.text)),
+  );
+  const candidates = new Set();
+  for (const file of external) {
+    const joined = tree[file].replace(/\\\r?\n/g, "");
+    let clean = joined;
+    if (joined.includes("/*") || joined.includes("//")) {
+      const comments = cppTokens(joined).filter(
+        (token) => token.text.startsWith("/*") || token.text.startsWith("//"),
+      );
+      for (const token of comments.reverse())
+        clean =
+          clean.slice(0, token.start) +
+          token.text.replace(/[^\r\n]/g, " ") +
+          clean.slice(token.end);
+    }
+    for (const macro of clean.matchAll(/^[ \t]*#[ \t]*(?:define|undef)[ \t]+([A-Za-z_]\w*)/gm))
+      if (names.has(macro[1])) candidates.add(macro[1]);
+  }
+  if (!candidates.size) return false;
+  const active = await readActiveMacros(tree);
+  return [...candidates].some((name) => active.has(name));
+}
+async function headerRequest(tree, task, readActiveMacros) {
   if (headerLocalRequest(task)) return true;
   if (
     !task.operations.every(
@@ -52,12 +101,13 @@ function headerRequest(tree, task) {
   const names = task.operations.flatMap((operation) => operation.mapping.map((item) => item.from));
   if (names.some((name) => !/^[A-Za-z_]\w*$/.test(name))) return false;
   const spelling = new RegExp(`\\b(?:${names.join("|")})\\b`);
-  return Object.entries(tree)
+  const closed = Object.entries(tree)
     .filter(([name]) => name.endsWith(".cpp"))
     .every(([, source]) => {
       const joined = source.replace(/\\\r?\n/g, "");
       return !/##|%:%:|\?\?[/=]/.test(joined) && !spelling.test(joined);
     });
+  return closed && !(await implementationHeaderContext(tree, spelling, readActiveMacros));
 }
 
 /** Retain only compiler work generated from actually delivered public requests.
@@ -71,9 +121,14 @@ function headerRequest(tree, task) {
  * unrelated implementation moves can temporarily leave other translation units
  * unbuildable. Other semantic requests may use that view only when no
  * source spelling occurs in implementation text after line splicing; token
- * pasting and trigraph ambiguity reject this optimization. The check is repeated
- * before pending-plan reuse. Compiler selection and candidate gates remain the
- * authority, not this conservative view-selection test.
+ * pasting and trigraph ambiguity reject this optimization. Headers containing
+ * selected spellings and their include dependencies also retain implementation
+ * macro context: an active external define/undef affecting their tokens forces
+ * full-project analysis, even when no selected spelling appears in a .cpp file.
+ * Clang preprocessing of actual source distinguishes active directives from
+ * dormant platform branches; its one retained result is bound to complete bytes.
+ * The check repeats before pending-plan reuse. Compiler selection and candidate
+ * gates remain the authority, not this conservative view-selection test.
  * The private root adds includes only, never declarations or saved
  * answers. Missing header selections use ordinary current-project analysis;
  * header compiler errors remain errors. Header views exclude implementation
@@ -82,9 +137,10 @@ function headerRequest(tree, task) {
  * identity. A rejected header-view CAS may reuse the same current plan when
  * those inputs are unchanged, merging it onto fresh implementation bytes; the
  * next commit and acknowledgement still require a matching whole-source snapshot.
- * Full-project views keep their original complete-source identity. Header-only
- * type declarations with plain scope selectors can retain compiler binding IDs
- * across independent type renames. Any signature/owner consumer or request using
+ * Full-project views keep their original complete-source identity. Type
+ * declarations with plain scope selectors can retain compiler binding IDs across
+ * independent type renames in either view; unrelated input changes still reopen
+ * the compiler. Any signature/owner consumer or request using
  * an earlier destination spelling reopens the actual current compiler source.
  * Candidate gates and full builds are unchanged; this view is never used for
  * preparation certification. An optional readCurrent callback rechecks the
@@ -106,6 +162,31 @@ export function currentNamingPlanner(directory, { signal } = {}) {
   const check = () => {
     signal?.throwIfAborted();
     if (stopped) throw Error("Reference naming planner closed");
+  };
+  let macroState;
+  const readActiveMacros = async (tree) => {
+    const identity = treeIdentity(tree);
+    if (macroState?.identity === identity) return macroState.active;
+    check();
+    await mkdir(directory, { recursive: true });
+    const sourcePath = path.resolve(directory, "context.cpp");
+    await writeFile(sourcePath, joinedProject(tree).source);
+    const { stdout } = await execFile(
+      "clang++",
+      ["-std=c++17", "-pthread", "-E", "-dD", sourcePath],
+      {
+        timeout: 45_000,
+        maxBuffer: 64 * 1024 * 1024,
+        env: { ...process.env, LC_ALL: "C" },
+      },
+    );
+    const active = new Set(
+      [...stdout.matchAll(/^[ \t]*#[ \t]*(?:define|undef)[ \t]+([A-Za-z_]\w*)/gm)].map(
+        (match) => match[1],
+      ),
+    );
+    macroState = { identity, active };
+    return active;
   };
   const open = async (tree, file, allowAbsentOwners = false) => {
     check();
@@ -200,7 +281,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           }
           if (
             pending.headerBefore &&
-            headerRequest(before, task) &&
+            (await headerRequest(before, task, readActiveMacros)) &&
             pending.headerBefore === viewIdentity(before, headerBindings)
           ) {
             // The failed whole-source CAS changed only files this compiler view
@@ -224,7 +305,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           task.operations[0].category === "helpers"
             ? task.operations[0].file
             : Object.keys(before).some((name) => headerPath.test(name)) &&
-                headerRequest(before, task)
+                (await headerRequest(before, task, readActiveMacros))
               ? headerBindings
               : undefined;
         if (
@@ -240,8 +321,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           state.file === file &&
           state.expected === viewIdentity(before, file) &&
           (!state.types ||
-            (file === headerBindings &&
-              plainTypes &&
+            (plainTypes &&
               task.operations.every((operation) =>
                 operation.mapping.every((item) => !state.typeDestinations.has(item.from)),
               ))),
@@ -300,7 +380,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           plans,
           types: state.types,
           ...(state.file === headerBindings ? { headerBefore: state.expected } : {}),
-          ...(state.file === headerBindings && plainTypes
+          ...(plainTypes
             ? {
                 typeDestinations: task.operations.flatMap((operation) =>
                   operation.mapping.map((item) => item.to),
@@ -342,6 +422,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     close() {
       stopped = true;
       invalidate();
+      macroState = undefined;
     },
   };
 }
