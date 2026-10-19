@@ -14,13 +14,14 @@ npm run benchmark:submit -- --harness codex-cli-default --model PROVIDER/MODEL -
 
 The command writes a temporary configuration into the system temp folder and deletes it when it finishes, so you never prepare or commit a config file for a ready adapter.
 
-`--harness` takes the published harness family: `pi-default`, `baseline-agent`, `pi-agent-ide`, `codex-cli-default`, `opencode-default`, `oh-my-pi-default`, `github-copilot-cli-default`, `dsh-standard`, or `dsh-code`.
+`--harness` takes the published harness family: `pi-default`, `baseline-agent`, `pi-agent-ide`, `pi-agent-ide-codemode`, `codex-cli-default`, `opencode-default`, `oh-my-pi-default`, `github-copilot-cli-default`, `dsh-standard`, or `dsh-code`.
 
 | Adapter                      | Binary     |
 | ---------------------------- | ---------- |
 | `pi-default`                 | `pi`       |
 | `baseline-agent`             | `pi`       |
 | `pi-agent-ide`               | `pi`       |
+| `pi-agent-ide-codemode`      | `pi`       |
 | `codex-cli-default`          | `codex`    |
 | `opencode-default`           | `opencode` |
 | `oh-my-pi-default`           | `omp`      |
@@ -34,6 +35,8 @@ Install your agent yourself and log in the way that agent expects. The benchmark
 
 `baseline-agent` runs Pi with only the built-in `bash` tool. It disables discovered extensions, skills, templates, themes and context files; its one explicitly loaded extension replaces the system prompt with an empty string. Use the same Pi authentication as `pi-default`.
 
+Use `pi-agent-ide-codemode` for current IDE evaluations. It explicitly loads native Codemode in `on` mode alongside standalone IDE tools and checks their model-facing declarations before inference. `pi-agent-ide` keeps native Codemode disabled for historical comparisons; its results remain a separate family.
+
 ## Models and reasoning
 
 | Adapter                      | `--model` argument   | Authentication                       |
@@ -41,6 +44,7 @@ Install your agent yourself and log in the way that agent expects. The benchmark
 | `pi-default`                 | Pi provider/model id | Pi `auth.json` via `--auth-file`     |
 | `baseline-agent`             | Pi provider/model id | Pi `auth.json` via `--auth-file`     |
 | `pi-agent-ide`               | Pi provider/model id | Pi `auth.json` via `--auth-file`     |
+| `pi-agent-ide-codemode`      | Pi provider/model id | Pi `auth.json` via `--auth-file`     |
 | `codex-cli-default`          | Provider model id    | Responses provider key               |
 | `opencode-default`           | Provider model id    | OpenAI-compatible provider key       |
 | `oh-my-pi-default`           | Provider model id    | OpenAI-compatible provider key       |
@@ -73,7 +77,7 @@ Each adapter has its own quirks:
 - **Pi** reads `auth.json` from the Pi home inside the sandbox, and the sandbox starts empty, so a
   Pi run needs `--auth-file ~/.pi/agent/auth.json`. Without the flag the harness starts with nobody
   logged in and fails on its first request.
-- **Pi Agent IDE** loads the published `pi-agent-ide` npm package, so install it and pass `--ide-package DIRECTORY` pointing at the installed package. The adapter reads the extension entry and version from that package and mounts the tree that holds it, so the extension's own dependencies come along. `--harness-version` must equal the installed package version, otherwise the harness version would be confused with the Pi agent version.
+- **Pi Agent IDE** profiles both use the published `pi-agent-ide` npm package, not a package named `pi-agent-ide-codemode`. For local runs, install the package and pass `--ide-package DIRECTORY` pointing at it. The adapter reads its extension entry and mounts its dependency tree. `--harness-version` must equal the installed IDE package version. For official runs, pass exact `--agent-version` and `--harness-version` values; the runner installs those Pi and IDE releases.
 
 ## Run a harness on your own subscription
 

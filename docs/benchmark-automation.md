@@ -77,7 +77,7 @@ Keep credentials out of this file when you can. Point the adapter at an existing
 
 ## Release-candidate automation
 
-`.github/workflows/release-observation.yml` is a reusable workflow for release pipelines. It runs only after npm publication. It downloads the caller's validated `pi-agent-ide` artifact to verify the release identity, installs the exact published Pi Agent IDE and Pi versions from npm, runs the `pi-agent-ide` harness, submits the observation, and accepts it into the Hugging Face Dataset. Acceptance rebuilds the Dataset views and dynamic badge in the same parent-checked commit.
+`.github/workflows/release-observation.yml` is a reusable workflow for release pipelines. It runs only after npm publication. It downloads the caller's validated `pi-agent-ide` artifact to verify the release identity, installs the exact published Pi Agent IDE and Pi versions from npm, runs the `pi-agent-ide-codemode` harness, submits the observation, and accepts it into the Hugging Face Dataset. Acceptance rebuilds the Dataset views and dynamic badge in the same parent-checked commit.
 
 The caller must pass the artifact name, Pi Agent IDE version, Pi version, model, reasoning level, and concurrency. The workflow verifies that both the retained artifact name and installed npm package have the requested harness version.
 

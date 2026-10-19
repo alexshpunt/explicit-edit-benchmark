@@ -121,7 +121,8 @@ The benchmark has ready adapters for these CLIs. Use the name in the `--harness`
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------- |
 | `pi-default`                 | [Pi](https://pi.dev/)                                                                                               | `pi`       |
 | `baseline-agent`             | Pi with bash only and an empty system prompt                                                                        | `pi`       |
-| `pi-agent-ide`               | [Pi Agent IDE](https://github.com/alexshpunt/pi-agent-ide)                                                          | `pi`       |
+| `pi-agent-ide`               | [Pi Agent IDE](https://github.com/alexshpunt/pi-agent-ide), without native Codemode                                 | `pi`       |
+| `pi-agent-ide-codemode`      | Pi Agent IDE with native Codemode and standalone tools                                                              | `pi`       |
 | `codex-cli-default`          | [Codex CLI](https://github.com/openai/codex)                                                                        | `codex`    |
 | `opencode-default`           | [OpenCode](https://github.com/anomalyco/opencode)                                                                   | `opencode` |
 | `oh-my-pi-default`           | [Oh My Pi](https://github.com/can1357/oh-my-pi)                                                                     | `omp`      |
@@ -129,7 +130,7 @@ The benchmark has ready adapters for these CLIs. Use the name in the `--harness`
 | `dsh-standard`               | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), native tools                                   | `dsh`      |
 | `dsh-code`                   | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), code mode                                      | `dsh`      |
 
-The name in the flag is the published harness family, so a result lands in the leaderboard under the name you ran. The binary column is what actually runs; pass a different path with `--command` when yours is not on `PATH`. `pi-default` and `pi-agent-ide` both run `pi`, and differ only in the tools.
+The name in the flag is the published harness family, so a result lands in the leaderboard under the name you ran. The binary column is what actually runs; pass a different path with `--command` when yours is not on `PATH`. Both IDE profiles run `pi`. Use `pi-agent-ide-codemode` for current IDE evaluations; `pi-agent-ide` keeps native Codemode disabled for historical comparisons. They publish as separate families.
 
 You install and sign in to that CLI yourself. The benchmark leaves your CLI alone, and your credentials stay yours: it copies only the file you point it at, for the length of a run.
 
@@ -209,15 +210,16 @@ Keep the failures, timeouts, and recovery attempts in the result, because a publ
 Once your run is accepted, you can show its score in your own README:
 
 ```md
-[![Explicit Edit Benchmark](https://img.shields.io/endpoint?url=https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/resolve/main/badges/pi-agent-ide.json&style=flat-square)](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-agent-ide%40latest)
+[![Explicit Edit Benchmark](https://img.shields.io/endpoint?url=https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/resolve/main/badges/pi-agent-ide-codemode.json&style=flat-square)](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-agent-ide-codemode%40latest)
 ```
 
-The Dataset publishes one badge per harness family under `badges/`, named after the family. Clicking a badge opens the latest harness version’s card while keeping the full comparison visible. This is how they look right now:
+The Dataset publishes one badge per harness family under `badges/`, named after the family. A family's badge file appears after its first accepted observation. Clicking a badge opens the latest harness version’s card while keeping the full comparison visible. Badge endpoints use these family names:
 
 | Family                       | Badge                                                                                                                                                                                                                                                                                                                      |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pi-default`                 | [![Explicit Edit Benchmark](https://img.shields.io/endpoint?url=https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/resolve/main/badges/pi-default.json&style=flat-square)](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-default%40latest)                                 |
 | `pi-agent-ide`               | [![Explicit Edit Benchmark](https://img.shields.io/endpoint?url=https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/resolve/main/badges/pi-agent-ide.json&style=flat-square)](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-agent-ide%40latest)                             |
+| `pi-agent-ide-codemode`      | [![Explicit Edit Benchmark](https://img.shields.io/endpoint?url=https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/resolve/main/badges/pi-agent-ide-codemode.json&style=flat-square)](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Api-agent-ide-codemode%40latest)           |
 | `codex-cli-default`          | [![Explicit Edit Benchmark](https://img.shields.io/endpoint?url=https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/resolve/main/badges/codex-cli-default.json&style=flat-square)](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Acodex-cli-default%40latest)                   |
 | `opencode-default`           | [![Explicit Edit Benchmark](https://img.shields.io/endpoint?url=https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/resolve/main/badges/opencode-default.json&style=flat-square)](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Aopencode-default%40latest)                     |
 | `oh-my-pi-default`           | [![Explicit Edit Benchmark](https://img.shields.io/endpoint?url=https://huggingface.co/datasets/alexshpunt/explicit-edit-benchmark/resolve/main/badges/oh-my-pi-default.json&style=flat-square)](https://huggingface.co/spaces/alexshpunt/benchmark-explorer?card=harness%3Aoh-my-pi-default%40latest)                     |
