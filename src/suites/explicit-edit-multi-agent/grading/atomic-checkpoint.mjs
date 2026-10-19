@@ -3,7 +3,11 @@ import { treeIdentity } from "../generation/generator.mjs";
 import { atomicOrder } from "../tasks/atomic-effects.mjs";
 import { applyCoherentStructure } from "../reference/coherent-edit.mjs";
 import { createAtomicInventory } from "./atomic-inventory.mjs";
-import { createAtomicNamingReplay } from "./atomic-frontier.mjs";
+import {
+  createAtomicNamingReplay,
+  atomicFileTokens,
+  atomicFileDirectives,
+} from "./atomic-frontier.mjs";
 import { evaluateAtomicBindingGate } from "./atomic-binding-gate.mjs";
 import {
   prepareAtomicGate,
@@ -12,7 +16,6 @@ import {
   checkAtomicInputs,
 } from "./atomic-gate.mjs";
 
-const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const naming = (node) => node.operations.every((operation) => operation.phase === "names");
 const family = (record) =>
   JSON.stringify([
@@ -22,19 +25,110 @@ const family = (record) =>
   ]);
 const move = (tree, node) => node.operations.reduce(applyCoherentStructure, tree);
 
+const descriptorIndexes = new WeakMap();
+const descriptorKey = (owner, tokens = owner.tokens) =>
+  JSON.stringify([owner.file, owner.kind, owner.scope, owner.conditions, tokens]);
+
 function descriptorRecord(contract, owner, tokens = owner.tokens) {
-  const matches = contract.obligations.filter(
-    (record) =>
-      record.file === owner.file &&
-      record.kind === owner.kind &&
-      record.scope === owner.scope &&
-      same(record.conditions, owner.conditions) &&
-      same(record.tokens, tokens),
-  );
+  let index = descriptorIndexes.get(contract);
+  if (!index) {
+    index = new Map();
+    for (const record of contract.obligations) {
+      const key = descriptorKey(record);
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push(record);
+    }
+    descriptorIndexes.set(contract, index);
+  }
+  const matches = index.get(descriptorKey(owner, tokens)) ?? [];
   assert.equal(matches.length, 1, "Missing or ambiguous trusted binding owner record");
   return matches[0];
 }
 
+// Coherent identities aggregate equal owners. Distinct certified plans that
+// converge need current ordered occurrences, not fabricated count-one records.
+function bindingProjection(combined, include, masksFor) {
+  const all = [...combined.owners.values()].flat();
+  const families = new Map();
+  for (const owner of all) {
+    const record = descriptorRecord(combined.contract, owner);
+    if (!families.has(record.id)) families.set(record.id, { record, owners: [] });
+    families.get(record.id).owners.push(owner);
+  }
+  const shapes = new Map();
+  const shapeKeys = new Map();
+  for (const owner of all) {
+    const slots = new Set(owner.sites.map((site) => site.index));
+    const key = JSON.stringify([
+      owner.file,
+      owner.kind,
+      owner.scope,
+      owner.conditions,
+      owner.macros,
+      owner.tokens.map((token, index) => (slots.has(index) ? null : token)),
+    ]);
+    shapeKeys.set(owner, key);
+    if (!shapes.has(key)) shapes.set(key, []);
+    shapes.get(key).push(owner);
+  }
+  const selected = new Set();
+  const occurrenceOwners = new Set();
+  for (const seed of all.filter(include)) {
+    if (selected.has(seed)) continue;
+    const component = new Set([seed]);
+    const queue = [seed];
+    for (const owner of queue) {
+      const record = descriptorRecord(combined.contract, owner);
+      for (const neighbor of [
+        ...families.get(record.id).owners,
+        ...shapes.get(shapeKeys.get(owner)),
+      ])
+        if (!component.has(neighbor)) {
+          component.add(neighbor);
+          queue.push(neighbor);
+        }
+    }
+    for (const owner of component) {
+      selected.add(owner);
+      if (component.size > 1) occurrenceOwners.add(owner);
+    }
+  }
+  const records = [];
+  for (const { record, owners } of families.values()) {
+    if (!owners.some((owner) => selected.has(owner))) continue;
+    if (!owners.some((owner) => occurrenceOwners.has(owner))) {
+      records.push({ ...record, masks: masksFor(owners[0]) });
+      continue;
+    }
+    const occurrences = owners.flatMap((owner) =>
+      owner.tokenStarts.map((tokenStart) => ({ tokenStart, masks: masksFor(owner) })),
+    );
+    assert.equal(occurrences.length, record.count, "Incomplete convergent owner coverage");
+    const masks = new Map();
+    for (const occurrence of occurrences)
+      for (const mask of occurrence.masks)
+        if (!masks.has(mask.index)) masks.set(mask.index, { ...mask, role: "peer" });
+    records.push({ ...record, masks: [...masks.values()], occurrences });
+  }
+  const files = new Set(
+    records.filter((record) => record.occurrences).map((record) => record.file),
+  );
+  const occurrenceFiles = [...files].map((file) => ({
+    file,
+    tokens: atomicFileTokens(combined.tree[file]),
+    directives: atomicFileDirectives(combined.tree[file]),
+    slots: [
+      ...new Set(
+        all
+          .filter((owner) => owner.file === file)
+          .flatMap((owner) =>
+            owner.tokenStarts.flatMap((start) => owner.sites.map((site) => start + site.index)),
+          ),
+      ),
+    ].sort((left, right) => left - right),
+  }));
+  return { records, occurrenceFiles };
+}
 /** Build private expected frontiers for one drained-barrier interval.
  * Batches are compiler-certified group-start sparse plans; nodes are public atomic
  * requests. Never derive either from candidate edits or mount this object in an
@@ -142,12 +236,11 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
     const combined = frontier(selected, new Set([...started, ...writers]));
     if (naming(node)) {
       const contract = combined.contract;
-      const records = combined.owners
-        .get(node.taskId)
-        .filter((owner) => owner.sites.some((site) => site.nodeId === id))
-        .map((owner) => ({
-          ...descriptorRecord(contract, owner),
-          masks: owner.sites
+      const projection = bindingProjection(
+        combined,
+        (owner) => owner.sites.some((site) => site.nodeId === id),
+        (owner) =>
+          owner.sites
             .filter(
               (site) =>
                 site.nodeId === id ||
@@ -162,10 +255,10 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
               to: site.to,
               role: site.nodeId === id ? "current" : "peer",
             })),
-        }));
+      );
       return evaluateAtomicBindingGate(
         tree,
-        { records, familyRecords: contract.obligations },
+        { ...projection, familyRecords: contract.obligations },
         { input, activeWrites, readInventory: readCandidate },
       );
     }
@@ -175,23 +268,24 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
       });
       const expectedIds = new Set(gate.add.map((record) => record.id));
       const contract = combined.contract;
-      const bindingRecords = [...combined.owners.values()].flatMap((owners) =>
-        owners.flatMap((owner) => {
-          const record = descriptorRecord(contract, owner);
-          if (!expectedIds.has(record.id)) return [];
-          const masks = owner.sites
-            .filter(
-              (site) =>
-                !completed.has(site.nodeId) &&
-                (started.has(site.nodeId) || settled.has(site.nodeId) || writers.has(site.nodeId)),
-            )
-            .map((site) => ({ index: site.index, from: site.from, to: site.to, role: "peer" }));
-          return masks.length ? [{ ...record, masks }] : [];
-        }),
+      const masksFor = (owner) =>
+        owner.sites
+          .filter(
+            (site) =>
+              !completed.has(site.nodeId) &&
+              (started.has(site.nodeId) || settled.has(site.nodeId) || writers.has(site.nodeId)),
+          )
+          .map((site) => ({ index: site.index, from: site.from, to: site.to, role: "peer" }));
+      const projection = bindingProjection(
+        combined,
+        (owner) =>
+          expectedIds.has(descriptorRecord(contract, owner).id) && masksFor(owner).length > 0,
+        masksFor,
       );
       return evaluateAtomicGate(tree, gate, {
         activeWrites,
-        bindingRecords,
+        bindingRecords: projection.records,
+        occurrenceFiles: projection.occurrenceFiles,
         familyRecords: contract.obligations,
         readInventory: readCandidate,
       });

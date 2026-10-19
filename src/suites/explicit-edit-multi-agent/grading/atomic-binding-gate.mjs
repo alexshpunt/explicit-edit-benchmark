@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { prepareCoherentContract } from "./coherent-grade.mjs";
+import { atomicFileTokens, atomicFileOwners, atomicFileDirectives } from "./atomic-frontier.mjs";
 
 const keywords = new Set(
   "alignas alignof and and_eq asm auto bitand bitor bool break case catch char char16_t char32_t class compl const constexpr const_cast continue decltype default delete do double dynamic_cast else enum explicit export extern false float for friend goto if inline int long mutable namespace new noexcept not not_eq nullptr operator or or_eq private protected public register reinterpret_cast return short signed sizeof static static_assert static_cast struct switch template this thread_local throw true try typedef typeid typename union unsigned using virtual void volatile wchar_t while xor xor_eq".split(
@@ -7,7 +8,7 @@ const keywords = new Set(
   ),
 );
 const identifier = (token) => /^[A-Za-z_]\w*$/.test(token) && !keywords.has(token);
-const ignored = new Set(["id", "count", "selector", "tokens", "masks"]);
+const ignored = new Set(["id", "count", "selector", "tokens", "masks", "occurrences"]);
 const context = (record) =>
   JSON.stringify(
     Object.keys(record)
@@ -30,7 +31,125 @@ function conditionalIdentity(record) {
   );
 }
 
-function validate(records, physicalOnly) {
+function validateMasks(record, supplied) {
+  assert.ok(Array.isArray(supplied), "Missing binding masks");
+  const masks = new Map();
+  for (const mask of supplied) {
+    assert.ok(
+      mask &&
+        Number.isInteger(mask.index) &&
+        mask.index >= 0 &&
+        mask.index < record.tokens.length &&
+        !masks.has(mask.index),
+      "Invalid or repeated binding mask index",
+    );
+    assert.ok(
+      ["current", "peer"].includes(mask.role) &&
+        identifier(mask.from) &&
+        identifier(mask.to) &&
+        mask.from !== mask.to,
+      "Invalid binding mask",
+    );
+    assert.ok(
+      record.tokens[mask.index] === mask.to ||
+        (mask.role === "peer" && record.tokens[mask.index] === mask.from),
+      "Binding mask differs from its trusted expected token",
+    );
+    masks.set(mask.index, mask);
+  }
+  return masks;
+}
+
+function validateOccurrenceFiles(supplied = []) {
+  assert.ok(Array.isArray(supplied), "Invalid occurrence file witnesses");
+  const files = new Map();
+  for (const file of supplied) {
+    assert.ok(
+      file && typeof file.file === "string" && file.file && !files.has(file.file),
+      "Invalid or repeated occurrence file",
+    );
+    assert.ok(
+      Array.isArray(file.tokens) &&
+        file.tokens.length &&
+        file.tokens.every((token) => typeof token === "string" && token.length),
+      "Invalid occurrence file tokens",
+    );
+    assert.ok(
+      Array.isArray(file.directives) &&
+        file.directives.every(
+          (directive) =>
+            typeof directive === "string" &&
+            directive.startsWith("#") &&
+            directive.trim() === directive,
+        ),
+      "Invalid or missing occurrence file directives",
+    );
+    assert.ok(Array.isArray(file.slots), "Missing occurrence file slots");
+    const slots = new Set();
+    for (const index of file.slots) {
+      assert.ok(
+        Number.isSafeInteger(index) &&
+          index >= 0 &&
+          index < file.tokens.length &&
+          identifier(file.tokens[index]) &&
+          !slots.has(index),
+        "Invalid or repeated occurrence file slot",
+      );
+      slots.add(index);
+    }
+    files.set(file.file, { tokens: file.tokens, slots, directives: file.directives });
+  }
+  return files;
+}
+
+function validateOccurrences(record, masks, files) {
+  if (record.occurrences === undefined) return;
+  assert.ok(
+    Array.isArray(record.occurrences) && record.occurrences.length === record.count,
+    "Occurrence count differs from its authoritative record",
+  );
+  const file = files.get(record.file);
+  assert.ok(file, "Missing trusted occurrence file");
+  const starts = new Set();
+  const union = new Map();
+  const occurrences = record.occurrences.map((occurrence) => {
+    assert.ok(
+      occurrence &&
+        Number.isSafeInteger(occurrence.tokenStart) &&
+        occurrence.tokenStart >= 0 &&
+        occurrence.tokenStart + record.tokens.length <= file.tokens.length &&
+        !starts.has(occurrence.tokenStart),
+      "Invalid or repeated occurrence token start",
+    );
+    starts.add(occurrence.tokenStart);
+    assert.deepEqual(
+      file.tokens.slice(occurrence.tokenStart, occurrence.tokenStart + record.tokens.length),
+      record.tokens,
+      "Occurrence differs from its trusted expected record",
+    );
+    const local = validateMasks(record, occurrence.masks);
+    for (const mask of local.values()) {
+      assert.ok(
+        file.slots.has(occurrence.tokenStart + mask.index),
+        "Occurrence mask is outside certified file slots",
+      );
+      const options = union.get(mask.index) ?? [];
+      options.push(mask);
+      union.set(mask.index, options);
+    }
+    return { tokenStart: occurrence.tokenStart, masks: local };
+  });
+  assert.equal(masks.size, union.size, "Occurrence mask union differs from its record");
+  for (const [index, mask] of masks)
+    assert.ok(
+      mask.role === "peer" &&
+        union.get(index)?.some((local) => local.from === mask.from && local.to === mask.to),
+      "Occurrence family masks must be the exact peer union",
+    );
+  return { file, occurrences };
+}
+
+function validate(records, physicalOnly, files) {
   assert.ok(Array.isArray(records) && records.length, "Missing private binding records");
   let current = 0;
   let reserved = 0;
@@ -71,34 +190,15 @@ function validate(records, physicalOnly) {
         : typeof record.selector === "string" && headerLength(record) !== undefined,
       "Invalid binding record declarator or conditional directives",
     );
-    assert.ok(Array.isArray(record.masks), "Missing binding masks");
-    const masks = new Map();
-    for (const mask of record.masks) {
-      assert.ok(
-        mask &&
-          Number.isInteger(mask.index) &&
-          mask.index >= 0 &&
-          mask.index < record.tokens.length &&
-          !masks.has(mask.index),
-        "Invalid or repeated binding mask index",
-      );
-      assert.ok(
-        ["current", "peer"].includes(mask.role) &&
-          identifier(mask.from) &&
-          identifier(mask.to) &&
-          mask.from !== mask.to,
-        "Invalid binding mask",
-      );
-      assert.ok(
-        record.tokens[mask.index] === mask.to ||
-          (mask.role === "peer" && record.tokens[mask.index] === mask.from),
-        "Binding mask differs from its trusted expected token",
-      );
-      if (mask.role === "current") current++;
-      reserved++;
-      masks.set(mask.index, mask);
-    }
-    return { record, masks, context: context(record) };
+    const masks = validateMasks(record, record.masks);
+    const occurrence = validateOccurrences(record, masks, files);
+    const groups = occurrence ? occurrence.occurrences.map((copy) => copy.masks) : [masks];
+    for (const group of groups)
+      for (const mask of group.values()) {
+        if (mask.role === "current") current++;
+        reserved++;
+      }
+    return { record, masks, context: context(record), occurrence };
   });
   if (physicalOnly) {
     assert.equal(current, 0, "Physical-only projections accept peer masks only");
@@ -135,10 +235,10 @@ function trustedFamilies(records, supplied) {
             : headerLength(record) !== undefined),
         "Invalid trusted family reference declarator or conditional directives",
       );
-    const { masks: _masks, ...reference } = record;
+    const { masks: _masks, occurrences: _occurrences, ...reference } = record;
     byId.set(record.id, reference);
   }
-  for (const { masks: _masks, ...record } of records)
+  for (const { masks: _masks, occurrences: _occurrences, ...record } of records)
     assert.deepEqual(
       record,
       byId.get(record.id),
@@ -183,6 +283,73 @@ function sameFamily(candidate, entry, header) {
   );
 }
 
+function occurrenceStatus(entry, actualRecords, tree, cache, input) {
+  const { file, occurrences } = entry.occurrence;
+  const name = entry.record.file;
+  if (!cache.has(name)) {
+    const source = tree[name];
+    const tokens = typeof source === "string" ? atomicFileTokens(source) : [];
+    const directives = typeof source === "string" ? atomicFileDirectives(source) : [];
+    cache.set(name, { tokens, directives });
+  }
+  const view = cache.get(name);
+  const { tokens } = view;
+  const claims = [];
+  if (
+    tokens.length !== file.tokens.length ||
+    JSON.stringify(view.directives) !== JSON.stringify(file.directives) ||
+    !tokens.every((token, index) =>
+      file.slots.has(index) ? identifier(token) : token === file.tokens[index],
+    )
+  )
+    return { status: "unobservable", reason: "occurrence-file", claims };
+  if (!view.owners) {
+    try {
+      view.owners = atomicFileOwners({ [name]: tree[name] });
+    } catch {
+      return { status: "unobservable", reason: "occurrence-boundary", claims };
+    }
+  }
+  const outcome = { status: "pass", claims };
+  for (const occurrence of occurrences) {
+    const actual = tokens.slice(
+      occurrence.tokenStart,
+      occurrence.tokenStart + entry.record.tokens.length,
+    );
+    const located = view.owners.filter(
+      (owner) =>
+        owner.tokenStart === occurrence.tokenStart &&
+        owner.tokenLength === entry.record.tokens.length &&
+        context(owner.record) === entry.context &&
+        JSON.stringify(owner.record.tokens) === JSON.stringify(actual),
+    );
+    const found =
+      located.length === 1
+        ? actualRecords.find((candidate) => candidate.id === located[0].record.id)
+        : undefined;
+    if (!found) {
+      Object.assign(outcome, { status: "unobservable", reason: "occurrence-boundary" });
+      continue;
+    }
+    claims.push({
+      record: found,
+      key: JSON.stringify([name, occurrence.tokenStart, entry.record.tokens.length]),
+    });
+    if (!matches(actual, entry.record.tokens, occurrence.masks)) {
+      Object.assign(outcome, { status: "unobservable", reason: "occurrence-owner" });
+      continue;
+    }
+    if (
+      outcome.status !== "unobservable" &&
+      !input &&
+      [...occurrence.masks.values()].some(
+        (mask) => mask.role === "current" && actual[mask.index] !== mask.to,
+      )
+    )
+      outcome.status = "fail";
+  }
+  return outcome;
+}
 /** Evaluate a controller-only projection of one compiler-certified binding.
  * Supply full coherent `kind: "owner"` or `kind: "conditional"` records with zero-based indexes
  * into their exact token arrays. Current masks describe the required rename;
@@ -216,6 +383,22 @@ function sameFamily(candidate, entry, header) {
  * identifiers differ. Their counts must sum to the exact expected record count;
  * every variant must satisfy every current mask. Each matching actual identity
  * is reserved, so intersecting projections become unobservable on both sides.
+ * Nonuniform copies may carry occurrences with exact current-frontier file token
+ * starts and separate masks. Their count must equal the authoritative record count.
+ * occurrenceFiles supplies private ordered file tokens and certified identifier
+ * slots. Raw trimmed logical directives are mandatory and remain exact, including
+ * preprocessing-sensitive internal whitespace. Every non-slot token and token
+ * count must match before those coordinates
+ * can identify candidate copies. Whitespace may change; unexplained relocation or
+ * order changes reject rather than borrowing baseline offsets. Per-copy current
+ * masks and exact inventory-count reconciliation prevent wrong-copy completion.
+ * Distinct expected records may claim distinct physical copies of one actual
+ * aggregate. Across all occurrence entries, each real copy must be claimed once
+ * and their total must equal that actual record's complete count. Aggregate-mask
+ * entries still reserve whole actual identities and cannot overlap these claims.
+ * observedIds includes an occurrence identity only after its full count is covered.
+ * Outer masks are the peer-only union used for family matching, not completion.
+ * Occurrence witnesses must come from trusted current replay, never a candidate.
  * With `physicalOnly: true`, all masks must be peer masks and at least one
  * must exist. This checks a structural owner's physical/context preservation
  * without granting any rename completion. It cannot be combined with input mode.
@@ -230,7 +413,7 @@ function sameFamily(candidate, entry, header) {
  */
 export function evaluateAtomicBindingGate(
   tree,
-  { records, familyRecords },
+  { records, familyRecords, occurrenceFiles },
   {
     input = false,
     activeWrites = false,
@@ -239,7 +422,8 @@ export function evaluateAtomicBindingGate(
   } = {},
 ) {
   assert.ok(!(physicalOnly && input), "Physical-only projection is not an input gate");
-  const entries = validate(records, physicalOnly);
+  const files = validateOccurrenceFiles(occurrenceFiles);
+  const entries = validate(records, physicalOnly, files);
   const references = trustedFamilies(records, familyRecords);
   let actual;
   try {
@@ -256,7 +440,29 @@ export function evaluateAtomicBindingGate(
     };
   }
   const used = new Map();
+  const physical = new Map();
+  const fileTokens = new Map();
+  function reserve(record, outcome, key) {
+    let claims = used.get(record.id);
+    if (!claims) {
+      claims = { record, aggregates: new Set(), occurrences: [] };
+      used.set(record.id, claims);
+    }
+    if (key === undefined) claims.aggregates.add(outcome);
+    else {
+      claims.occurrences.push({ key, outcome });
+      const observers = physical.get(key) ?? [];
+      observers.push(outcome);
+      physical.set(key, observers);
+    }
+  }
   const outcomes = entries.map((entry) => {
+    if (entry.occurrence) {
+      const { claims, ...result } = occurrenceStatus(entry, actual, tree, fileTokens, input);
+      const outcome = { id: entry.record.id, ...result };
+      for (const claim of claims) reserve(claim.record, outcome, claim.key);
+      return outcome;
+    }
     const candidates = actual.filter(
       (record) =>
         context(record) === entry.context &&
@@ -279,20 +485,36 @@ export function evaluateAtomicBindingGate(
                 ? "pass"
                 : "fail",
           };
-    for (const found of candidates) {
-      let projections = used.get(found.id);
-      if (projections) {
-        for (const previous of projections)
-          Object.assign(previous, { status: "unobservable", reason: "ambiguous-owner" });
-        Object.assign(outcome, { status: "unobservable", reason: "ambiguous-owner" });
-      } else {
-        projections = new Set();
-        used.set(found.id, projections);
-      }
-      projections.add(outcome);
-    }
+    for (const found of candidates) reserve(found, outcome);
     return outcome;
   });
+  const invalidate = (claims, reason) => {
+    for (const outcome of claims)
+      if (outcome.reason !== "ambiguous-owner")
+        Object.assign(outcome, { status: "unobservable", reason });
+  };
+  for (const claims of physical.values())
+    if (claims.length > 1) invalidate(claims, "ambiguous-owner");
+  const observedIds = [];
+  for (const [id, claims] of used) {
+    const { record, aggregates, occurrences } = claims;
+    if (aggregates.size) {
+      observedIds.push(id);
+      if (aggregates.size > 1 || occurrences.length)
+        invalidate(
+          [...aggregates, ...occurrences.map((claim) => claim.outcome)],
+          "ambiguous-owner",
+        );
+    } else {
+      const count = new Set(occurrences.map((claim) => claim.key)).size;
+      if (count !== record.count || count !== occurrences.length)
+        invalidate(
+          occurrences.map((claim) => claim.outcome),
+          "occurrence-count",
+        );
+      else observedIds.push(id);
+    }
+  }
   for (const [index, entry] of entries.entries()) {
     const header = headerLength(entry.record);
     // Opaque containers have no selector/header; their scope and complete
@@ -306,12 +528,11 @@ export function evaluateAtomicBindingGate(
     const actualCount = actual
       .filter((candidate) => sameFamily(candidate, entry, header))
       .reduce((sum, candidate) => sum + candidate.count, 0);
-    if (actualCount !== expectedCount)
-      outcomes[index] = {
-        id: entry.record.id,
+    if (actualCount !== expectedCount && outcomes[index].reason !== "ambiguous-owner")
+      Object.assign(outcomes[index], {
         status: "unobservable",
         reason: `${entry.record.kind}-family-count`,
-      };
+      });
   }
   const passed = outcomes.filter((item) => item.status === "pass").length;
   const status = outcomes.some((item) => item.status === "unobservable")
@@ -324,6 +545,6 @@ export function evaluateAtomicBindingGate(
     passed,
     total: outcomes.length,
     records: outcomes,
-    observedIds: [...used.keys()],
+    observedIds,
   };
 }

@@ -134,6 +134,7 @@ function evaluate(
   bindingRecords = [],
   familyRecords,
   readInventory = prepareCoherentContract,
+  occurrenceFiles = [],
 ) {
   const obligations = [];
   const add = (id, status, detail) => obligations.push({ id, status, ...detail });
@@ -151,7 +152,7 @@ function evaluate(
   assert.ok(Array.isArray(bindingRecords), "Invalid delegated binding records");
   assert.ok(!input || !bindingRecords.length, "Input gates cannot delegate binding output");
   const selected = new Map(gate.add.map((record) => [record.id, record]));
-  for (const { masks: _masks, ...record } of bindingRecords)
+  for (const { masks: _masks, occurrences: _occurrences, ...record } of bindingRecords)
     assert.deepEqual(
       record,
       selected.get(record.id),
@@ -160,7 +161,7 @@ function evaluate(
   const binding = bindingRecords.length
     ? evaluateAtomicBindingGate(
         tree,
-        { records: bindingRecords, familyRecords },
+        { records: bindingRecords, familyRecords, occurrenceFiles },
         { physicalOnly: true, readInventory },
       )
     : null;
@@ -256,10 +257,20 @@ export function evaluateAtomicGate(
     activeWrites = false,
     bindingRecords = [],
     familyRecords,
+    occurrenceFiles = [],
     readInventory = prepareCoherentContract,
   } = {},
 ) {
-  return evaluate(tree, gate, false, activeWrites, bindingRecords, familyRecords, readInventory);
+  return evaluate(
+    tree,
+    gate,
+    false,
+    activeWrites,
+    bindingRecords,
+    familyRecords,
+    readInventory,
+    occurrenceFiles,
+  );
 }
 
 /** Require the consumed input records before dispatching an atomic edit.

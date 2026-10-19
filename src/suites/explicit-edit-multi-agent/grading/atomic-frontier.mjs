@@ -133,6 +133,42 @@ function contractTokens(source) {
   gap(source.slice(cursor), cursor);
   return result;
 }
+/** Read the exact ordered coherent tokens used by private occurrence witnesses.
+ * Identifier substitutions preserve token ordinals; byte/UTF-16 offsets do not.
+ */
+export function atomicFileTokens(source) {
+  return texts(contractTokens(source));
+}
+
+/** Retain preprocessing-sensitive layout separately from ordinary token spacing.
+ * In particular, `#define F(x)` and `#define F (x)` are not interchangeable.
+ */
+export function atomicFileDirectives(source) {
+  return logicalDirectives(source).map((directive) => directive[0].trim());
+}
+/** Enumerate real lexical owner boundaries without inventing count-one records.
+ * Each occurrence points at its authoritative aggregated coherent record. The
+ * current tree supplies token ordinals after trusted structural replay.
+ */
+export function atomicFileOwners(tree) {
+  const contract = prepareCoherentContract(tree);
+  return Object.entries(tree).flatMap(([file, source]) => {
+    const tokens = contractTokens(source);
+    const starts = new Map(tokens.map((token, index) => [token.start, index]));
+    return owners(file, source)
+      .filter((unit) => ["owner", "conditional"].includes(contractKind(unit)))
+      .map((unit) => {
+        const local = contractTokens(source.slice(unit.start, unit.end));
+        const tokenStart = starts.get(unit.start + local[0]?.start);
+        if (tokenStart === undefined) throw Error("Missing naming owner token boundary");
+        return {
+          record: ownerRecord(contract, unit, texts(local)),
+          tokenStart,
+          tokenLength: local.length,
+        };
+      });
+  });
+}
 function contractKind(unit) {
   return unit.kind === "declaration" ? "owner" : unit.kind;
 }
@@ -280,8 +316,10 @@ export function prepareAtomicNamingBatch(beforeTree, bindings) {
  * Returns relocated owner descriptors with exact final coherent-contract tokens,
  * current contexts and ALL binding slots, including unselected nodes, for masked
  * gates. Identical copies are supported only when every physical copy is covered
- * by an identical complete slot plan; extra, missing or nonuniform copies reject.
- * Uniform projections coalesce by coherent identity without changing its count.
+ * by an identical complete slot plan; extra, missing or ambiguous input copies reject.
+ * Uniform projections coalesce without changing the coherent count. Distinct input
+ * owners that converge retain separate slot plans and current token ordinals;
+ * checkpoint gates require an ordered occurrence witness for those projections.
  * This operation does not verify candidate edits or unlock dependencies.
  */
 export function applyAtomicNamingBatch(tree, batch, selectedIDs) {
@@ -400,7 +438,16 @@ function replayAtomicNamingBatch(tree, batch, selectedIDs, inventory) {
       result[file] = result[file].slice(0, edit.start) + edit.text + result[file].slice(edit.end);
   const contract = prepareCoherentContract(result);
   const projected = new Map();
+  const fileStarts = new Map(
+    [...new Set(located.map(({ unit }) => unit.file))].map((file) => [
+      file,
+      new Map(contractTokens(tree[file]).map((token, index) => [token.start, index])),
+    ]),
+  );
   for (const { unit, stream, sites } of located) {
+    const first = unit.start + unit.contractTokens[0].start;
+    const tokenStart = fileStarts.get(unit.file).get(first);
+    if (tokenStart === undefined) throw Error("Missing current naming owner token ordinal");
     const record = ownerRecord(contract, unit, stream);
     const owner = {
       file: record.file,
@@ -412,21 +459,15 @@ function replayAtomicNamingBatch(tree, batch, selectedIDs, inventory) {
       ...(record.selector !== undefined ? { selector: record.selector } : {}),
       tokens: stream,
       sites,
+      tokenStarts: [tokenStart],
     };
-    const previous = projected.get(record.id);
-    if (previous) {
-      if (
-        !same(
-          { ...previous, sites: slotPlan(previous.sites) },
-          { ...owner, sites: slotPlan(sites) },
-        )
-      )
-        throw Error("Nonuniform naming batch owner projection");
-      continue;
-    }
-    // The authoritative coherent record retains the complete physical count.
-    // Uniform copies need one mask projection, not duplicate record identities.
-    projected.set(record.id, owner);
+    const key = JSON.stringify([record.id, slotPlan(sites)]);
+    const previous = projected.get(key);
+    if (previous) previous.tokenStarts.push(tokenStart);
+    else projected.set(key, owner);
+    // Unlike plans may converge to the same aggregate record. Keep their real
+    // occurrences separate; checkpoint projection must supply ordered witnesses
+    // before these can be evaluated. Never union their binding slots.
   }
   return { tree: result, owners: [...projected.values()] };
 }
