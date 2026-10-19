@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
+  ADAPTERS,
   ADAPTER_BINARIES,
   dependencyRoot,
   ADAPTER_IDS,
@@ -389,14 +390,25 @@ await test("every seeded file an adapter needs exists in the repository", async 
   // A missing seed file only shows up when a run starts, so check the paths here instead.
   const { existsSync } = await import("node:fs");
   const { makeAdapter } = await import("../../scripts/prepare-benchmark.mjs");
-  // The IDE adapter needs an installed package; it seeds nothing without --auth-file anyway.
-  for (const harness of ADAPTER_IDS.filter((id) => id !== "pi-agent-ide")) {
+  const ide = await tempDirectory("seeded-ide-package");
+  await mkdir(path.join(ide, "dist"));
+  await writeFile(path.join(ide, "dist/ide.mjs"), "");
+  await writeFile(
+    path.join(ide, "package.json"),
+    JSON.stringify({
+      name: "pi-agent-ide",
+      version: "1.0.0",
+      pi: { extensions: ["./dist/ide.mjs"] },
+    }),
+  );
+  for (const harness of ADAPTER_IDS) {
     const adapter = makeAdapter({
       harness,
       command: "/usr/bin/tool",
       version: "test",
       model: "provider/model-example",
       thinking: "medium",
+      ...(ADAPTERS[harness].extensionPackage ? { idePackage: ide } : {}),
       ...(harness === "dsh-standard" || harness === "dsh-code"
         ? {
             provider: {
