@@ -40,6 +40,29 @@ const plainTypeRequest = (task) =>
       ),
   );
 
+// A nominal type rename preserves unrelated function identities. Require complete
+// owner selectors and reject either spelling wherever selection could read it.
+const unrelatedFunctionRequest = (task, spellings) =>
+  spellings.size > 0 &&
+  task.operations.every(
+    (operation) =>
+      operation.category === "functions-types" &&
+      operation.selectors?.length &&
+      operation.mapping.every((item) => !spellings.has(item.from)) &&
+      operation.selectors.every(
+        (selector) =>
+          selector.kind === "function" &&
+          typeof selector.scope === "string" &&
+          selector.scope.length > 0 &&
+          selector.scope === selector.owner?.scope &&
+          typeof selector.owner?.signature === "string" &&
+          selector.owner.signature.length > 0 &&
+          typeof selector.owner.definition === "boolean" &&
+          !cppTokens(selector.scope + " " + selector.owner.signature).some((token) =>
+            spellings.has(token.text),
+          ),
+      ),
+  );
 async function implementationHeaderContext(tree, spelling, readActiveMacros) {
   const relevant = new Set();
   const external = new Set();
@@ -114,8 +137,8 @@ async function headerRequest(tree, task, readActiveMacros) {
  * This reference-only cache never reads preparation plans, contracts or answers.
  * A snapshot is reusable only while committed reference plans exactly explain the
  * current source. Pending plans are cached for a rejected CAS, not acknowledged.
- * Structural/unknown mutations, helper-view changes and type renames invalidate
- * reuse. Separate-TU fallback is deliberately disposable. No candidate mount may
+ * Structural/unknown mutations, helper-view changes and affected type selectors
+ * invalidate reuse. Separate-TU fallback is deliberately disposable. No candidate mount may
  * contain this cache: run it inside the isolated reference service namespace.
  * Owned-variable requests first compile the current headers alone, since
  * unrelated implementation moves can temporarily leave other translation units
@@ -140,8 +163,10 @@ async function headerRequest(tree, task, readActiveMacros) {
  * Full-project views keep their original complete-source identity. Type
  * declarations with plain scope selectors can retain compiler binding IDs across
  * independent type renames in either view; unrelated input changes still reopen
- * the compiler. Any signature/owner consumer or request using
- * an earlier destination spelling reopens the actual current compiler source.
+ * the compiler. A function with complete owner selectors can also reuse the view
+ * when neither its scope nor signature reads either spelling of an accepted type
+ * rename. Missing owner metadata, affected signatures/scopes and requests using
+ * an earlier destination spelling reopen the actual current compiler source.
  * Candidate gates and full builds are unchanged; this view is never used for
  * preparation certification. An optional readCurrent callback rechecks the
  * whole source after compiler failure. A changed snapshot returns undefined for
@@ -225,6 +250,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
       applied: [],
       types: false,
       typeDestinations: new Set(),
+      typeSpellings: new Set(),
     };
   };
   const separate = async (before, task) => {
@@ -321,6 +347,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           state.file === file &&
           state.expected === viewIdentity(before, file) &&
           (!state.types ||
+            unrelatedFunctionRequest(task, state.typeSpellings) ||
             (plainTypes &&
               task.operations.every((operation) =>
                 operation.mapping.every((item) => !state.typeDestinations.has(item.from)),
@@ -379,11 +406,15 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           after,
           plans,
           types: state.types,
+          unrelatedTypes: unrelatedFunctionRequest(task, state.typeSpellings),
           ...(state.file === headerBindings ? { headerBefore: state.expected } : {}),
           ...(plainTypes
             ? {
                 typeDestinations: task.operations.flatMap((operation) =>
                   operation.mapping.map((item) => item.to),
+                ),
+                typeSpellings: task.operations.flatMap((operation) =>
+                  operation.mapping.flatMap((item) => [item.from, item.to]),
                 ),
               }
             : {}),
@@ -411,12 +442,16 @@ export function currentNamingPlanner(directory, { signal } = {}) {
       );
       const accepted = pending;
       pending = undefined;
-      if (accepted.disposable || (accepted.types && !accepted.typeDestinations)) {
+      if (
+        accepted.disposable ||
+        (accepted.types && !accepted.typeDestinations && !accepted.unrelatedTypes)
+      ) {
         invalidate();
         return;
       }
       state.applied.push(...accepted.plans);
       for (const name of accepted.typeDestinations ?? []) state.typeDestinations.add(name);
+      for (const name of accepted.typeSpellings ?? []) state.typeSpellings.add(name);
       state.expected = viewIdentity(after, state.file);
     },
     close() {
