@@ -66,6 +66,17 @@ function publicBindingCertification(groups) {
     sha256: createHash("sha256").update(JSON.stringify(groups)).digest("hex"),
   };
 }
+
+function declarationIndex(roots, source) {
+  const aliases = anonymousRecordAliases(roots);
+  return {
+    bytes: Buffer.from(source),
+    aliases,
+    contexts: declarationContexts(roots, aliases),
+    signatures: writtenFunctionSignatures(roots),
+  };
+}
+
 function selectedDeclarations(
   roots,
   requests,
@@ -74,11 +85,10 @@ function selectedDeclarations(
   origin,
   onDeclaration,
   allowAbsentOwners = false,
+  index = declarationIndex(roots, source),
 ) {
-  const bytes = Buffer.from(source),
-    selections = [];
-  const aliases = anonymousRecordAliases(roots);
-  const contexts = declarationContexts(roots, aliases);
+  const { bytes, aliases, contexts, signatures } = index;
+  const selections = [];
   const isFunction = (node) =>
     ["FunctionDecl", "CXXMethodDecl", "CXXConstructorDecl", "CXXDestructorDecl"].includes(
       node.kind,
@@ -91,7 +101,6 @@ function selectedDeclarations(
     "TypedefDecl",
     "TypeAliasDecl",
   ]);
-  const signatures = writtenFunctionSignatures(roots);
   function visit(node, scope = "", owner) {
     if (isFunctionInstantiation(node, signatures)) return;
     if (node.parentDeclContextId)
@@ -394,6 +403,8 @@ export async function scopedNamingSession(
   await writeFile(sourcePath, image.source);
   const flags = ["-std=c++17", "-pthread"];
   const roots = await projectAst(sourcePath, flags);
+  // This compiler document is unchanged; only the renamed ledger is dynamic.
+  const declarations = declarationIndex(roots, image.source);
   let compiler;
   const inspector = {
     ast: (range) => compiler.ast(range),
@@ -423,6 +434,7 @@ export async function scopedNamingSession(
       image.physical,
       onDeclaration,
       allowAbsentOwners,
+      declarations,
     );
   }
   function notify(selection) {

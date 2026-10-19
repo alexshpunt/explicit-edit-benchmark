@@ -44,13 +44,17 @@ function feedback(category) {
  * by the harness. Private plans, gates and future tasks are never agent mounts.
  * createDriver(workspace, state, agent) returns execute(prompt, { signal, round,
  * attempt, atomicId? , deliveryKind? }), async close() and a closed getter.
+ * Optional synchronous onCase(event) forwards atomic case lifetimes with their
+ * round and attempt for private external watchdogs. It does not set model limits
+ * or fabricate observations for retained work or global barrier-repair deliveries.
  */
 export async function runConcurrent(
   preparationPath,
   outputPath,
-  { agents, configPath, createDriver, signal: externalSignal, log = console.log } = {},
+  { agents, configPath, createDriver, signal: externalSignal, log = console.log, onCase } = {},
 ) {
   const started = performance.now();
+  assert.ok(onCase === undefined || typeof onCase === "function", "Invalid case observer");
   const live = Boolean(configPath || createDriver);
   assert.ok(
     !(configPath && createDriver),
@@ -432,6 +436,7 @@ export async function runConcurrent(
         } else {
           stream = await runAtomicStream(nodes, {
             agents,
+            onCase: onCase ? (event) => onCase({ ...event, round: round.id, attempt }) : undefined,
             completed,
             started: startedAtoms,
             rotation,

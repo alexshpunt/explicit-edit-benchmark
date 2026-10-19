@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { prepareCoherentContract } from "./coherent-grade.mjs";
+import { isAtomicInventoryRecord } from "./atomic-inventory.mjs";
 import { atomicFileTokens, atomicFileOwners, atomicFileDirectives } from "./atomic-frontier.mjs";
 
 const keywords = new Set(
@@ -207,36 +208,45 @@ function validate(records, physicalOnly, files, input) {
   return entries;
 }
 
+// Only immutable reference metadata is reusable; projections and candidate
+// decisions are checked afresh. Weak keys do not retain old source inventories.
+const familyIndexes = new WeakMap();
+
 function trustedFamilies(records, supplied) {
   const references = supplied ?? records;
   assert.ok(Array.isArray(references) && references.length, "Missing trusted family references");
-  const byId = new Map();
-  for (const record of references) {
-    assert.ok(
-      record && typeof record.id === "string" && record.id && !byId.has(record.id),
-      "Repeated or missing trusted family reference identity",
-    );
-    assert.ok(
-      typeof record.kind === "string" && typeof record.file === "string" && record.file,
-      "Invalid trusted family reference",
-    );
-    assert.ok(
-      Number.isSafeInteger(record.count) && record.count > 0,
-      "Invalid trusted family reference count",
-    );
-    if (record.kind === "owner" || record.kind === "conditional")
+  let byId = familyIndexes.get(references);
+  if (!byId) {
+    byId = new Map();
+    for (const record of references) {
       assert.ok(
-        typeof record.scope === "string" &&
-          Array.isArray(record.tokens) &&
-          record.tokens.length &&
-          record.tokens.every((token) => typeof token === "string" && token.length) &&
-          (record.kind === "conditional"
-            ? conditionalIdentity(record)
-            : headerLength(record) !== undefined),
-        "Invalid trusted family reference declarator or conditional directives",
+        record && typeof record.id === "string" && record.id && !byId.has(record.id),
+        "Repeated or missing trusted family reference identity",
       );
-    const { masks: _masks, occurrences: _occurrences, ...reference } = record;
-    byId.set(record.id, reference);
+      assert.ok(
+        typeof record.kind === "string" && typeof record.file === "string" && record.file,
+        "Invalid trusted family reference",
+      );
+      assert.ok(
+        Number.isSafeInteger(record.count) && record.count > 0,
+        "Invalid trusted family reference count",
+      );
+      if (record.kind === "owner" || record.kind === "conditional")
+        assert.ok(
+          typeof record.scope === "string" &&
+            Array.isArray(record.tokens) &&
+            record.tokens.length &&
+            record.tokens.every((token) => typeof token === "string" && token.length) &&
+            (record.kind === "conditional"
+              ? conditionalIdentity(record)
+              : headerLength(record) !== undefined),
+          "Invalid trusted family reference declarator or conditional directives",
+        );
+      const { masks: _masks, occurrences: _occurrences, ...reference } = record;
+      byId.set(record.id, reference);
+    }
+    if (Object.isFrozen(references) && references.every(isAtomicInventoryRecord))
+      familyIndexes.set(references, byId);
   }
   for (const { masks: _masks, occurrences: _occurrences, ...record } of records)
     assert.deepEqual(
@@ -257,12 +267,18 @@ function matches(actual, expected, masks, limit = expected.length) {
   );
 }
 
+const headerLengths = new WeakMap();
 function headerLength(record) {
   if (record.kind !== "owner" || typeof record.selector !== "string") return;
+  if (headerLengths.has(record)) return headerLengths.get(record);
   let text = "";
   for (let index = 0; index < record.tokens.length; index++) {
     text += record.tokens[index];
-    if (text === record.selector) return index + 1;
+    if (text === record.selector) {
+      const length = index + 1;
+      if (isAtomicInventoryRecord(record)) headerLengths.set(record, length);
+      return length;
+    }
     if (text.length > record.selector.length) return;
   }
 }

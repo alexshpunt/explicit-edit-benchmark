@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { treeIdentity } from "../generation/generator.mjs";
 import { atomicOrder } from "../tasks/atomic-effects.mjs";
 import { applyCoherentStructure } from "../reference/coherent-edit.mjs";
-import { createAtomicInventory } from "./atomic-inventory.mjs";
+import { createAtomicInventory, isAtomicInventoryRecord } from "./atomic-inventory.mjs";
 import {
   createAtomicNamingReplay,
   atomicFileTokens,
@@ -26,8 +26,14 @@ const family = (record) =>
 const move = (tree, node) => node.operations.reduce(applyCoherentStructure, tree);
 
 const descriptorIndexes = new WeakMap();
-const descriptorKey = (owner, tokens = owner.tokens) =>
-  JSON.stringify([owner.file, owner.kind, owner.scope, owner.conditions, tokens]);
+const descriptorKeys = new WeakMap();
+const descriptorKey = (owner, tokens = owner.tokens) => {
+  const reusable = tokens === owner.tokens && isAtomicInventoryRecord(owner);
+  if (reusable && descriptorKeys.has(owner)) return descriptorKeys.get(owner);
+  const key = JSON.stringify([owner.file, owner.kind, owner.scope, owner.conditions, tokens]);
+  if (reusable) descriptorKeys.set(owner, key);
+  return key;
+};
 
 function descriptorRecord(contract, owner, tokens = owner.tokens) {
   let index = descriptorIndexes.get(contract);
@@ -47,11 +53,16 @@ function descriptorRecord(contract, owner, tokens = owner.tokens) {
 
 // Coherent identities aggregate equal owners. Distinct certified plans that
 // converge need current ordered occurrences, not fabricated count-one records.
-function bindingProjection(combined, include, masksFor) {
+const projectionIndexes = new WeakMap();
+function projectionIndex(combined) {
+  let cached = projectionIndexes.get(combined);
+  if (cached) return cached;
   const all = [...combined.owners.values()].flat();
   const families = new Map();
+  const recordFor = new Map();
   for (const owner of all) {
     const record = descriptorRecord(combined.contract, owner);
+    recordFor.set(owner, record);
     if (!families.has(record.id)) families.set(record.id, { record, owners: [] });
     families.get(record.id).owners.push(owner);
   }
@@ -71,6 +82,15 @@ function bindingProjection(combined, include, masksFor) {
     if (!shapes.has(key)) shapes.set(key, []);
     shapes.get(key).push(owner);
   }
+  cached = { all, families, recordFor, shapes, shapeKeys };
+  projectionIndexes.set(combined, cached);
+  return cached;
+}
+
+function bindingProjection(combined, include, masksFor) {
+  // Only topology belongs to the exact expected frontier. Current/peer masks
+  // remain fresh when writer reservations or verified completion roles change.
+  const { all, families, recordFor, shapes, shapeKeys } = projectionIndex(combined);
   const selected = new Set();
   const occurrenceOwners = new Set();
   for (const seed of all.filter(include)) {
@@ -78,7 +98,7 @@ function bindingProjection(combined, include, masksFor) {
     const component = new Set([seed]);
     const queue = [seed];
     for (const owner of queue) {
-      const record = descriptorRecord(combined.contract, owner);
+      const record = recordFor.get(owner);
       for (const neighbor of [
         ...families.get(record.id).owners,
         ...shapes.get(shapeKeys.get(owner)),
@@ -314,7 +334,7 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
    * result without spending a correction. Access live context getters after each
    * await. A stable snapshot is evidence at that instant, not a filesystem lock.
    */
-  async function observe(readSource, id, context, { input = false, signal } = {}) {
+  async function observeOnce(readSource, id, context, { input = false, signal } = {}) {
     const snapshot = () => ({
       verified: JSON.stringify([[...context.completed].sort(), [...context.settled].sort()]),
       started: new Set(context.started ?? []),
@@ -363,6 +383,21 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
       throw error;
     }
   }
+
+  // Grading is synchronous CPU work. Finish one stable read/check/read span
+  // before another observation can fill the event loop and stale its final read.
+  // This FIFO lane never locks editors or retains decisions. Read live context
+  // only after acquiring the lane; failures must not poison following spans.
+  let observationQueue = Promise.resolve();
+  function observe(readSource, id, context, options = {}) {
+    const result = observationQueue.then(() => observeOnce(readSource, id, context, options));
+    observationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   /** Revalidate retained work on a drained stable source before a correction.
    * Observable binding regressions are removed first so their partial slots do
    * not falsely revoke independent peers. Descendants lose readiness, not edits.
