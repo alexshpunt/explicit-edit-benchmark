@@ -197,7 +197,7 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
   // An extension may reuse it only when every earlier selected move stays in
   // exactly the same order. Insertions and rollback replay from the baseline.
   let structuralSnapshot;
-  function structuralFrontier(selection) {
+  function structuralFrontier(selection, retain) {
     const nodes = structuralNodes.filter((node) => selection.has(node.id));
     if (nodes.length === structuralNodes.length) return canonical;
     const extendsSnapshot =
@@ -207,13 +207,13 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
     let tree = extendsSnapshot ? structuralSnapshot.tree : initialTree;
     const first = extendsSnapshot ? structuralSnapshot.ids.length : 0;
     for (let index = first; index < nodes.length; index++) tree = move(tree, nodes[index]);
-    structuralSnapshot = { ids: nodes.map((node) => node.id), tree };
+    if (retain) structuralSnapshot = { ids: nodes.map((node) => node.id), tree };
     return tree;
   }
-  function replayExpected(selection, reservations = new Set()) {
+  function replayExpected(selection, reservations = new Set(), retain = true) {
     const selected = new Set(selection);
     for (const id of selected) assert.ok(byId.has(id), `Unknown atomic checkpoint node: ${id}`);
-    let tree = structuralFrontier(selected);
+    let tree = structuralFrontier(selected, retain);
     const structural = new Map();
     for (const node of ordered) {
       if (naming(node) || !selected.has(node.id)) continue;
@@ -250,18 +250,20 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
   // Bound replay reuse to one trusted frontier. Lexical readers retain one exact
   // source inventory each, never decisions: changed bytes must expose regressions.
   let cached;
-  function frontier(selection, reservations = new Set()) {
+  function frontier(selection, reservations = new Set(), retain = true) {
     // Reservations only decide which complete naming batches are present; the
     // identity of the atom that reserved a batch does not change expected bytes.
     const groups = batches
       .filter((entry) => entry.batch.ids.some((id) => reservations.has(id)))
       .map((entry) => entry.taskId);
     const key = JSON.stringify([[...selection].sort(), groups]);
-    if (cached?.key !== key) {
-      const result = replayExpected(selection, reservations);
-      cached = { key, ...result, contract: readTrusted(result.tree) };
-    }
-    return cached;
+    if (cached?.key === key) return cached;
+    const result = replayExpected(selection, reservations, retain);
+    const view = { key, ...result, contract: readTrusted(result.tree), inputs: new Map() };
+    // A speculative own output must not evict the shared settled frontier.
+    // Its source is still rebuilt from trusted plans, never from candidate bytes.
+    if (retain) cached = view;
+    return view;
   }
   /** Return a detached trusted frontier, never the reusable private metadata. */
   function expected(selection, reservations = new Set()) {
@@ -293,15 +295,23 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
       // the complete output frontier only to discard it; output verification
       // still builds and checks that frontier after the edit settles.
       selected.delete(id);
-      const before = frontier(selected).tree;
-      const after = move(before, node);
-      return checkAtomicInputs(
-        tree,
-        prepareAtomicGate(before, after, { writesOnly: true, readInventory: readTrusted }),
-        { activeWrites, readInventory: readCandidate },
-      );
+      const before = frontier(selected, reservations);
+      let gate = before.inputs.get(id);
+      if (!gate) {
+        const after = move(before.tree, node);
+        gate = prepareAtomicGate(before.tree, after, {
+          writesOnly: true,
+          readInventory: readTrusted,
+        });
+        before.inputs.set(id, gate);
+      }
+      return checkAtomicInputs(tree, gate, { activeWrites, readInventory: readCandidate });
     }
-    const combined = frontier(selected, reservations);
+    const combined = frontier(
+      selected,
+      reservations,
+      completed.has(id) || settled.has(id) || namingInput,
+    );
     if (naming(node)) {
       const contract = combined.contract;
       const projection = bindingProjection(
@@ -361,7 +371,13 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
    * result without spending a correction. Access live context getters after each
    * await. A stable snapshot is evidence at that instant, not a filesystem lock.
    */
-  async function observeOnce(readSource, id, context, { input = false, signal } = {}) {
+  async function observeOnce(
+    readSource,
+    id,
+    context,
+    { input = false, signal } = {},
+    grade = (tree) => check(tree, id, { ...context, input }),
+  ) {
     const snapshot = () => ({
       verified: JSON.stringify([[...context.completed].sort(), [...context.settled].sort()]),
       started: new Set(context.started ?? []),
@@ -381,7 +397,7 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
       const before = await readSource();
       signal?.throwIfAborted();
       if (invalidated()) return { status: "pending", reason: "frontier-changed" };
-      const result = check(before, id, { ...context, input });
+      const result = grade(before);
       const after = await readSource();
       signal?.throwIfAborted();
       if (invalidated() || treeIdentity(before) !== treeIdentity(after))
@@ -416,13 +432,49 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
   // This FIFO lane never locks editors or retains decisions. Read live context
   // only after acquiring the lane; failures must not poison following spans.
   let observationQueue = Promise.resolve();
-  function observe(readSource, id, context, options = {}) {
-    const result = observationQueue.then(() => observeOnce(readSource, id, context, options));
+  function enqueue(observation) {
+    const result = observationQueue.then(observation);
     observationQueue = result.then(
       () => undefined,
       () => undefined,
     );
     return result;
+  }
+  function observe(readSource, id, context, options = {}) {
+    return enqueue(() => observeOnce(readSource, id, context, options));
+  }
+  /** Check all prerequisite outputs and this atom's readiness against ONE stable
+   * source/context observation. Continuations waive only their own input; fresh
+   * structural inputs retain the already-correct-output fallback. onObservation
+   * reports private diagnostic checks, not independent completion credit.
+   */
+  function observeInputs(readSource, id, context, { signal, onObservation } = {}) {
+    return enqueue(() =>
+      observeOnce(readSource, id, context, { signal }, (tree) => {
+        const node = byId.get(id);
+        assert.ok(node, `Unknown atomic checkpoint node: ${id}`);
+        const observed = (atomicId, mode, result) => {
+          onObservation?.(atomicId, mode, result);
+          return result;
+        };
+        for (const dependency of node.dependencies) {
+          const result = observed(
+            dependency,
+            "prerequisite-output",
+            check(tree, dependency, context),
+          );
+          if (result.status !== "pass") return result;
+        }
+        if (context.started.has(id)) {
+          observed(id, "continuation", { status: "waived", reason: "already-started" });
+          return { status: "pass" };
+        }
+        const input = observed(id, "current-input", check(tree, id, { ...context, input: true }));
+        if (input.status === "pass" || naming(node)) return input;
+        const output = observed(id, "current-output", check(tree, id, context));
+        return output.status === "pass" ? output : input;
+      }),
+    );
   }
 
   /** Revalidate retained work on a drained stable source before a correction.
@@ -496,5 +548,5 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
     readCandidate.clear();
     for (const replay of replays.values()) replay.clear();
   }
-  return { expected, check, observe, revalidate, clearCaches };
+  return { expected, check, observe, observeInputs, revalidate, clearCaches };
 }

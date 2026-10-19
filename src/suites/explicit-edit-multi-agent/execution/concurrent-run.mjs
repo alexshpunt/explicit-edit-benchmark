@@ -464,40 +464,14 @@ export async function runConcurrent(
                 return value;
               };
               try {
-                for (const dependency of node.dependencies) {
-                  const checked = await checkpoint.observe(readSource, dependency, context, {
-                    signal: deliverySignal,
-                  });
-                  observed(dependency, "prerequisite-output", checked);
-                  if (checked.status !== "pass") return finish(decision(checked));
-                }
-                // An already-started atom gets a continuation even if its own
-                // partial write is no longer a valid fresh input. No successor gets
-                // this waiver; every prerequisite above must still be verified.
-                if (context.started.has(node.id)) {
-                  observed(node.id, "continuation", {
-                    status: "waived",
-                    reason: "already-started",
-                  });
-                  return finish(true);
-                }
-                // Check normal inputs first. Naming masks already admit valid
-                // outputs and partial repairs. Structural edits retain their
-                // already-correct output fallback only when input does not pass.
-                const input = await checkpoint.observe(readSource, node.id, context, {
+                // Prerequisites, continuation waiver and own input/output fallback
+                // share one stable source span, rather than yielding between
+                // individually valid checks while peers advance the frontier.
+                const checked = await checkpoint.observeInputs(readSource, node.id, context, {
                   signal: deliverySignal,
-                  input: true,
+                  onObservation: observed,
                 });
-                observed(node.id, "current-input", input);
-                if (input.status === "pass") return finish(true);
-                if (!node.operations.every((operation) => operation.phase === "names")) {
-                  const output = await checkpoint.observe(readSource, node.id, context, {
-                    signal: deliverySignal,
-                  });
-                  observed(node.id, "current-output", output);
-                  if (output.status === "pass") return finish(true);
-                }
-                return finish(decision(input));
+                return finish(decision(checked));
               } catch (error) {
                 trace.decision = deliverySignal.aborted ? "aborted" : "error";
                 throw error;
