@@ -157,3 +157,36 @@ await test("a header view cannot hide implementation input behind a project incl
   };
   await assert.rejects(planner.plan(before, request("first", "left")), /Compiler AST failed:/);
 });
+
+await test("a rejected header CAS reuses its current plan without restoring stale implementation bytes", async (t) => {
+  const planner = await fixture(t);
+  const task = request("first", "left");
+  const first = await planner.plan(input, task);
+  const peer = {
+    ...input,
+    "main.cpp": input["main.cpp"] + "int peer_change = 1;\n",
+    "new.cpp": "int newly_moved() { return 2; }\n",
+  };
+  const retry = await planner.plan(peer, task);
+  assert.equal(retry.statistics.snapshotAttempts, 1);
+  assert.equal(retry.statistics.pendingHits, 1);
+  assert.deepEqual(retry.after, { ...peer, "api.h": first.after["api.h"] });
+  assert.throws(() => planner.acknowledge(input, first.after), /pending/);
+  planner.acknowledge(peer, retry.after);
+  const next = await planner.plan(retry.after, request("second", "right"));
+  assert.equal(next.statistics.snapshotAttempts, 1);
+  assert.equal(next.statistics.cacheHits, 1);
+  assert.equal(next.after["new.cpp"], peer["new.cpp"]);
+});
+
+await test("a rejected header CAS still discards its plan after any header input changes", async (t) => {
+  const planner = await fixture(t);
+  const task = request("first", "left");
+  await planner.plan(input, task);
+  const peer = { ...input, "api.h": input["api.h"] + "int marker = 7;\n" };
+  const retry = await planner.plan(peer, task);
+  assert.equal(retry.statistics.snapshotAttempts, 2);
+  assert.equal(retry.statistics.pendingHits, 0);
+  assert.equal(retry.after["api.h"], peer["api.h"].replace("first", "left"));
+  planner.acknowledge(peer, retry.after);
+});
