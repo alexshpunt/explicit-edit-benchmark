@@ -40,6 +40,28 @@ const plainTypeRequest = (task) =>
       ),
   );
 
+// Local type selectors additionally read their function owner. Reuse only when
+// complete current ownership cannot depend on an earlier nominal type rename.
+const unrelatedOwnedTypeRequest = (task, spellings) =>
+  task.operations.every(
+    (operation) =>
+      operation.category === "functions-types" &&
+      operation.selectors?.length &&
+      operation.selectors.every(
+        (selector) =>
+          selector.kind === "type" &&
+          typeof selector.scope === "string" &&
+          typeof selector.owner?.scope === "string" &&
+          selector.owner.scope.length > 0 &&
+          selector.scope.startsWith(selector.owner.scope + "::") &&
+          typeof selector.owner.signature === "string" &&
+          selector.owner.signature.length > 0 &&
+          selector.owner.definition === true &&
+          !cppTokens(selector.scope + " " + selector.owner.signature).some((token) =>
+            spellings.has(token.text),
+          ),
+      ),
+  );
 // A nominal type rename preserves unrelated function identities. Require complete
 // owner selectors and reject either spelling wherever selection could read it.
 const unrelatedFunctionRequest = (task, spellings) =>
@@ -161,9 +183,10 @@ async function headerRequest(tree, task, readActiveMacros) {
  * those inputs are unchanged, merging it onto fresh implementation bytes; the
  * next commit and acknowledgement still require a matching whole-source snapshot.
  * Full-project views keep their original complete-source identity. Type
- * declarations with plain scope selectors can retain compiler binding IDs across
- * independent type renames in either view; unrelated input changes still reopen
- * the compiler. A function with complete owner selectors can also reuse the view
+ * declarations with plain scope selectors, or local types with complete function
+ * owners unaffected by earlier type spellings, can retain compiler binding IDs
+ * across independent type renames in either view. Unknown input still reopens the
+ * compiler. A function with complete owner selectors can also reuse the view
  * when neither its scope nor signature reads either spelling of an accepted type
  * rename. Missing owner metadata, affected signatures/scopes and requests using
  * an earlier destination spelling reopen the actual current compiler source.
@@ -341,14 +364,16 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           state.expected === identity
         )
           file = undefined;
-        const plainTypes = plainTypeRequest(task);
+        const retainedTypes =
+          plainTypeRequest(task) ||
+          unrelatedOwnedTypeRequest(task, state?.typeSpellings ?? new Set());
         let reused = Boolean(
           state &&
           state.file === file &&
           state.expected === viewIdentity(before, file) &&
           (!state.types ||
             unrelatedFunctionRequest(task, state.typeSpellings) ||
-            (plainTypes &&
+            (retainedTypes &&
               task.operations.every((operation) =>
                 operation.mapping.every((item) => !state.typeDestinations.has(item.from)),
               ))),
@@ -408,7 +433,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           types: state.types,
           unrelatedTypes: unrelatedFunctionRequest(task, state.typeSpellings),
           ...(state.file === headerBindings ? { headerBefore: state.expected } : {}),
-          ...(plainTypes
+          ...(retainedTypes
             ? {
                 typeDestinations: task.operations.flatMap((operation) =>
                   operation.mapping.map((item) => item.to),
