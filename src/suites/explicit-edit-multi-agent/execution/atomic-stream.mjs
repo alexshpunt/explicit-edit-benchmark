@@ -63,6 +63,9 @@ function graphState(nodes, completed) {
  * retries or extra model calls.
  * Writer startup also advances/wakes the frontier so invalidated input checks
  * do not wait for an unrelated long delivery. Only actual dispatch rotates agents.
+ * Optional synchronous onCase(event) observes one lifetime from first input check
+ * through verified completion, failure or teardown; pending retries do not reset
+ * it. A private external watchdog can enforce deadlines without granting credit.
  */
 export async function runAtomicStream(
   nodes,
@@ -75,10 +78,12 @@ export async function runAtomicStream(
     execute,
     verify,
     checkInputs = async () => true,
+    onCase,
   },
 ) {
   assert.ok(Number.isInteger(agents) && agents > 0, "Invalid atomic participant pool");
   assert.ok(Number.isInteger(rotation) && rotation >= 0, "Invalid atomic rotation");
+  assert.ok(onCase === undefined || typeof onCase === "function", "Invalid case observer");
   const done = new Set(completed);
   const dispatched = new Set([...started, ...completed]);
   const { byId, successors } = graphState(nodes, done);
@@ -110,6 +115,16 @@ export async function runAtomicStream(
     previous.resolve({ stage: "frontier" });
   }
   const settled = new Set(done);
+  const caseIds = new Set();
+  function startCase(id) {
+    if (!onCase || caseIds.has(id)) return;
+    caseIds.add(id);
+    onCase({ event: "case-start", id, phase: "atomic" });
+  }
+  function endCase(id, status) {
+    if (!caseIds.delete(id)) return;
+    onCase({ event: "case-end", id, phase: "atomic", status });
+  }
   const context = () => ({
     get activeWrites() {
       return writers.size > 0;
@@ -141,6 +156,7 @@ export async function runAtomicStream(
   function launch(id, agent) {
     const node = byId.get(id);
     const delivery = (async () => {
+      startCase(id);
       const inputEpoch = epoch;
       const inputs = outcome(await checkInputs(node, controller.signal, context()));
       controller.signal.throwIfAborted();
@@ -211,6 +227,7 @@ export async function runAtomicStream(
       if (result.agent === undefined) checking.delete(result.id);
       else active.delete(result.agent);
       if (result.error) {
+        endCase(result.id, "error");
         fatal ??= controller.signal.reason ?? result.error;
       } else if (result.passed === "pending") {
         // A deferred check may already be stale when its promise is consumed.
@@ -229,8 +246,10 @@ export async function runAtomicStream(
             epoch: result.epoch,
           });
       } else if (!result.passed) {
+        endCase(result.id, "fail");
         failed.push(result.id);
       } else {
+        endCase(result.id, "pass");
         done.add(result.id);
         advance();
         for (const next of successors.get(result.id)) {
@@ -252,6 +271,7 @@ export async function runAtomicStream(
     };
   } finally {
     await Promise.allSettled([...active.values(), ...checking.values()]);
+    for (const id of caseIds) endCase(id, controller.signal.aborted ? "cancelled" : "blocked");
     signal?.removeEventListener("abort", abort);
   }
 }

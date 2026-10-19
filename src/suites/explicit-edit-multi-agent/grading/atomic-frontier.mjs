@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { prepareCoherentContract } from "./coherent-grade.mjs";
+import { createAtomicInventory, isAtomicInventoryRecord } from "./atomic-inventory.mjs";
 import { cppStructure, unitDeclarator } from "../cpp/cpp-structure.mjs";
 import { cppTokens } from "../cpp/cpp-tokens.mjs";
 import { treeIdentity } from "../generation/generator.mjs";
@@ -186,15 +187,29 @@ const slotPlan = (sites) =>
     .map((site) => [site.nodeId, site.index, site.from, site.to])
     .sort((left, right) => left[1] - right[1]);
 
+const ownerIndexes = new WeakMap();
+const ownerKeys = new WeakMap();
+const ownerKey = (file, scope, kind, conditions, tokens) =>
+  JSON.stringify([file, scope, kind, conditions, tokens]);
 function ownerRecord(contract, unit, tokens) {
-  const matches = contract.obligations.filter(
-    (record) =>
-      record.file === unit.file &&
-      record.scope === unit.scope &&
-      record.kind === contractKind(unit) &&
-      same(record.conditions, contractConditions(unit)) &&
-      same(record.tokens, tokens),
-  );
+  let index = ownerIndexes.get(contract);
+  if (!index) {
+    index = new Map();
+    for (const record of contract.obligations) {
+      let key = ownerKeys.get(record);
+      if (key === undefined) {
+        key = ownerKey(record.file, record.scope, record.kind, record.conditions, record.tokens);
+        if (isAtomicInventoryRecord(record)) ownerKeys.set(record, key);
+      }
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push(record);
+    }
+    ownerIndexes.set(contract, index);
+  }
+  const matches =
+    index.get(
+      ownerKey(unit.file, unit.scope, contractKind(unit), contractConditions(unit), tokens),
+    ) ?? [];
   if (matches.length !== 1) throw Error("Unsupported naming batch owner inventory alignment");
   return matches[0];
 }
@@ -328,9 +343,9 @@ export function applyAtomicNamingBatch(tree, batch, selectedIDs) {
 
 const ownerLookupKey = (scope, kind, opaque, tokens) =>
   JSON.stringify([scope, kind, opaque, tokens]);
-/** Reuse at most one exact trusted input tree's lexical owner inventory.
+/** Reuse lexical owners only for unchanged current file paths and bytes.
  * Each call hashes current paths and contents, including when the same object is
- * mutated. Changed source replaces the previous inventory; no frontier history,
+ * mutated. Keep one version per current file, releasing deleted files; no history,
  * selected outputs or pass/fail results are retained. Batch validation, sparse
  * application and output contract/context reconstruction still run on every call.
  * The baseline inventory stays private, and returned frontiers cannot mutate it.
@@ -339,35 +354,56 @@ const ownerLookupKey = (scope, kind, opaque, tokens) =>
  */
 export function createAtomicNamingReplay(batch) {
   let baseline;
+  let files = new Map();
   function inventory(tree) {
     const identity = treeIdentity(tree);
-    if (baseline?.identity !== identity) {
+    const order = JSON.stringify(Object.keys(tree));
+    if (baseline?.identity !== identity || baseline.order !== order) {
       baseline = undefined;
-      const current = Object.entries(tree).flatMap(([file, source]) =>
-        owners(file, source).map((unit) => ({
-          ...unit,
-          contractTokens: contractTokens(source.slice(unit.start, unit.end)),
-        })),
-      );
+      const next = new Map();
+      const current = [];
+      for (const [file, source] of Object.entries(tree)) {
+        let entry = files.get(file);
+        if (entry?.source !== source) {
+          entry = {
+            source,
+            units: owners(file, source).map((unit) => ({
+              ...unit,
+              contractTokens: contractTokens(source.slice(unit.start, unit.end)),
+            })),
+          };
+        }
+        next.set(file, entry);
+        current.push(...entry.units);
+      }
       const byKey = new Map();
       for (const unit of current) {
         const key = ownerLookupKey(unit.scope, unit.kind, unit.opaque, texts(unit.contractTokens));
         if (!byKey.has(key)) byKey.set(key, []);
         byKey.get(key).push(unit);
       }
-      baseline = { identity, byKey, unitIDs: new Map(current.map((unit, index) => [unit, index])) };
+      files = next;
+      baseline = {
+        identity,
+        order,
+        byKey,
+        unitIDs: new Map(current.map((unit, index) => [unit, index])),
+      };
     }
     return baseline;
   }
+  const readContract = createAtomicInventory();
   const replay = (tree, selectedIDs) =>
-    replayAtomicNamingBatch(tree, batch, selectedIDs, inventory);
+    replayAtomicNamingBatch(tree, batch, selectedIDs, inventory, readContract);
   replay.clear = () => {
     baseline = undefined;
+    files = new Map();
+    readContract.clear();
   };
   return replay;
 }
 
-function replayAtomicNamingBatch(tree, batch, selectedIDs, inventory) {
+function replayAtomicNamingBatch(tree, batch, selectedIDs, inventory, readContract) {
   if (batch.version !== BATCH_VERSION || !Array.isArray(batch.ids) || !batch.owners.length)
     throw Error("Unsupported naming batch");
   if (!selectedIDs || typeof selectedIDs[Symbol.iterator] !== "function")
@@ -440,7 +476,7 @@ function replayAtomicNamingBatch(tree, batch, selectedIDs, inventory) {
   for (const [file, list] of edits)
     for (const edit of list.sort((left, right) => right.start - left.start))
       result[file] = result[file].slice(0, edit.start) + edit.text + result[file].slice(edit.end);
-  const contract = prepareCoherentContract(result);
+  const contract = readContract(result);
   const projected = new Map();
   const fileStarts = new Map(
     [...new Set(located.map(({ unit }) => unit.file))].map((file) => [
@@ -458,7 +494,7 @@ function replayAtomicNamingBatch(tree, batch, selectedIDs, inventory) {
       scope: record.scope,
       kind: record.kind,
       opaque: unit.opaque,
-      conditions: record.conditions,
+      conditions: structuredClone(record.conditions),
       ...(record.macros !== undefined ? { macros: record.macros } : {}),
       ...(record.selector !== undefined ? { selector: record.selector } : {}),
       tokens: stream,
