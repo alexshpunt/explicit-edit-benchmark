@@ -87,7 +87,10 @@ function headerRequest(tree, task) {
  * across independent type renames. Any signature/owner consumer or request using
  * an earlier destination spelling reopens the actual current compiler source.
  * Candidate gates and full builds are unchanged; this view is never used for
- * preparation certification.
+ * preparation certification. An optional readCurrent callback rechecks the
+ * whole source after compiler failure. A changed snapshot returns undefined for
+ * a caller-owned retry of the same delivery, never acceptance; unchanged compiler
+ * failures and all other errors still propagate. It grants no deadline reset.
  */
 export function currentNamingPlanner(directory, { signal } = {}) {
   let state,
@@ -180,129 +183,143 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     return after;
   };
   return {
-    async plan(before, task) {
-      check();
-      assert.ok(
-        task.operations?.length &&
-          task.operations.every((operation) => operation.phase === "names"),
-        "Reference service accepts current naming tasks only",
-      );
-      const key = JSON.stringify(task);
-      const identity = treeIdentity(before);
-      if (pending?.key === key) {
-        if (pending.before === identity) {
-          statistics.pendingHits++;
-          return { after: pending.after, statistics: { ...statistics } };
-        }
-        if (
-          pending.headerBefore &&
-          headerRequest(before, task) &&
-          pending.headerBefore === viewIdentity(before, headerBindings)
-        ) {
-          // The failed whole-source CAS changed only files this compiler view
-          // cannot read. Keep its one consumed plan, not the stale peer bytes.
-          pending.before = identity;
-          pending.after = { ...before, ...headerTree(pending.after) };
-          statistics.pendingHits++;
-          return { after: pending.after, statistics: { ...statistics } };
-        }
-      }
-      if (pending) invalidate();
-      const separateCurrent = async () => {
-        invalidate();
-        statistics.fallbacks++;
-        const after = await separate(before, task);
-        check();
-        pending = { key, before: identity, after, disposable: true };
-        return { after, statistics: { ...statistics } };
-      };
-      let file =
-        task.operations[0].category === "helpers"
-          ? task.operations[0].file
-          : Object.keys(before).some((name) => headerPath.test(name)) && headerRequest(before, task)
-            ? headerBindings
-            : undefined;
-      if (
-        file === headerBindings &&
-        state &&
-        state.file === undefined &&
-        state.expected === identity
-      )
-        file = undefined;
-      const plainTypes = plainTypeRequest(task);
-      let reused = Boolean(
-        state &&
-        state.file === file &&
-        state.expected === viewIdentity(before, file) &&
-        (!state.types ||
-          (file === headerBindings &&
-            plainTypes &&
-            task.operations.every((operation) =>
-              operation.mapping.every((item) => !state.typeDestinations.has(item.from)),
-            ))),
-      );
-      if (!reused) {
-        try {
-          await fresh(before, file);
-        } catch (error) {
-          invalidate();
-          if (file || !error.message.startsWith("Compiler AST failed:")) throw error;
-          return separateCurrent();
-        }
-      }
-      let plans;
+    async plan(before, task, readCurrent) {
       try {
-        plans = [];
-        for (const operation of task.operations) plans.push(await state.session.plan(operation));
-      } catch (error) {
-        // The indexed public selector may have become stale after a known scope
-        // or written signature rename. Reopen the ACTUAL source, never translate
-        // a selector by broad text replacement or fall back to saved answers.
-        if (!reused && file !== headerBindings) {
-          invalidate();
-          throw error;
+        check();
+        assert.ok(
+          task.operations?.length &&
+            task.operations.every((operation) => operation.phase === "names"),
+          "Reference service accepts current naming tasks only",
+        );
+        const key = JSON.stringify(task);
+        const identity = treeIdentity(before);
+        if (pending?.key === key) {
+          if (pending.before === identity) {
+            statistics.pendingHits++;
+            return { after: pending.after, statistics: { ...statistics } };
+          }
+          if (
+            pending.headerBefore &&
+            headerRequest(before, task) &&
+            pending.headerBefore === viewIdentity(before, headerBindings)
+          ) {
+            // The failed whole-source CAS changed only files this compiler view
+            // cannot read. Keep its one consumed plan, not the stale peer bytes.
+            pending.before = identity;
+            pending.after = { ...before, ...headerTree(pending.after) };
+            statistics.pendingHits++;
+            return { after: pending.after, statistics: { ...statistics } };
+          }
         }
-        try {
-          await fresh(before, file === headerBindings ? undefined : file);
-        } catch (freshError) {
+        if (pending) invalidate();
+        const separateCurrent = async () => {
           invalidate();
-          if (file !== headerBindings || !freshError.message.startsWith("Compiler AST failed:"))
-            throw freshError;
-          return separateCurrent();
+          statistics.fallbacks++;
+          const after = await separate(before, task);
+          check();
+          pending = { key, before: identity, after, disposable: true };
+          return { after, statistics: { ...statistics } };
+        };
+        let file =
+          task.operations[0].category === "helpers"
+            ? task.operations[0].file
+            : Object.keys(before).some((name) => headerPath.test(name)) &&
+                headerRequest(before, task)
+              ? headerBindings
+              : undefined;
+        if (
+          file === headerBindings &&
+          state &&
+          state.file === undefined &&
+          state.expected === identity
+        )
+          file = undefined;
+        const plainTypes = plainTypeRequest(task);
+        let reused = Boolean(
+          state &&
+          state.file === file &&
+          state.expected === viewIdentity(before, file) &&
+          (!state.types ||
+            (file === headerBindings &&
+              plainTypes &&
+              task.operations.every((operation) =>
+                operation.mapping.every((item) => !state.typeDestinations.has(item.from)),
+              ))),
+        );
+        if (!reused) {
+          try {
+            await fresh(before, file);
+          } catch (error) {
+            invalidate();
+            if (file || !error.message.startsWith("Compiler AST failed:")) throw error;
+            return await separateCurrent();
+          }
         }
-        reused = false;
+        let plans;
         try {
           plans = [];
           for (const operation of task.operations) plans.push(await state.session.plan(operation));
-        } catch (freshError) {
-          invalidate();
-          throw freshError;
+        } catch (error) {
+          // The indexed public selector may have become stale after a known scope
+          // or written signature rename. Reopen the ACTUAL source, never translate
+          // a selector by broad text replacement or fall back to saved answers.
+          if (!reused && file !== headerBindings) {
+            invalidate();
+            throw error;
+          }
+          try {
+            await fresh(before, file === headerBindings ? undefined : file);
+          } catch (freshError) {
+            invalidate();
+            if (file !== headerBindings || !freshError.message.startsWith("Compiler AST failed:"))
+              throw freshError;
+            return await separateCurrent();
+          }
+          reused = false;
+          try {
+            plans = [];
+            for (const operation of task.operations)
+              plans.push(await state.session.plan(operation));
+          } catch (freshError) {
+            invalidate();
+            throw freshError;
+          }
         }
+        check();
+        let after = before;
+        const applied = [...state.applied];
+        for (const plan of plans) {
+          after = applyScopedNamePlan(after, plan, applied);
+          applied.push(plan);
+        }
+        if (reused) statistics.cacheHits++;
+        pending = {
+          key,
+          before: identity,
+          after,
+          plans,
+          types: state.types,
+          ...(state.file === headerBindings ? { headerBefore: state.expected } : {}),
+          ...(state.file === headerBindings && plainTypes
+            ? {
+                typeDestinations: task.operations.flatMap((operation) =>
+                  operation.mapping.map((item) => item.to),
+                ),
+              }
+            : {}),
+        };
+        return { after, statistics: { ...statistics } };
+      } catch (error) {
+        if (
+          !readCurrent ||
+          !error.message.startsWith("Compiler AST failed:") ||
+          treeIdentity(await readCurrent()) === treeIdentity(before)
+        )
+          throw error;
+        // Like a rejected CAS, failure on an obsolete snapshot cannot decide
+        // the current delivery. Replan actual bytes; unchanged errors still fail.
+        return undefined;
       }
-      check();
-      let after = before;
-      const applied = [...state.applied];
-      for (const plan of plans) {
-        after = applyScopedNamePlan(after, plan, applied);
-        applied.push(plan);
-      }
-      if (reused) statistics.cacheHits++;
-      pending = {
-        key,
-        before: identity,
-        after,
-        plans,
-        types: state.types,
-        ...(state.file === headerBindings ? { headerBefore: state.expected } : {}),
-        ...(state.file === headerBindings && plainTypes
-          ? {
-              typeDestinations: task.operations.flatMap((operation) =>
-                operation.mapping.map((item) => item.to),
-              ),
-            }
-          : {}),
-      };
-      return { after, statistics: { ...statistics } };
     },
     acknowledge(before, after) {
       check();
