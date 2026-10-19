@@ -140,6 +140,7 @@ export async function projectAst(sourcePath, flags) {
     quoted = false,
     escaped = false,
     active = false;
+  let parts = [];
   let body = "",
     headerKnown = false,
     keep = false,
@@ -155,27 +156,52 @@ export async function projectAst(sourcePath, flags) {
   }
   try {
     for await (const chunk of child.stdout) {
-      for (const character of chunk.toString("utf8")) {
+      // Retain complete chunk slices once the small root header is known.
+      // Appending each character of a large namespace creates millions of
+      // transient string nodes before JSON.parse can read the same bytes.
+      const text = chunk.toString("utf8");
+      const punctuation = /["\\{}:]/g;
+      let partStart = 0,
+        headerStart = 0;
+      if (escaped && text.length) {
+        escaped = false;
+        punctuation.lastIndex = 1;
+      }
+      for (let match; (match = punctuation.exec(text));) {
+        const index = match.index;
+        const character = match[0];
         if (!quoted && character === "{" && depth === 1) {
           active = true;
           body = "";
+          parts = [];
+          headerStart = index;
           headerKnown = false;
           keep = false;
         }
-        if (active && (!headerKnown || keep)) body += character;
+        if (active && !headerKnown) {
+          body += text.slice(headerStart, index + 1);
+          headerStart = index + 1;
+        }
         if (quoted) {
-          if (escaped) escaped = false;
-          else if (character === "\\") escaped = true;
-          else if (character === '"') quoted = false;
+          if (character === "\\") {
+            if (index + 1 < text.length) punctuation.lastIndex = index + 2;
+            else escaped = true;
+          } else if (character === '"') quoted = false;
         } else if (character === '"') quoted = true;
         else if (character === "{") depth++;
         else if (character === "}") {
           depth--;
           if (active && depth === 1) {
             if (!headerKnown) ({ file, keep } = inspectHeader(JSON.parse(body)));
-            if (keep) roots.push(JSON.parse(body));
+            if (keep) {
+              if (headerKnown) {
+                parts.push(text.slice(partStart, index + 1));
+                roots.push(JSON.parse(parts.join("")));
+              } else roots.push(JSON.parse(body));
+            }
             active = false;
             body = "";
+            parts = [];
           }
         }
         if (active && !headerKnown && !quoted && depth === 2 && character === ":") {
@@ -183,10 +209,16 @@ export async function projectAst(sourcePath, flags) {
           if (match) {
             ({ file, keep } = inspectHeader(JSON.parse(body.slice(0, match.index) + "}")));
             headerKnown = true;
-            if (!keep) body = "";
+            if (keep) {
+              parts.push(body);
+              partStart = index + 1;
+            }
+            body = "";
           }
         }
       }
+      if (active && !headerKnown) body += text.slice(headerStart);
+      if (active && headerKnown && keep) parts.push(text.slice(partStart));
     }
     await completed;
     if (depth || quoted || active) throw new Error("Incomplete compiler AST");

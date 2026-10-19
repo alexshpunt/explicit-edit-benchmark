@@ -412,9 +412,15 @@ export async function scopedNamingSession(
   };
   const templateWitness = createTemplateCallWitness(roots, image.source, inspector);
   const referenceWitness = createReferenceCallWitness(roots, image.source, inspector);
-  const keepEdit = createDirectCallEditFilter(roots, image.source, {
-    canExclude: async (evidence) => (await templateWitness(evidence)) || referenceWitness(evidence),
-  });
+  let directCalls;
+  // Local-variable plans never consult semantic call exclusions. Build this
+  // compiler index only when a delivered semantic edit actually needs it.
+  const directCallFilter = () =>
+    (directCalls ??= createDirectCallEditFilter(roots, image.source, {
+      canExclude: async (evidence) =>
+        (await templateWitness(evidence)) || referenceWitness(evidence),
+    }));
+  const keepEdit = (...args) => directCallFilter()(...args);
   const consumed = new Set();
   const renamed = new Map();
   const siteKey = (edit) => JSON.stringify([edit.file, edit.start]);
@@ -582,7 +588,7 @@ export async function scopedNamingSession(
         try {
           coupled = coupleAtomicBindings([...bySignature.values()], {
             sharedCall: (evidence) => {
-              if (keepEdit.sharedCall(evidence)) return true;
+              if (directCallFilter().sharedCall(evidence)) return true;
               const key = proofKey(evidence);
               if (probes.has(key)) return probes.get(key)?.sharedCall(evidence) === true;
               unresolved.push(evidence);

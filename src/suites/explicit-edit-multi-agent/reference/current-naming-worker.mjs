@@ -19,7 +19,12 @@ async function worker(workspace) {
         for (;;) {
           attempts++;
           const before = await readSharedSnapshot(workspace);
-          const { after, statistics } = await planner.plan(before, task);
+          const planned = await planner.plan(before, task, () => readSharedSnapshot(workspace));
+          if (!planned) {
+            conflicts++;
+            continue;
+          }
+          const { after, statistics } = planned;
           if (await commitSnapshot(workspace, before, after)) {
             planner.acknowledge(before, after);
             process.stdout.write(
