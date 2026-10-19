@@ -190,3 +190,174 @@ await test("a rejected header CAS still discards its plan after any header input
   assert.equal(retry.after["api.h"], peer["api.h"].replace("first", "left"));
   planner.acknowledge(peer, retry.after);
 });
+
+const semanticRequest = {
+  id: "semantic-header",
+  operations: [
+    {
+      id: "semantic-header",
+      phase: "names",
+      category: "functions-types",
+      mapping: [{ from: "refine", to: "combine" }],
+      selectors: [{ kind: "function", scope: "api::refine", signature: "int (int, int)" }],
+    },
+  ],
+};
+
+await test("a header-only semantic binding remains editable during unrelated implementation movement", async (t) => {
+  const planner = await fixture(t);
+  const result = await planner.plan(input, semanticRequest);
+  assert.deepEqual(result.after, {
+    ...input,
+    "api.h": input["api.h"].replace("refine", "combine"),
+  });
+  planner.acknowledge(input, result.after);
+});
+
+await test("a semantic header rename still updates actual implementation uses", async (t) => {
+  const planner = await fixture(t);
+  const before = {
+    ...input,
+    "main.cpp": '#include "api.h"\nint entry() { return api::refine(1, 2); }\n',
+  };
+  const result = await planner.plan(before, semanticRequest);
+  assert.deepEqual(result.after, {
+    ...before,
+    "api.h": before["api.h"].replace("refine", "combine"),
+    "main.cpp": before["main.cpp"].replace("refine", "combine"),
+  });
+});
+
+await test("header-only analysis cannot hide implementation references or token-pasted spellings", async (t) => {
+  for (const source of [
+    input["main.cpp"] + "int use() { return api::refine(1, 2); }\n",
+    input["main.cpp"] +
+      "#define JOIN(a, b) a##b\nint use() { return api::JOIN(re, fine)(1, 2); }\n",
+  ]) {
+    const planner = await fixture(t);
+    await assert.rejects(
+      planner.plan({ ...input, "main.cpp": source }, semanticRequest),
+      /Compiler AST failed:/,
+    );
+  }
+});
+
+await test("a semantic pending header plan is discarded when a peer adds an implementation use", async (t) => {
+  const planner = await fixture(t);
+  await planner.plan(input, semanticRequest);
+  const peer = {
+    ...input,
+    "main.cpp": '#include "api.h"\nint use() { return api::refine(1, 2); }\n',
+  };
+  const retry = await planner.plan(peer, semanticRequest);
+  assert.equal(retry.statistics.pendingHits, 0);
+  assert.equal(retry.after["main.cpp"], peer["main.cpp"].replace("refine", "combine"));
+  planner.acknowledge(peer, retry.after);
+});
+
+await test("implementation line splicing cannot hide a semantic use from header-view selection", async (t) => {
+  const planner = await fixture(t);
+  const source = input["main.cpp"] + "int use() { return api::re\\\nfine(1, 2); }\n";
+  await assert.rejects(
+    planner.plan({ ...input, "main.cpp": source }, semanticRequest),
+    /Compiler AST failed:/,
+  );
+});
+
+const typeRequest = (from, to, scope = from) => ({
+  id: `type-${from}`,
+  operations: [
+    {
+      id: `type-${from}`,
+      phase: "names",
+      category: "functions-types",
+      mapping: [{ from, to }],
+      selectors: [{ kind: "type", scope }],
+    },
+  ],
+});
+
+await test("independent header type declarations reuse binding identity but signature consumers reopen analysis", async (t) => {
+  const planner = await fixture(t);
+  const before = {
+    ...input,
+    "api.h":
+      "#pragma once\nstruct First { struct Inner {}; };\ninline int consume(First::Inner item) { return 0; }\n",
+  };
+  const first = await planner.plan(before, typeRequest("First", "Container"));
+  planner.acknowledge(before, first.after);
+  const inner = await planner.plan(
+    first.after,
+    typeRequest("Inner", "Element", "Container::Inner"),
+  );
+  assert.equal(inner.statistics.snapshotAttempts, 1);
+  assert.equal(inner.statistics.cacheHits, 1);
+  assert.equal(
+    inner.after["api.h"],
+    before["api.h"].replaceAll("First", "Container").replaceAll("Inner", "Element"),
+  );
+  planner.acknowledge(first.after, inner.after);
+  const parameter = request("item", "value");
+  parameter.operations[0].selectors = [
+    {
+      kind: "variable",
+      scope: "consume::item",
+      owner: { scope: "consume", signature: "int (Container::Element)", definition: true },
+    },
+  ];
+  const last = await planner.plan(inner.after, parameter);
+  assert.equal(last.statistics.snapshotAttempts, 2);
+  assert.ok(last.after["api.h"].includes("Container::Element value"));
+});
+
+await test("a type request using an earlier destination spelling reopens the current compiler source", async (t) => {
+  const planner = await fixture(t);
+  const before = { ...input, "api.h": "#pragma once\nstruct First {};\nFirst object;\n" };
+  const first = await planner.plan(before, typeRequest("First", "Second"));
+  planner.acknowledge(before, first.after);
+  const second = await planner.plan(first.after, typeRequest("Second", "Third"));
+  assert.equal(second.statistics.snapshotAttempts, 2);
+  assert.equal(second.after["api.h"], before["api.h"].replaceAll("First", "Third"));
+});
+
+const fieldRequest = {
+  id: "header-field",
+  operations: [
+    {
+      id: "header-field",
+      phase: "names",
+      category: "fields",
+      mapping: [{ from: "old_field", to: "value" }],
+      selectors: [{ kind: "record", scope: "Item" }],
+    },
+  ],
+};
+
+await test("a header-only field binding remains editable during unrelated implementation movement", async (t) => {
+  const planner = await fixture(t);
+  const before = {
+    ...input,
+    "api.h":
+      "#pragma once\nstruct Item { int old_field; };\ninline int get(Item item) { return item.old_field; }\n",
+  };
+  const result = await planner.plan(before, fieldRequest);
+  assert.deepEqual(result.after, {
+    ...before,
+    "api.h": before["api.h"].replaceAll("old_field", "value"),
+  });
+});
+
+await test("header field analysis cannot omit actual implementation field uses", async (t) => {
+  const planner = await fixture(t);
+  const before = {
+    ...input,
+    "api.h": "#pragma once\nstruct Item { int old_field; };\n",
+    "main.cpp": '#include "api.h"\nint get(Item item) { return item.old_field; }\n',
+  };
+  const result = await planner.plan(before, fieldRequest);
+  assert.deepEqual(result.after, {
+    ...before,
+    "api.h": before["api.h"].replaceAll("old_field", "value"),
+    "main.cpp": before["main.cpp"].replaceAll("old_field", "value"),
+  });
+});
