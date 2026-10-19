@@ -85,6 +85,55 @@ const unrelatedFunctionRequest = (task, spellings) =>
           ),
       ),
   );
+// A fully owned local binding cannot have uses outside its function definition.
+// Select its actual TU only when every source spelling is physically confined to
+// one implementation, with no alternate include context or manufactured spelling.
+function localTranslationUnit(tree, task) {
+  if (
+    !task.operations.every((operation) => {
+      const selector = operation.selectors?.[0];
+      const from = operation.mapping?.[0]?.from;
+      return (
+        operation.category === "locals-parameters" &&
+        operation.mapping?.length === 1 &&
+        /^[A-Za-z_]\w*$/.test(from ?? "") &&
+        operation.selectors?.length === 1 &&
+        selector.kind === "variable" &&
+        typeof selector.owner?.scope === "string" &&
+        selector.owner.scope.length > 0 &&
+        selector.scope === selector.owner.scope + "::" + from &&
+        typeof selector.owner.signature === "string" &&
+        selector.owner.signature.length > 0 &&
+        selector.owner.definition === true
+      );
+    })
+  )
+    return undefined;
+  const names = task.operations.map((operation) => operation.mapping[0].from);
+  const spelling = new RegExp(`\\b(?:${names.join("|")})\\b`);
+  let selected;
+  for (const [file, source] of Object.entries(tree)) {
+    const joined = source.replace(/\\\r?\n/g, "");
+    if (/\?\?[/=]/.test(joined)) return undefined;
+    if (!spelling.test(joined)) continue;
+    if (!file.endsWith(".cpp") || (selected && selected !== file)) return undefined;
+    selected = file;
+  }
+  if (!selected) return undefined;
+  for (const [file, source] of Object.entries(tree))
+    for (const include of includeDirectives(source.replace(/\\\r?\n/g, ""))) {
+      const relative = path.posix.normalize(
+        path.posix.join(path.posix.dirname(file), include.file),
+      );
+      const target = [relative, include.file, "support/" + include.file].find(
+        (name) => typeof tree[name] === "string",
+      );
+      if (target === selected) return undefined;
+    }
+  if (/##|%:%:/.test(joinedProject(tree, [selected]).source.replace(/\\\r?\n/g, "")))
+    return undefined;
+  return selected;
+}
 async function implementationHeaderContext(tree, spelling, readActiveMacros) {
   const relevant = new Set();
   const external = new Set();
@@ -162,7 +211,12 @@ async function headerRequest(tree, task, readActiveMacros) {
  * Structural/unknown mutations, helper-view changes and affected type selectors
  * invalidate reuse. Separate-TU fallback is deliberately disposable. No candidate mount may
  * contain this cache: run it inside the isolated reference service namespace.
- * Owned-variable requests first compile the current headers alone, since
+ * Fully definition-owned locals whose source spellings occur in just one .cpp
+ * may compile that actual translation unit and its includes. Token pasting in
+ * that view, project trigraph ambiguity, spelling in another file (after line
+ * splicing), or an include of that implementation rejects this optimization. Complete source
+ * identity, current owner/signature selection and errors in that TU still apply.
+ * Other owned-variable requests first compile the current headers alone, since
  * unrelated implementation moves can temporarily leave other translation units
  * unbuildable. Other semantic requests may use that view only when no
  * source spelling occurs in implementation text after line splicing; token
@@ -353,10 +407,11 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         let file =
           task.operations[0].category === "helpers"
             ? task.operations[0].file
-            : Object.keys(before).some((name) => headerPath.test(name)) &&
-                (await headerRequest(before, task, readActiveMacros))
-              ? headerBindings
-              : undefined;
+            : (localTranslationUnit(before, task) ??
+              (Object.keys(before).some((name) => headerPath.test(name)) &&
+              (await headerRequest(before, task, readActiveMacros))
+                ? headerBindings
+                : undefined));
         if (
           file === headerBindings &&
           state &&
