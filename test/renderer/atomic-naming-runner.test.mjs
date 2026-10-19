@@ -313,6 +313,16 @@ await test(
         assert.equal(report.status, "pass", JSON.stringify(report.terminal));
         assert.equal(report.deliveries, 4);
         assert.equal(report.repairs, 0);
+        const readiness = report.atomicBarriers.flatMap((barrier) => barrier.inputChecks);
+        assert.ok(
+          readiness.some((check) => check.observations.some((row) => row.mode === "current-input")),
+        );
+        assert.ok(
+          readiness.every((check) =>
+            check.observations.every((row) => row.mode !== "current-output"),
+          ),
+          "Naming input masks already admit completed output; do not grade the full output first",
+        );
         assert.equal(report.acceptedTasks, 2);
         const northCalls = drivers.calls.filter((call) => call.owner === "frond::North");
         assert.deepEqual(northCalls.map((call) => call.mapping.from).sort(), ["a", "b"]);
