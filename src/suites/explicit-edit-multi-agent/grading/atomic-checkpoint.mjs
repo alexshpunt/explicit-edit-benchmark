@@ -3,6 +3,7 @@ import { treeIdentity } from "../generation/generator.mjs";
 import { atomicOrder } from "../tasks/atomic-effects.mjs";
 import { applyCoherentStructure } from "../reference/coherent-edit.mjs";
 import { createAtomicInventory, isAtomicInventoryRecord } from "./atomic-inventory.mjs";
+import { replayStructuralNodes } from "./atomic-structural-replay.mjs";
 import {
   createAtomicNamingReplay,
   atomicFileTokens,
@@ -206,7 +207,7 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
       structuralSnapshot.ids.every((id, index) => nodes[index].id === id);
     let tree = extendsSnapshot ? structuralSnapshot.tree : initialTree;
     const first = extendsSnapshot ? structuralSnapshot.ids.length : 0;
-    for (let index = first; index < nodes.length; index++) tree = move(tree, nodes[index]);
+    tree = replayStructuralNodes(tree, nodes.slice(first));
     if (retain) structuralSnapshot = { ids: nodes.map((node) => node.id), tree };
     return tree;
   }

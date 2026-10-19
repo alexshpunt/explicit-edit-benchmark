@@ -49,6 +49,9 @@ function graphState(nodes, completed) {
 /** Dispatch one ready edit to each free persistent participant. Successors unlock
  * only after a structural gate passes. Pending observations release participants
  * for unrelated work and are reconsidered after a delivery changes source.
+ * Admission permits one look-ahead delivery beyond the participant pool while
+ * outputs await verification; a bounded backlog must drain before more writes
+ * can continually invalidate the same stable-source observations.
  * Editing failure drains peers; operational failure aborts and awaits them.
  * The caller owns corrections and current-workspace completion revalidation.
  * execute(node, agent, signal, context) performs one delivery. verify(node, signal, receipt,
@@ -205,7 +208,18 @@ export async function runAtomicStream(
           ready.push(id);
         }
       ready.sort((a, b) => order.get(a) - order.get(b));
-      while (ready.length && active.size < agents && !failed.length && !controller.signal.aborted) {
+      // Reusing a free participant must not build an unbounded verification
+      // queue. One look-ahead slot preserves unrelated work behind a deferred
+      // gate; once full, existing writers/observers advance before new delivery.
+      const deferredOutputs =
+        checking.size + [...pending.values()].filter((item) => item.stage === "output").length;
+      while (
+        ready.length &&
+        active.size < agents &&
+        active.size + deferredOutputs < agents + 1 &&
+        !failed.length &&
+        !controller.signal.aborted
+      ) {
         let agent = cursor;
         while (active.has(agent)) agent = (agent + 1) % agents;
         launch(ready.shift(), agent);
@@ -235,7 +249,7 @@ export async function runAtomicStream(
         if (
           !active.size &&
           !checking.size &&
-          (!ready.length || failed.length) &&
+          (!ready.length || failed.length || result.stage === "output") &&
           result.epoch === epoch
         )
           failed.push(result.id);
