@@ -22,6 +22,44 @@ const headerLocalRequest = (task) =>
       ),
   );
 
+const plainTypeRequest = (task) =>
+  task.operations.every(
+    (operation) =>
+      operation.category === "functions-types" &&
+      operation.selectors?.length &&
+      operation.selectors.every(
+        (selector) =>
+          selector.kind === "type" &&
+          Object.keys(selector).every((key) => ["kind", "scope"].includes(key)),
+      ),
+  );
+
+function headerRequest(tree, task) {
+  if (headerLocalRequest(task)) return true;
+  if (
+    !task.operations.every(
+      (operation) =>
+        ["functions-types", "fields"].includes(operation.category) &&
+        operation.selectors?.length &&
+        operation.selectors.every((selector) =>
+          operation.category === "fields"
+            ? selector.kind === "record"
+            : ["function", "type", "record"].includes(selector.kind),
+        ),
+    )
+  )
+    return false;
+  const names = task.operations.flatMap((operation) => operation.mapping.map((item) => item.from));
+  if (names.some((name) => !/^[A-Za-z_]\w*$/.test(name))) return false;
+  const spelling = new RegExp(`\\b(?:${names.join("|")})\\b`);
+  return Object.entries(tree)
+    .filter(([name]) => name.endsWith(".cpp"))
+    .every(([, source]) => {
+      const joined = source.replace(/\\\r?\n/g, "");
+      return !/##|%:%:|\?\?[/=]/.test(joined) && !spelling.test(joined);
+    });
+}
+
 /** Retain only compiler work generated from actually delivered public requests.
  * This reference-only cache never reads preparation plans, contracts or answers.
  * A snapshot is reusable only while committed reference plans exactly explain the
@@ -31,7 +69,12 @@ const headerLocalRequest = (task) =>
  * contain this cache: run it inside the isolated reference service namespace.
  * Owned-variable requests first compile the current headers alone, since
  * unrelated implementation moves can temporarily leave other translation units
- * unbuildable. The private root adds includes only, never declarations or saved
+ * unbuildable. Other semantic requests may use that view only when no
+ * source spelling occurs in implementation text after line splicing; token
+ * pasting and trigraph ambiguity reject this optimization. The check is repeated
+ * before pending-plan reuse. Compiler selection and candidate gates remain the
+ * authority, not this conservative view-selection test.
+ * The private root adds includes only, never declarations or saved
  * answers. Missing header selections use ordinary current-project analysis;
  * header compiler errors remain errors. Header views exclude implementation
  * files and are reusable only for identical non-implementation input bytes;
@@ -39,7 +82,10 @@ const headerLocalRequest = (task) =>
  * identity. A rejected header-view CAS may reuse the same current plan when
  * those inputs are unchanged, merging it onto fresh implementation bytes; the
  * next commit and acknowledgement still require a matching whole-source snapshot.
- * Full-project views keep their original complete-source identity.
+ * Full-project views keep their original complete-source identity. Header-only
+ * type declarations with plain scope selectors can retain compiler binding IDs
+ * across independent type renames. Any signature/owner consumer or request using
+ * an earlier destination spelling reopens the actual current compiler source.
  * Candidate gates and full builds are unchanged; this view is never used for
  * preparation certification.
  */
@@ -88,7 +134,14 @@ export function currentNamingPlanner(directory, { signal } = {}) {
   const fresh = async (before, file) => {
     invalidate();
     const session = await open(before, file);
-    state = { session, file, expected: viewIdentity(before, file), applied: [], types: false };
+    state = {
+      session,
+      file,
+      expected: viewIdentity(before, file),
+      applied: [],
+      types: false,
+      typeDestinations: new Set(),
+    };
   };
   const separate = async (before, task) => {
     const merged = task.operations.map(() => new Map());
@@ -141,7 +194,11 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           statistics.pendingHits++;
           return { after: pending.after, statistics: { ...statistics } };
         }
-        if (pending.headerBefore && pending.headerBefore === viewIdentity(before, headerBindings)) {
+        if (
+          pending.headerBefore &&
+          headerRequest(before, task) &&
+          pending.headerBefore === viewIdentity(before, headerBindings)
+        ) {
           // The failed whole-source CAS changed only files this compiler view
           // cannot read. Keep its one consumed plan, not the stale peer bytes.
           pending.before = identity;
@@ -162,7 +219,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
       let file =
         task.operations[0].category === "helpers"
           ? task.operations[0].file
-          : headerLocalRequest(task) && Object.keys(before).some((name) => headerPath.test(name))
+          : Object.keys(before).some((name) => headerPath.test(name)) && headerRequest(before, task)
             ? headerBindings
             : undefined;
       if (
@@ -172,8 +229,17 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         state.expected === identity
       )
         file = undefined;
+      const plainTypes = plainTypeRequest(task);
       let reused = Boolean(
-        state && state.file === file && state.expected === viewIdentity(before, file),
+        state &&
+        state.file === file &&
+        state.expected === viewIdentity(before, file) &&
+        (!state.types ||
+          (file === headerBindings &&
+            plainTypes &&
+            task.operations.every((operation) =>
+              operation.mapping.every((item) => !state.typeDestinations.has(item.from)),
+            ))),
       );
       if (!reused) {
         try {
@@ -228,6 +294,13 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         plans,
         types: state.types,
         ...(state.file === headerBindings ? { headerBefore: state.expected } : {}),
+        ...(state.file === headerBindings && plainTypes
+          ? {
+              typeDestinations: task.operations.flatMap((operation) =>
+                operation.mapping.map((item) => item.to),
+              ),
+            }
+          : {}),
       };
       return { after, statistics: { ...statistics } };
     },
@@ -241,11 +314,12 @@ export function currentNamingPlanner(directory, { signal } = {}) {
       );
       const accepted = pending;
       pending = undefined;
-      if (accepted.disposable || accepted.types) {
+      if (accepted.disposable || (accepted.types && !accepted.typeDestinations)) {
         invalidate();
         return;
       }
       state.applied.push(...accepted.plans);
+      for (const name of accepted.typeDestinations ?? []) state.typeDestinations.add(name);
       state.expected = viewIdentity(after, state.file);
     },
     close() {
