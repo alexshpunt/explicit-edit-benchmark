@@ -43,10 +43,16 @@ function literalImport(record) {
  * merely because surrounding context changed. Selected records still retain exact
  * macro/conditional metadata; full barriers check all untouched peer obligations.
  * Include-only or empty-wrapper edits without inventory effects are not supported.
+ * readInventory may reuse complete lexical metadata for exact current file bytes;
+ * both trusted snapshots are read on every call. No gate decision is cached.
  */
-export function prepareAtomicGate(beforeTree, afterTree, { writesOnly = false } = {}) {
-  const before = prepareCoherentContract(beforeTree);
-  const after = prepareCoherentContract(afterTree);
+export function prepareAtomicGate(
+  beforeTree,
+  afterTree,
+  { writesOnly = false, readInventory = prepareCoherentContract } = {},
+) {
+  const before = readInventory(beforeTree);
+  const after = readInventory(afterTree);
   const inputs = new Map(before.obligations.map((record) => [recordKey(record), record]));
   const outputs = new Map(after.obligations.map((record) => [recordKey(record), record]));
   const resources = new Set();
