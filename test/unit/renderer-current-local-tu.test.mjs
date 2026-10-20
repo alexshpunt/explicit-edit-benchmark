@@ -120,3 +120,43 @@ await test("current local ownership and unexplained input changes still require 
   assert.equal(second.statistics.cacheHits, 0);
   assert.ok(second.statistics.snapshotAttempts > first.statistics.snapshotAttempts);
 });
+
+await test("a valid full-project snapshot is retained instead of reopening a narrower local view", async (t) => {
+  const planner = await fixture(t);
+  const before = {
+    "part.cpp": "namespace api { int refine(int shared, int first) { return shared + first; } }\n",
+    "peer.cpp": "int unrelated(int shared) { return shared + 1; }\n",
+  };
+  const shared = await planner.plan(before, request("shared", "value"));
+  planner.acknowledge(before, shared.after);
+  const first = await planner.plan(shared.after, request("first", "left"));
+  assert.deepEqual(first.after, {
+    ...before,
+    "part.cpp": "namespace api { int refine(int value, int left) { return value + left; } }\n",
+  });
+  assert.equal(first.statistics.snapshotAttempts, shared.statistics.snapshotAttempts);
+  assert.equal(first.statistics.cacheHits, shared.statistics.cacheHits + 1);
+  planner.acknowledge(shared.after, first.after);
+});
+
+await test("unexplained peer writes cannot retain the previous full-project view", async (t) => {
+  const planner = await fixture(t);
+  const before = {
+    "part.cpp": "namespace api { int refine(int shared, int first) { return shared + first; } }\n",
+    "peer.cpp": "int unrelated(int shared) { return shared + 1; }\n",
+  };
+  const shared = await planner.plan(before, request("shared", "value"));
+  planner.acknowledge(before, shared.after);
+  const current = {
+    ...shared.after,
+    "peer.cpp": before["peer.cpp"] + "int waiting() { return missing_helper(); }\n",
+  };
+  const first = await planner.plan(current, request("first", "left"));
+  assert.deepEqual(first.after, {
+    ...current,
+    "part.cpp": "namespace api { int refine(int value, int left) { return value + left; } }\n",
+  });
+  assert.equal(first.statistics.snapshotAttempts, shared.statistics.snapshotAttempts + 1);
+  assert.equal(first.statistics.cacheHits, shared.statistics.cacheHits);
+  planner.acknowledge(current, first.after);
+});
