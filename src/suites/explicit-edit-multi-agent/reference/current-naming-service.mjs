@@ -216,6 +216,8 @@ async function headerRequest(tree, task, readActiveMacros) {
  * that view, project trigraph ambiguity, spelling in another file (after line
  * splicing), or an include of that implementation rejects this optimization. Complete source
  * identity, current owner/signature selection and errors in that TU still apply.
+ * An already valid complete-project snapshot takes priority over a narrower
+ * local view; unexplained whole-source changes still invalidate that reuse.
  * Other owned-variable requests first compile the current headers alone, since
  * unrelated implementation moves can temporarily leave other translation units
  * unbuildable. Other semantic requests may use that view only when no
@@ -412,8 +414,10 @@ export function currentNamingPlanner(directory, { signal } = {}) {
               (await headerRequest(before, task, readActiveMacros))
                 ? headerBindings
                 : undefined));
+        // A valid complete view already covers these locals. Do not discard it
+        // merely because a newly delivered spelling permits a narrower view.
         if (
-          file === headerBindings &&
+          (file === headerBindings || task.operations[0].category === "locals-parameters") &&
           state &&
           state.file === undefined &&
           state.expected === identity
