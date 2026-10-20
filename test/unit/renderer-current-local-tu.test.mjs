@@ -69,11 +69,16 @@ await test("local translation-unit selection retains compiler errors in the owne
   }
 });
 
-await test("other physical spellings and preprocessing ambiguity cannot be hidden by a local view", async (t) => {
+await test("unrelated physical spellings remain untouched by a compiler-owned local rename", async (t) => {
   const planner = await fixture(t);
   for (const extra of ["int first = 1;\n", "int fi\\\nrst = 1;\n"]) {
     const before = { ...input, "peer.cpp": extra };
-    await assert.rejects(planner.plan(before, request("first", "left")), /Compiler AST failed:/);
+    const result = await planner.plan(before, request("first", "left"));
+    assert.deepEqual(result.after, {
+      ...before,
+      "part.cpp": input["part.cpp"].replaceAll("first", "left"),
+    });
+    assert.equal(before["peer.cpp"], extra);
   }
 });
 
@@ -127,7 +132,16 @@ await test("a valid full-project snapshot is retained instead of reopening a nar
     "part.cpp": "namespace api { int refine(int shared, int first) { return shared + first; } }\n",
     "peer.cpp": "int unrelated(int shared) { return shared + 1; }\n",
   };
-  const shared = await planner.plan(before, request("shared", "value"));
+  const fullRequest = request("shared", "value");
+  fullRequest.operations[0].selectors = [
+    {
+      kind: "function",
+      scope: "api::refine",
+      signature: "int (int, int)",
+      definition: true,
+    },
+  ];
+  const shared = await planner.plan(before, fullRequest);
   planner.acknowledge(before, shared.after);
   const first = await planner.plan(shared.after, request("first", "left"));
   assert.deepEqual(first.after, {
@@ -145,7 +159,16 @@ await test("unexplained peer writes cannot retain the previous full-project view
     "part.cpp": "namespace api { int refine(int shared, int first) { return shared + first; } }\n",
     "peer.cpp": "int unrelated(int shared) { return shared + 1; }\n",
   };
-  const shared = await planner.plan(before, request("shared", "value"));
+  const fullRequest = request("shared", "value");
+  fullRequest.operations[0].selectors = [
+    {
+      kind: "function",
+      scope: "api::refine",
+      signature: "int (int, int)",
+      definition: true,
+    },
+  ];
+  const shared = await planner.plan(before, fullRequest);
   planner.acknowledge(before, shared.after);
   const current = {
     ...shared.after,

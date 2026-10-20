@@ -75,3 +75,47 @@ test("real Pi invokes one isolated current-atom edit per bash call and retains d
     3,
   );
 });
+
+test("a scripted editor compiler failure remains infrastructure rather than a provider outage", async (t) => {
+  const root = await mkdtemp(path.resolve(".tmp/pi-atomic-failure-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  await mkdir(workspace);
+  await writeFile(
+    path.join(workspace, "main.cpp"),
+    "int helper(int value) { return missing_helper(value); }\n",
+  );
+  const operation = {
+    phase: "names",
+    category: "helpers",
+    file: "main.cpp",
+    mapping: [{ from: "helper", to: "restored" }],
+  };
+  const task = {
+    id: "broken-compiler-input",
+    operations: [operation],
+    prompt: coherentTaskPrompt("Rename the file-local helper", [operation]),
+  };
+  const tools = path.join(root, "executor");
+  await prepareConcurrentExecutor(tools);
+  const createDriver = scriptedPiFactory({
+    runtime: process.env.RENDERER_PI_RUNTIME,
+    tools,
+    tasks: new Map([[task.id, task]]),
+    artifacts: path.join(root, "artifacts"),
+  });
+  const driver = await createDriver(workspace, path.join(root, "state"), 0);
+  t.after(() => driver.close());
+  await assert.rejects(driver.execute(task.prompt, { atomicId: task.id }), (error) => {
+    assert.equal(error.category, "infrastructure");
+    assert.match(error.message, /^Compiler AST failed:/);
+    assert.match(error.message, /missing_helper/);
+    assert.ok(error.execution.sessionId);
+    assert.ok(error.execution.failedToolCalls > 0);
+    return true;
+  });
+  assert.equal(
+    await readFile(path.join(workspace, "main.cpp"), "utf8"),
+    "int helper(int value) { return missing_helper(value); }\n",
+  );
+});

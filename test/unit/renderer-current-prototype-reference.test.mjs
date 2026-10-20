@@ -114,7 +114,15 @@ await test("a local binding outside headers retains the legal separate-translati
       '#include "api.h"\nstatic int helper(int x) { return x + 1; }\nint other() { return helper(1); }\n',
   };
   const task = request("first", "left");
-  task.operations[0].selectors[0].owner.definition = true;
+  const owner = task.operations[0].selectors[0].owner;
+  task.operations[0].selectors = [
+    {
+      kind: "function",
+      scope: owner.scope,
+      signature: owner.signature,
+      definition: true,
+    },
+  ];
   const result = await planner.plan(before, task);
   assert.deepEqual(result.after, {
     ...before,

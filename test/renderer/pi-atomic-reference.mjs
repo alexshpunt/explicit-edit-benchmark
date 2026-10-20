@@ -86,6 +86,7 @@ export function scriptedPiFactory({ runtime, tools, tasks, artifacts, signal }) 
         const task = tasks.get(metadata.atomicId);
         assert.ok(task && prompt.startsWith(task.prompt), "Missing current public atomic node");
         current = { task, prompt, token: randomUUID(), invoked: false, receipt: undefined };
+        const errorOffset = provider.errors.length;
         try {
           const result = await driver.execute(prompt, metadata);
           assert.ok(current.invoked && current.receipt, "No actual Pi bash edit was observed");
@@ -93,8 +94,14 @@ export function scriptedPiFactory({ runtime, tools, tasks, artifacts, signal }) 
           assert.equal(result.failedToolCalls, 0);
           return { ...result, scriptedReference: current.receipt };
         } catch (error) {
-          if (provider.errors.length)
-            error.message += `; scripted fixture: ${provider.errors.map((item) => item.message).join("; ")}`;
+          if (provider.errors.length > errorOffset) {
+            const cause = provider.errors[errorOffset];
+            // A failed reference edit can close this local fixture's HTTP reply.
+            // Keep the editor failure primary; it is not a paid provider outage.
+            cause.category = "infrastructure";
+            cause.execution = error.execution;
+            throw cause;
+          }
           throw error;
         } finally {
           current = undefined;
