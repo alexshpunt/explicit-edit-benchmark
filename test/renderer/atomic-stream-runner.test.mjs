@@ -511,6 +511,34 @@ await test(
     );
 
     await t.test(
+      "a proof for an earlier dispatch contract rejects before driver startup",
+      async () => {
+        const manifestFile = path.join(preparation, "manifest.json");
+        const original = await readFile(manifestFile, "utf8");
+        const manifest = JSON.parse(original);
+        const output = path.join(root, "invalid-dispatch-contract");
+        manifest.atomic.dispatchPolicySha256 = "0".repeat(64);
+        await writeFile(manifestFile, JSON.stringify(manifest));
+        let opened = false;
+        try {
+          await assert.rejects(
+            runConcurrent(preparation, output, {
+              log: quiet,
+              createDriver: async () => {
+                opened = true;
+                throw Error("Driver must not start");
+              },
+            }),
+            /Atomic dispatch policy changed/,
+          );
+          assert.equal(opened, false);
+          await assert.rejects(access(output), { code: "ENOENT" });
+        } finally {
+          await writeFile(manifestFile, original);
+        }
+      },
+    );
+    await t.test(
       "wrong reference participant or atomic inventory counts reject before driver startup",
       async () => {
         for (const [field, value, message] of [
