@@ -142,6 +142,10 @@ function selectedDeclarations(
         fileHelper:
           (role === "variable" && !functionOwner) || (node.kind === "FunctionDecl" && !owner),
         owner: functionOwner,
+        localDefinition:
+          functionOwner?.definition === true &&
+          (node.kind === "ParmVarDecl" ||
+            (node.kind === "VarDecl" && node.storageClass !== "extern")),
       };
       onDeclaration?.(declaration);
       for (const request of requests) {
@@ -392,6 +396,9 @@ export async function currentNamingSelectors(
  * it does not alter selected bindings or expose saved restoration locations.
  * allowAbsentOwners is for callers merging separate translation units: that caller
  * must reject any mapping missing from the combined plans. Ordinary sessions stay strict.
+ * plan(request, { localDefinitionOnly: true }) additionally requires a compiler-
+ * proven parameter or non-extern local in this view's physical implementation.
+ * This rejects namespace bindings and included-header definitions before edits.
  */
 export async function scopedNamingSession(
   tree,
@@ -488,8 +495,17 @@ export async function scopedNamingSession(
   }
   return {
     close: () => compiler?.close(),
-    async plan(request) {
+    async plan(request, { localDefinitionOnly = false } = {}) {
       const selection = select(request);
+      if (
+        localDefinitionOnly &&
+        selection.some(
+          (entry) =>
+            !entry.localDefinition ||
+            image.physical(entry.offset, Buffer.byteLength(entry.name)).file !== file,
+        )
+      )
+        throw Error("Unsupported local reference outside the selected implementation definition");
       notify(selection);
       if (allowAbsentOwners && !selection.length) {
         return { id: request.id ?? request.target, edits: [] };
