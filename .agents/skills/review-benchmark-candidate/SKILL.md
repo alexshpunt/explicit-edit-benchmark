@@ -38,9 +38,12 @@ If acceptance succeeds but the receipt or close request fails, keep the Dataset 
 
 The common tables cover different suite contracts. Read the declared suite's
 result guide before interpreting task credit, correction exhaustion or Score.
-For Multi-Agent, check joint barrier acceptance rather than summing participant
-successes. An unreached suffix is not an infrastructure failure. The suite's
-approved identity and fixed policy are distinct from the original 226-task rules.
+For Multi-Agent, check joint barrier acceptance rather than summing atomic or
+participant successes. Verify the atomic identity and distinguish atomic rows
+from global `barrier-repair` deliveries; retained completions do not create new
+native receipts or Score tasks. Read `docs/multi-agent-results.md` for those
+rules. An unreached suffix is not an infrastructure failure. The suite's approved
+identity and fixed policy are distinct from the original 226-task rules.
 
 ### Manual investigation
 

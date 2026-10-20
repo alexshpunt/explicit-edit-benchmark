@@ -4,9 +4,10 @@ The separate public candidate is **Explicit Edit — Multi-Agent**. Start with i
 [clean-checkout run guide](multi-agent.md); this document describes the
 underlying experiment and scripted execution details.
 
-This experiment uses the complete coherent restoration workload, not a smaller
-parallel-only task set. It keeps the same initial shuffled C++ monolith and the
-same public tasks. It is separate from V1 results and publication.
+The diagnostic route uses the complete coherent restoration workload, not a
+smaller parallel-only task set. It keeps the same initial shuffled C++ monolith
+and 71 parent scoring groups, split into atomic requests. Its direct Pi commands
+below are not the harness-independent common run and publication route.
 
 ## Find safe parallel work first
 
@@ -25,8 +26,8 @@ All bodies, literals, inactive branches and macro contexts are still checked.
 
 The default team size is the maximum antichain of the derived DAG, not a hardcoded
 model setting. Its width is a potential concurrency limit, not a claim that every
-checkpoint fills the team. A team of one keeps the original task order. Private
-contracts and the graph never enter an agent's mount.
+checkpoint fills the team. A diagnostic team of one keeps the original parent-task
+route. Private contracts and the graph never enter an agent's mount.
 
 Preparation compares cumulative obligations in forward and reverse publication
 order within every ready wave, for every supported team size. Every route must
@@ -38,26 +39,31 @@ extraction from the initial monolith, with fresh builds and repeated renders.
 
 Each agent has its own persistent process and conversation. Every process binds
 the same writable workspace. Agents receive only their current public task, not
-future tasks, trusted contracts or expected source. Ownership rotates between
-agents at checkpoints. There are no separate worktrees whose answers are merged
-later.
+future tasks, private binding plans, trusted contracts or expected source. Each
+free participant receives one ready atomic request; ownership rotates at actual
+dispatch, not just at checkpoints. A busy participant cannot receive another
+active request. There are no separate worktrees whose answers are merged later.
 
-Every multi-agent assignment and correction states the total team size, how many
-other agents share the project, and how many agents have assignments in the current
-round. Waiting agents are not counted as current editors. A single-agent run omits
-this notice.
+Every multi-agent delivery states the persistent team size and the current
+number of active editing deliveries. Waiting participants are not counted as
+current editors. The public scored suite fixes the pool at 15; smaller diagnostic
+teams do not become scored observations. See the [stream policy](multi-agent.md#run-policy-and-score)
+for verified-only dependencies, pending peer observations and correction behavior.
 
-After all assigned agents settle, the verifier checks the combined cumulative
-obligations, builds a fresh project and renders two scenes twice. Exact pixels
-must still match. It also checks that source did not change after the barrier.
-Earlier accepted work is part of every later check.
+Lightweight gates verify atomic outputs between deliveries and recheck inputs
+before dependent dispatch. At each full barrier, all active writers drain before
+the verifier checks cumulative obligations, builds a fresh project and renders
+two scenes twice. Exact pixels must still match. It also checks that source did
+not change after grading. Earlier accepted work is part of every later check.
 
-A failed checkpoint allows three corrections with coarse feedback: requirements
-not met, build failed, or rendered images differ. Failed source and conversations
-are retained; nothing resets to an answer. Exhaustion stops the jointly verified
-prefix. The runner does not invent individual scores for a failed team checkpoint.
-Provider, driver and infrastructure failures are separate from editing failures.
-There is no overall or per-attempt deadline by default; cancellation remains active.
+A failed full barrier allows five corrections after the initial attempt. Source,
+conversations and still-valid atomic completions are retained; nothing resets to
+an answer. If all atoms remain verified but full grading fails, one participant
+receives a global barrier repair within that same six-attempt budget. Exhaustion
+stops the jointly verified prefix. Only the original parent groups earn Score
+credit; there is no individual-agent score. Provider, driver and infrastructure
+failures remain separate from editing failures. There is no overall or per-attempt
+deadline by default; cancellation remains active.
 
 ## Scripted reference and resource use
 
@@ -66,17 +72,24 @@ compare-and-commit lock. A stale snapshot writes nothing; the editor rereads and
 replans. Multi-file publication and consistent reads use this same lock. Planning
 happens outside it. Live agents are not required to use this editing technique.
 
-Reference receipts are emitted only after owned compiler-slot cleanup finishes.
-Empty reference control directories are not source, and their removal may overlap
-with another worker's read. Nonempty control directories are rejected rather than
-allowing candidate code to hide inside them.
+A settled delivery does not close the shared compiler analysis. The last
+participant closes the planning service; cancellation waits for owned namespace
+teardown, including compiler children, before settlement. Empty reference control
+directories are not source, and their removal may overlap another worker's read.
+Nonempty control directories are rejected rather than allowing candidate code
+to hide inside them.
 
-Full-project compiler ASTs are memory-heavy. The reference has two overlapping
-compiler slots, shared by the persistent agents, and a disposable compiler child
-for each planning attempt. This bounds reference memory without reducing the
-benchmark team or restricting live tools. Reference planning, source publication
-and agent concurrency are different things; the report records the reference
-slot count separately. Safe reference conflicts are counted, not graded as failures.
+Full-project compiler ASTs are memory-heavy. Persistent reference participants
+share one isolated current-task planning slot. It accepts only requests already
+dispatched to those participants, never future tasks, prepared token plans, gates
+or expected trees. Compatible analysis is reused only while acknowledged reference
+edits explain the actual source; incompatible or unexplained changes invalidate
+it. Owned namespaces close before cancellation settles.
+
+One analysis slot is not a one-agent limit: reference planning, source publication
+and participant concurrency are different things. It does not restrict live tools
+or reduce the public 15-participant pool. Reports disclose reference slot use
+separately. Safe reference conflicts are counted, not graded as failures.
 
 The compiler's combined project view is only a fast path. If it cannot compile,
 reference analysis falls back to the actual separate translation units and merges
@@ -105,7 +118,9 @@ node src/suites/explicit-edit-multi-agent/execution/concurrent-run.mjs \
 
 The default team is graph-derived. An explicit team must be an integer from one
 to the calculated width. A successful scripted run saves `verification-N.json`
-for that exact team schedule. A live run refuses missing or mismatched proof.
+for that exact team schedule and atomic workload/binding/dispatch identities.
+A live run refuses a missing, coarse-only or mismatched proof. A graph check or
+partial certification cannot replace actual completion through all full barriers.
 
 The native Pi regression scenario uses a local deterministic provider, no paid
 model calls. It exercises overlapping delivery, separate persistent sessions,
@@ -119,17 +134,20 @@ RENDERER_CONCURRENT_OUTPUT=.tmp/concurrent-native-proof \
 
 ## Explicit live execution
 
-Live execution needs separate approval and a private provider configuration in
-the same format as the coherent Baseline Agent runner. It uses pinned Pi 1.0.1,
-bash only and an empty system prompt:
+The following diagnostic Pi route needs separate model-run approval and a private
+provider configuration in the coherent Baseline Agent format. It uses pinned
+Pi 1.0.1, bash only and an empty system prompt. For another harness or a public
+observation, use the [common run path](multi-agent.md#common-run-and-submission)
+instead:
 
 ```sh
 node src/suites/explicit-edit-multi-agent/execution/concurrent-run.mjs \
   .tmp/concurrent-prepared .tmp/concurrent-live auto PRIVATE_CONFIG_JSON
 ```
 
-Reports record the task/graph/schedule identities, actual assignments, execution
-timings, receipts, jointly accepted prefix and saved failed checks. Operating-system
+Reports record task/graph/schedule and atomic identities, actual dispatches,
+participant assignments, atomic output checks, execution timings, native receipts,
+retained and invalidated completions, jointly accepted prefix and saved failed checks. Operating-system
 commit order is observed, not prescribed or claimed to be reproducible. Keep raw
 reports, failed source, credentials and local machine settings out of Git and
 publication. This experiment does not publish results automatically.

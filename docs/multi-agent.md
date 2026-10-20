@@ -12,33 +12,52 @@ rendered output unchanged.
 
 ## Run policy and Score
 
-A scored run always uses **15 agents and all 71 tasks**. The dependency graph has
-width 15 and the schedule has 28 barriers. Only agents assigned ready tasks work
-at a barrier; the others wait. Assignments rotate between agents. Every assignment
-and correction discloses the total team size and the number currently assigned.
+A scored run always uses **15 persistent agents and all 71 scoring groups**, with
+28 full verification barriers. Each free participant receives one ready atomic
+request. A rename normally targets one compiler-certified binding and its bound
+uses, not just one textual mapping. A minimal group of overloads can form one
+naming unit only when the compiler proves that they share required call tokens
+and cannot be renamed independently. Overlapping rename plans alone are not proof.
+Semantic binding counts and atomic delivery counts remain separate. A structural
+request moves one definition or a genuinely inseparable unit with its required
+cleanup.
 
-The graph follows code dependencies and selector readiness, not task numbering.
-Independent monolith extractions can run together even when they edit the same
-file. Final monolith cleanup waits for the required module moves.
+The atomic graph follows code dependencies and selector readiness, not task
+numbering. Independent edits can run together in the same file. Only a passed
+lightweight structural check unlocks successors; a settled agent response does
+not. The controller rechecks prerequisites against the current source before
+dispatch. An unstable observation while peers write stays pending rather than
+becoming a completed edit or an automatic editing failure.
 
-Agents share the writable project, but have separate state and histories. They
-see the current assignment, not future tasks, private contracts, reference source
-or expected pixels. Existing harness adapters own their native continuation.
-The benchmark does not replace a selected harness with Baseline Agent.
+Assignments rotate among free participants. A busy participant never receives a
+second active delivery, and unrelated ready work need not wait for it. Agents
+share the writable project but keep separate state and histories. They see only
+the current request, not future tasks, private binding plans, contracts, reference
+source or expected pixels. Existing harness adapters own native continuation;
+the benchmark does not replace a selected harness with Baseline Agent.
 
-After assigned agents settle, the verifier checks cumulative obligations, builds
-a fresh isolated project and renders two scenes twice. All four outputs must
-match the pinned pixels. Earlier accepted edits remain obligations, and source
-must not change after the barrier.
+Lightweight checks verify individual edits between deliveries. At each of the
+28 full barriers, the runner drains active writers, checks cumulative obligations,
+builds a fresh isolated project and renders two scenes twice. All four outputs
+must match the pinned pixels. Only this full check grants joint credit to the
+barrier's original scoring groups. Atomic passes do not earn separate Score credit.
+Earlier accepted edits remain obligations, and source must not change after grading.
 
-A failed barrier allows three corrections with coarse feedback: requirements not
-met, build failed, or images differ. Failed edits and histories remain. There is
-no reset or fresh retry. Exhausting corrections stops the accepted prefix.
-Provider, driver, infrastructure and cancellation stops are recorded separately.
+A failed barrier allows **five corrections after the initial attempt**, for six
+attempts in total. Feedback stays coarse: requirements not met, build failed, or
+images differ. Corrections retain source, participant histories and valid completed
+edits; regressed prerequisites and their dependents lose completion. When all
+atomic outputs remain verified but full grading fails, one free participant gets
+a separate global barrier-repair delivery. It uses the same correction budget,
+not a hidden per-edit retry. Exhaustion stops the accepted prefix. Provider,
+driver, infrastructure and cancellation stops are recorded separately.
 
-**Score is jointly accepted tasks / 71.** A partly completed failed barrier earns
-no task credit. There is no individual-agent score. Duration, cost and correction
-counts do not weight Score. The original suite keeps its existing Score.
+**Score = 75% first-pass success + 25% eventual success**, weighted by the same
+71 scoring groups. First-pass means the group's full barrier passed on its initial
+attempt; eventual means it passed within the six-attempt budget. A partly completed
+failed barrier earns no task credit. There is no individual-agent score. Duration,
+cost and delivery counts are not Score weights. Rankings remain separate from the
+original suite.
 
 **Local team runs have no overall or delivery deadline.** They can continue
 indefinitely and spend model credit. Cancel with Ctrl+C or SIGTERM. Owned agent
@@ -79,9 +98,10 @@ npm run benchmark -- run --local --suite explicit-edit-multi-agent \
 ```
 
 The common flow checks the adapter, performs a one-task model/auth smoke check,
-prepares the workload and requires a matching 15-agent scripted proof before
-starting the measured team. Teams for different configurations run sequentially;
-each measured team has its own project and participant state.
+prepares the workload and requires a matching full 15-agent atomic scripted proof
+before starting the measured team. A smoke check or partial certification is not
+that proof. Teams for different configurations run sequentially; each measured
+team has its own project and participant state.
 
 There is no scored `--task`, smaller team, fresh retry or finite timeout option
 for this suite. `--concurrency 15` is accepted but is already the default.
@@ -106,12 +126,16 @@ npm run benchmark:multi-agent -- verify \
 ```
 
 These are developer/reference commands, not a second model-result protocol.
-`prepare` generates the named, shuffled monolith, proves the full restoration
-route and coherent goals, then checks the concurrent graph. `verify` executes
-the real parallel schedule with isolated scripted editors using public tasks.
-A graph check alone is not a parallel execution proof.
+`prepare` generates the named, shuffled monolith, verifies the restoration route
+and coherent goals, then seals certified atomic requests, private binding batches
+and their graph. `verify` executes the actual atomic stream through the same
+scheduler and gates, with isolated scripted editors receiving current public
+requests only. Measured execution requires a completed proof for the current
+workload, atomic inventory, dispatch policy and exact participant count. Old coarse
+delivery proofs, graph checks and partial certification are not substitutes.
 
-An explicitly selected, matching coherent preparation can be reused:
+An explicitly selected coherent preparation can be reused only when its current
+certified binding records, hashes and completed coherent proof match:
 
 ```sh
 npm run benchmark:multi-agent -- prepare .tmp/multi-agent-input \
@@ -131,11 +155,12 @@ npm run benchmark -- export results/RUN_ID
 npm run benchmark -- inspect results/RUN_ID/normalized
 ```
 
-Schema 3 adds task/barrier/participant links to the common five tables. Tool
-calls, model rounds, errors, usage and cost come from the selected harness's
-native events. Missing facts stay null. Every delivery is counted once, even
-when its assignment contains several tasks. Team time is wall-clock time, not
-summed parallel process time. See the [result contract](multi-agent-results.md).
+Schema 3 links atomic deliveries, participants and full grading barriers in the
+common five tables. Tool calls, model rounds, errors, usage and cost come from the
+selected harness's native events. Missing facts stay null. Native evidence is
+counted once per actual delivery, including global barrier repair. Retaining a
+completed edit does not fabricate another delivery. Team time is wall-clock time,
+not summed parallel process time. See the [result contract](multi-agent-results.md).
 
 A valid local bundle is not authenticated evidence. Ordinary submissions use
 the existing unverified contribution path. Official submissions use the existing
@@ -146,24 +171,28 @@ signed archive and attestation path, with an explicitly approved suite registry.
 The producer and validator support suite selection, but the currently deployed
 policy and external caller template do not yet authorize this suite. Maintainers
 must approve canonical workload, graph, schedule, fixture and verifier identities,
-release the pinned workflow and update the caller's suite input before official
-Multi-Agent runs can be used. Unapproved runs must stop before model calls; old
-release pins do not silently authorize a new benchmark. Nothing in this guide
-performs that release or publishes a reference proof as a model observation.
+plus atomic workload and private-batch hashes, dispatch policy and complete atomic
+inventory. This requires a fresh reviewed model-free proof of all 71 groups and
+28 barriers through the atomic stream. They must then release the pinned workflow
+and update the caller's suite input before official Multi-Agent runs can be used.
+The gate remains closed without that proof and activation. Old coarse or
+experimental evidence must not be relabelled as atomic authorization. Nothing in
+this guide performs that release or publishes a reference proof as a model
+observation.
 
 ## Source layout
 
 Both suites live under `src/suites/`. Multi-Agent keeps orchestration and result
 identity at its root, with these clusters:
 
-| Directory     | Responsibility                                        |
-| ------------- | ----------------------------------------------------- |
-| `generation/` | Pack, rename and shuffle the pinned input             |
-| `tasks/`      | Goals, current selectors, dependencies and schedules  |
-| `execution/`  | Participants, corrections and cancellation            |
-| `grading/`    | Cumulative obligations, fresh builds and exact pixels |
-| `reference/`  | Isolated scripted editors and compare-and-commit      |
-| `cpp/`        | Tokens, structure, compiler AST and binding helpers   |
+| Directory     | Responsibility                                          |
+| ------------- | ------------------------------------------------------- |
+| `generation/` | Pack, rename and shuffle the pinned input               |
+| `tasks/`      | Goals, current selectors, dependencies and schedules    |
+| `execution/`  | Participants, corrections and cancellation              |
+| `grading/`    | Atomic gates, cumulative obligations, builds and pixels |
+| `reference/`  | Isolated scripted editors and compare-and-commit        |
+| `cpp/`        | Tokens, structure, compiler AST and binding helpers     |
 
 Input files are in `fixtures/explicit-edit-multi-agent/`. The original suite
 instead generates its small inputs and expected output in code. Older pilot,

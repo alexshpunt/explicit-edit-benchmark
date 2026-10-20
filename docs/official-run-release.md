@@ -21,17 +21,26 @@ To revoke future acceptance, change an approved workflow entry from `active` to 
 
 ## Multi-Agent release evidence
 
-`policies/official-runs/multi-agent-v1.json` is a reviewed reference-proof record,
-not a contributor observation. It records the tested source commit, exact fixture
-and suite identities, the canonical 71 tasks, graph and 15-agent schedule, and
-hashes of the completed model-free proof. It contains no raw source, prompts,
-credentials or machine paths.
+A Multi-Agent release requires a reviewed maintainer-owned reference record at
+`policies/official-runs/multi-agent-v1.json`, not a contributor observation. It
+must bind the tested source, fixture and verifier, canonical 71 groups, graph and
+15-agent schedule, plus the atomic workload hash, private binding-batch hash,
+dispatch-policy hash and complete inventory count. Raw plans, source, prompts,
+credentials and machine paths do not belong in that record.
+
+Approval requires a fresh model-free proof that completes all 71 groups and
+28 full barriers through the current atomic scheduler and gates, with no repairs
+and unchanged repeated pixels. The record binds both the raw proof report and
+normalized evidence hashes. Partial certification, a graph audit or an old coarse
+proof cannot authorize the stream. The retained experimental record is not this
+approval; the official gate remains closed until a matching atomic proof has
+been reviewed and the releases activated.
 
 The release command checks the current fixture and suite against that record
-before adding Multi-Agent to the trusted policy. A changed fixture or suite needs
-a new reviewed full reference proof; a release never approves new hashes merely
-because a submitted result is self-consistent. Original task identities, schemas
-and time limits stay unchanged.
+before adding Multi-Agent to trusted policy. Changed suite or atomic identities
+need a new reviewed full proof; a release never approves new hashes merely
+because a submitted result is self-consistent. Public Multi-Agent identity stays
+v1. The original suite's task identities, schemas and time limits stay unchanged.
 
 The same command upgrades each caller's run and recovery workflows. The run
 workflow forwards a suite selector to the reusable producer. Empty concurrency
