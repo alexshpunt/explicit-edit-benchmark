@@ -6,6 +6,9 @@ import {
   MULTI_AGENT_PROTOCOL,
   MULTI_AGENT_POLICY,
   MULTI_AGENT_MAX_ATTEMPTS,
+  atomicDeliveryIds,
+  latestStreamDeliveries,
+  validateAtomicParents,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const statuses = new Set([
@@ -74,11 +77,12 @@ export function validateAtomicDelivery(atomicId, taskIds, barrierTasks) {
 /** Bind either one atomic edit or one retained-state global correction to its barrier. */
 export function validateStreamDelivery(delivery, taskIds, barrierTasks, attempt) {
   if (!Object.hasOwn(delivery, "deliveryKind")) {
-    validateAtomicDelivery(delivery.atomicId, taskIds, barrierTasks);
+    validateAtomicParents(delivery, taskIds, barrierTasks);
     return;
   }
   assert.equal(delivery.deliveryKind, "barrier-repair", "Unsupported stream delivery kind");
   assert.ok(!Object.hasOwn(delivery, "atomicId"), "Global repair cannot name an atomic ID");
+  atomicDeliveryIds(delivery);
   assert.ok(attempt > 1, "Global repair cannot be an initial delivery");
   assert.ok(Array.isArray(taskIds));
   assert.deepEqual(
@@ -217,7 +221,7 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
             const earlier = deliveries
               .slice(0, index)
               .filter((item) => Object.hasOwn(item, "atomicId"));
-            const retained = new Map(earlier.map((item) => [item.atomicId, item]));
+            const retained = latestStreamDeliveries(earlier);
             assert.ok(
               previous?.length && previous[0].difference === "other" && !previous[0].exactPassed,
               "Global repair lacks a failed barrier",
@@ -227,7 +231,7 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
               "Global repair has failed retained atomic receipts",
             );
             assert.ok(
-              trial.taskIds.every((task) => earlier.some((item) => item.taskIds[0] === task)),
+              trial.taskIds.every((task) => earlier.some((item) => item.taskIds.includes(task))),
               "Global repair lacks retained parent deliveries",
             );
           }
@@ -245,8 +249,9 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
         assert.ok(
           !group.some((item) =>
             atomic
-              ? (item.deliveryKind ?? item.atomicId) ===
-                (delivery.deliveryKind ?? delivery.atomicId)
+              ? item.deliveryKind || delivery.deliveryKind
+                ? item.deliveryKind === delivery.deliveryKind
+                : atomicDeliveryIds(item).some((id) => atomicDeliveryIds(delivery).includes(id))
               : item.agent === delivery.agent,
           ),
           "Duplicate participant delivery",
@@ -280,13 +285,11 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
           attempts.get(ordered.at(-1))?.[0].exactPassed ?? false,
         );
         if (trial.finalExactPassed) {
-          const latest = new Map(
-            deliveries.map((item) => [item.deliveryKind ?? item.atomicId, item]),
-          );
+          const latest = latestStreamDeliveries(deliveries);
           assert.ok(
             trial.taskIds.every((task) =>
               deliveries.some(
-                (item) => Object.hasOwn(item, "atomicId") && item.taskIds[0] === task,
+                (item) => Object.hasOwn(item, "atomicId") && item.taskIds.includes(task),
               ),
             ),
             "Joint accepted barrier lacks parent task deliveries",

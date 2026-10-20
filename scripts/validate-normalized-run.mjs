@@ -194,7 +194,9 @@ function parseJsonLines(content, name, schemaVersion) {
                   "agent",
                   "barrierAttempt",
                   "taskIds",
-                  ...["atomicId", "deliveryKind"].filter((field) => Object.hasOwn(row, field)),
+                  ...["atomicId", "atomicIds", "deliveryKind"].filter((field) =>
+                    Object.hasOwn(row, field),
+                  ),
                 ]
               : []
           : [];
