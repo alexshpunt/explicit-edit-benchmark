@@ -3,15 +3,22 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /** Local no-cost provider. It sees only the real runtime's requests, not reference states. */
-export async function providerFixture(root, respond) {
+export async function providerFixture(
+  root,
+  respond,
+  { retainRequests = true, contextWindow = 100000 } = {},
+) {
   const requests = [];
+  const errors = [];
+  let requestCount = 0;
   const server = createServer(async (req, res) => {
     try {
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks).toString());
-      requests.push(body);
-      const result = respond(body, requests.length);
+      const number = ++requestCount;
+      if (retainRequests) requests.push(body);
+      const result = await respond(body, number);
       if (result?.error) {
         res.writeHead(result.status ?? 401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: result.error } }));
@@ -24,7 +31,7 @@ export async function providerFixture(root, respond) {
             tool_calls: [
               {
                 index: 0,
-                id: `call-${requests.length}`,
+                id: `call-${number}`,
                 type: "function",
                 function: { name: "bash", arguments: JSON.stringify({ command: result.command }) },
               },
@@ -32,13 +39,14 @@ export async function providerFixture(root, respond) {
           }
         : { content: "done" };
       res.write(
-        `data: ${JSON.stringify({ id: `msg-${requests.length}`, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`,
+        `data: ${JSON.stringify({ id: `msg-${number}`, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`,
       );
       res.write(
         `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: result.command ? "tool_calls" : "stop" }], usage: result.usage ?? { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } })}\n\n`,
       );
       res.end("data: [DONE]\n\n");
     } catch (error) {
+      errors.push(error);
       res.destroy(error);
     }
   });
@@ -57,7 +65,7 @@ export async function providerFixture(root, respond) {
             {
               id: "deterministic",
               reasoning: false,
-              contextWindow: 100000,
+              contextWindow,
               maxTokens: 4096,
               cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
             },
@@ -68,6 +76,8 @@ export async function providerFixture(root, respond) {
   );
   return {
     requests,
+    errors,
+    endpoint: `http://127.0.0.1:${server.address().port}/v1`,
     config: {
       runtime: process.env.RENDERER_PI_RUNTIME,
       model: "fixture/deterministic",
