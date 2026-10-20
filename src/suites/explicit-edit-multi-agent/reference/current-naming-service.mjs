@@ -7,6 +7,7 @@ import { scopedNamingSession, applyScopedNamePlan } from "../cpp/scoped-names.mj
 import { treeIdentity } from "../generation/generator.mjs";
 import { cppTokens, includeDirectives } from "../cpp/cpp-tokens.mjs";
 import { joinedProject } from "../cpp/joined-project.mjs";
+import { cppStructure } from "../cpp/cpp-structure.mjs";
 
 const execFile = promisify(execFileCallback);
 
@@ -85,9 +86,10 @@ const unrelatedFunctionRequest = (task, spellings) =>
           ),
       ),
   );
-// A fully owned local binding cannot have uses outside its function definition.
-// Select its actual TU only when every source spelling is physically confined to
-// one implementation, with no alternate include context or manufactured spelling.
+// Use the unique physical function-definition candidate, not uniqueness of the
+// variable's spelling across unrelated owners. This only chooses a compiler view:
+// its AST must still prove the exact owner and a definition-local binding in that
+// implementation. Alternate include contexts and manufactured spellings reject it.
 function localTranslationUnit(tree, task) {
   if (
     !task.operations.every((operation) => {
@@ -109,14 +111,32 @@ function localTranslationUnit(tree, task) {
     })
   )
     return undefined;
-  const names = task.operations.map((operation) => operation.mapping[0].from);
-  const spelling = new RegExp(`\\b(?:${names.join("|")})\\b`);
+  const owners = new Set(
+    task.operations.map((operation) => operation.selectors[0].owner.scope.split("::").at(-1)),
+  );
+  if ([...owners].some((name) => !/^[A-Za-z_]\w*$/.test(name))) return undefined;
   let selected;
   for (const [file, source] of Object.entries(tree)) {
     const joined = source.replace(/\\\r?\n/g, "");
     if (/\?\?[/=]/.test(joined)) return undefined;
-    if (!spelling.test(joined)) continue;
-    if (!file.endsWith(".cpp") || (selected && selected !== file)) return undefined;
+    if (!file.endsWith(".cpp") || ![...owners].every((name) => joined.includes(name))) continue;
+    let definitions;
+    try {
+      definitions = cppStructure(joined, { expandNamespaceConditionals: true }).units.filter(
+        (unit) => unit.definition,
+      );
+    } catch {
+      return undefined;
+    }
+    const found = new Set();
+    for (const unit of definitions) {
+      const text = joined.slice(unit.start, unit.end);
+      const header = text.slice(0, text.indexOf("{"));
+      for (const token of cppTokens(header))
+        if (owners.has(token.text) && /^\s*\(/.test(header.slice(token.end))) found.add(token.text);
+    }
+    if (![...owners].every((name) => found.has(name))) continue;
+    if (selected && selected !== file) return undefined;
     selected = file;
   }
   if (!selected) return undefined;
@@ -211,10 +231,10 @@ async function headerRequest(tree, task, readActiveMacros) {
  * Structural/unknown mutations, helper-view changes and affected type selectors
  * invalidate reuse. Separate-TU fallback is deliberately disposable. No candidate mount may
  * contain this cache: run it inside the isolated reference service namespace.
- * Fully definition-owned locals whose source spellings occur in just one .cpp
+ * Fully definition-owned locals with one physical implementation owner candidate
  * may compile that actual translation unit and its includes. Token pasting in
- * that view, project trigraph ambiguity, spelling in another file (after line
- * splicing), or an include of that implementation rejects this optimization. Complete source
+ * that view, project trigraph ambiguity, a repeated implementation owner or an
+ * include of that implementation rejects this optimization. Complete source
  * identity, current owner/signature selection and errors in that TU still apply.
  * An already valid complete-project snapshot takes priority over a narrower
  * local view; unexplained whole-source changes still invalidate that reuse.
@@ -420,6 +440,9 @@ export function currentNamingPlanner(directory, { signal } = {}) {
                 (await headerRequest(before, task, readActiveMacros))
                   ? headerBindings
                   : undefined));
+        const localDefinitionOnly =
+          typeof file === "string" &&
+          task.operations.every((operation) => operation.category === "locals-parameters");
         const retainedTypes =
           plainTypeRequest(task) ||
           unrelatedOwnedTypeRequest(task, state?.typeSpellings ?? new Set());
@@ -446,7 +469,8 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         let plans;
         try {
           plans = [];
-          for (const operation of task.operations) plans.push(await state.session.plan(operation));
+          for (const operation of task.operations)
+            plans.push(await state.session.plan(operation, { localDefinitionOnly }));
         } catch (error) {
           // The indexed public selector may have become stale after a known scope
           // or written signature rename. Reopen the ACTUAL source, never translate
@@ -467,7 +491,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           try {
             plans = [];
             for (const operation of task.operations)
-              plans.push(await state.session.plan(operation));
+              plans.push(await state.session.plan(operation, { localDefinitionOnly }));
           } catch (freshError) {
             invalidate();
             throw freshError;
