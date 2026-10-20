@@ -406,23 +406,20 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           pending = { key, before: identity, after, disposable: true };
           return { after, statistics: { ...statistics } };
         };
-        let file =
+        // An explained full view already covers semantic requests. Choose it
+        // before probing a narrower view: that probe may itself run Clang's
+        // preprocessor. Unknown source still takes the complete selection path,
+        // and the type/owner guards below still decide whether reuse is valid.
+        const file =
           task.operations[0].category === "helpers"
             ? task.operations[0].file
-            : (localTranslationUnit(before, task) ??
-              (Object.keys(before).some((name) => headerPath.test(name)) &&
-              (await headerRequest(before, task, readActiveMacros))
-                ? headerBindings
-                : undefined));
-        // A valid complete view already covers these locals. Do not discard it
-        // merely because a newly delivered spelling permits a narrower view.
-        if (
-          (file === headerBindings || task.operations[0].category === "locals-parameters") &&
-          state &&
-          state.file === undefined &&
-          state.expected === identity
-        )
-          file = undefined;
+            : state && state.file === undefined && state.expected === identity
+              ? undefined
+              : (localTranslationUnit(before, task) ??
+                (Object.keys(before).some((name) => headerPath.test(name)) &&
+                (await headerRequest(before, task, readActiveMacros))
+                  ? headerBindings
+                  : undefined));
         const retainedTypes =
           plainTypeRequest(task) ||
           unrelatedOwnedTypeRequest(task, state?.typeSpellings ?? new Set());

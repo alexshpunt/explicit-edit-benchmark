@@ -66,7 +66,7 @@ function branches(source) {
 
 // Peel complete namespace-level branches. A declaration split across branches
 // stays one explicit opaque conditional, never a whole-file fallback.
-function owners(file, source) {
+function owners(file, source, details = true) {
   function visit(text, offset = 0, inheritedScope = "", conditions = []) {
     const result = [];
     for (const unit of cppStructure(text).units) {
@@ -94,8 +94,7 @@ function owners(file, source) {
         kind: unit.kind,
         opaque: unit.kind === "conditional",
         conditions,
-        selector: unitDeclarator(text, unit),
-        tokens: lexicalTokens(body),
+        ...(details ? { selector: unitDeclarator(text, unit), tokens: lexicalTokens(body) } : {}),
       });
     }
     return result;
@@ -149,19 +148,33 @@ export function atomicFileDirectives(source) {
 }
 /** Enumerate real lexical owner boundaries without inventing count-one records.
  * Each occurrence points at its authoritative aggregated coherent record. The
- * current tree supplies token ordinals after trusted structural replay.
+ * current tree supplies token ordinals after trusted structural replay. An optional
+ * exact-current contract avoids parsing its lexical inventory again; boundaries
+ * and tokens are still read from the supplied tree and aligned with that contract.
  */
-export function atomicFileOwners(tree) {
-  const contract = prepareCoherentContract(tree);
+export function atomicFileOwners(tree, { contract = prepareCoherentContract(tree) } = {}) {
   return Object.entries(tree).flatMap(([file, source]) => {
     const tokens = contractTokens(source);
-    const starts = new Map(tokens.map((token, index) => [token.start, index]));
-    return owners(file, source)
+    const firstTokenAt = (offset) => {
+      let first = 0,
+        last = tokens.length;
+      while (first < last) {
+        const middle = (first + last) >>> 1;
+        if (tokens[middle].start < offset) first = middle + 1;
+        else last = middle;
+      }
+      return first;
+    };
+    // Physical boundaries need neither compiler-site lexer tokens nor selectors.
+    // Reuse slices of this exact file's coherent tokens instead of tokenizing
+    // each owner again. Never carry positions across changed source bytes.
+    return owners(file, source, false)
       .filter((unit) => ["owner", "conditional"].includes(contractKind(unit)))
       .map((unit) => {
-        const local = contractTokens(source.slice(unit.start, unit.end));
-        const tokenStart = starts.get(unit.start + local[0]?.start);
-        if (tokenStart === undefined) throw Error("Missing naming owner token boundary");
+        const tokenStart = firstTokenAt(unit.start);
+        const local = tokens.slice(tokenStart, firstTokenAt(unit.end));
+        if (!local.length || local.at(-1).end > unit.end)
+          throw Error("Missing naming owner token boundary");
         return {
           record: ownerRecord(contract, unit, texts(local)),
           tokenStart,

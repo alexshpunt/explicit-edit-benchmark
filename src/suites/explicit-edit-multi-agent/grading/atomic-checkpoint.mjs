@@ -88,7 +88,7 @@ function projectionIndex(combined) {
   return cached;
 }
 
-function bindingProjection(combined, include, masksFor) {
+function bindingProjection(combined, include, masksFor, physical = false) {
   // Only topology belongs to the exact expected frontier. Current/peer masks
   // remain fresh when writer reservations or verified completion roles change.
   const { all, families, recordFor, shapes, shapeKeys } = projectionIndex(combined);
@@ -117,7 +117,7 @@ function bindingProjection(combined, include, masksFor) {
   const records = [];
   for (const { record, owners } of families.values()) {
     if (!owners.some((owner) => selected.has(owner))) continue;
-    if (!owners.some((owner) => occurrenceOwners.has(owner))) {
+    if (!physical && !owners.some((owner) => occurrenceOwners.has(owner))) {
       records.push({ ...record, masks: masksFor(owners[0]) });
       continue;
     }
@@ -315,31 +315,41 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
     );
     if (naming(node)) {
       const contract = combined.contract;
-      const projection = bindingProjection(
-        combined,
-        (owner) => owner.sites.some((site) => site.nodeId === id),
-        (owner) =>
-          owner.sites
-            .filter(
-              (site) =>
-                site.nodeId === id ||
-                (!completed.has(site.nodeId) &&
-                  (started.has(site.nodeId) ||
-                    settled.has(site.nodeId) ||
-                    writers.has(site.nodeId))),
-            )
-            .map((site) => ({
-              index: site.index,
-              from: site.from,
-              to: site.to,
-              role: site.nodeId === id ? "current" : "peer",
-            })),
-      );
-      return evaluateAtomicBindingGate(
-        tree,
-        { ...projection, familyRecords: contract.obligations },
-        { input, activeWrites, readInventory: readCandidate },
-      );
+      const project = (physical) =>
+        bindingProjection(
+          combined,
+          (owner) => owner.sites.some((site) => site.nodeId === id),
+          (owner) =>
+            owner.sites
+              .filter(
+                (site) =>
+                  site.nodeId === id ||
+                  (!completed.has(site.nodeId) &&
+                    (started.has(site.nodeId) ||
+                      settled.has(site.nodeId) ||
+                      writers.has(site.nodeId))),
+              )
+              .map((site) => ({
+                index: site.index,
+                from: site.from,
+                to: site.to,
+                role: site.nodeId === id ? "current" : "peer",
+              })),
+          physical,
+        );
+      const evaluate = (physical) =>
+        evaluateAtomicBindingGate(
+          tree,
+          { ...project(physical), familyRecords: contract.obligations },
+          { input, activeWrites, readInventory: readCandidate },
+        );
+      const result = evaluate(false);
+      // A wildcard type spelling may also match an unrelated overload. A
+      // count mismatch is not credit: recheck the same actual bytes with exact
+      // physical occurrences and all existing file/family preservation guards.
+      return result.records.some((record) => record.reason === "owner-or-count")
+        ? evaluate(true)
+        : result;
     }
     const gate = projectAtomicGate(combined.tree, combined.structural.get(id), {
       readInventory: readTrusted,
