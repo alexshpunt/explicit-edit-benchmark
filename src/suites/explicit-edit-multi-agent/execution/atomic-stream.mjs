@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { TASK_CONSTRAINTS_VERSION } from "../tasks/task-constraints.mjs";
 /** Versioned dispatch semantics bound into preparation and reference proofs.
  * Participant count and correction budget remain separate suite/run policies.
  */
@@ -9,6 +10,7 @@ export const ATOMIC_DISPATCH_POLICY = Object.freeze({
   dependencyCompletion: "verified-output",
   checkpoints: "drained-parent-barriers",
   barrierRecovery: "single-global-delivery",
+  taskConstraints: TASK_CONSTRAINTS_VERSION,
 });
 
 function graphState(nodes, completed) {
