@@ -11,6 +11,8 @@ export const ATOMIC_DISPATCH_POLICY = Object.freeze({
   checkpoints: "drained-parent-barriers",
   barrierRecovery: "single-global-delivery",
   taskConstraints: TASK_CONSTRAINTS_VERSION,
+  environment: "shared-project-facts-v1",
+  maxBatchSize: 10,
 });
 
 function graphState(nodes, completed) {
@@ -48,7 +50,7 @@ function graphState(nodes, completed) {
   return { byId, successors };
 }
 
-/** Dispatch one ready edit to each free persistent participant. Successors unlock
+/** Dispatch batches of independently ready edits to free persistent participants. Successors unlock
  * only after a structural gate passes. Pending observations release participants
  * for unrelated work and are reconsidered after a delivery changes source.
  * Admission permits one look-ahead delivery beyond the participant pool while
@@ -56,7 +58,10 @@ function graphState(nodes, completed) {
  * can continually invalidate the same stable-source observations.
  * Editing failure drains peers; operational failure aborts and awaits them.
  * The caller owns corrections and current-workspace completion revalidation.
- * execute(node, agent, signal, context) performs one delivery. verify(node, signal, receipt,
+ * executeBatch(nodes, agent, signal, context) performs one native delivery for up to
+ * batchSize edits (default 1, maximum 10). A small ready frontier is spread across
+ * free participants before filling batches. The singleton execute(node, ...) callback
+ * is available only with batchSize 1. verify(node, signal, receipt,
  * context) and optional checkInputs(node, signal, context) return true, false or
  * "pending". Context getters expose current writer state and copied sets:
  * completed alone unlocks successors; settled also includes unverified peer
@@ -81,6 +86,8 @@ export async function runAtomicStream(
     rotation = 0,
     signal,
     execute,
+    executeBatch,
+    batchSize = 1,
     verify,
     checkInputs = async () => true,
     onCase,
@@ -88,6 +95,16 @@ export async function runAtomicStream(
 ) {
   assert.ok(Number.isInteger(agents) && agents > 0, "Invalid atomic participant pool");
   assert.ok(Number.isInteger(rotation) && rotation >= 0, "Invalid atomic rotation");
+  assert.ok(
+    Number.isInteger(batchSize) &&
+      batchSize > 0 &&
+      batchSize <= ATOMIC_DISPATCH_POLICY.maxBatchSize,
+    "Invalid atomic batch size",
+  );
+  assert.ok(
+    typeof executeBatch === "function" || (batchSize === 1 && typeof execute === "function"),
+    "Missing atomic batch executor",
+  );
   assert.ok(onCase === undefined || typeof onCase === "function", "Invalid case observer");
   const done = new Set(completed);
   const dispatched = new Set([...started, ...completed]);
@@ -131,11 +148,14 @@ export async function runAtomicStream(
     onCase({ event: "case-end", id, phase: "atomic", status });
   }
   const context = () => ({
+    get activeDeliveries() {
+      return writers.size;
+    },
     get activeWrites() {
       return writers.size > 0;
     },
     get writers() {
-      return new Set(writers.values());
+      return new Set([...writers.values()].flat());
     },
     get started() {
       return new Set(dispatched);
@@ -158,32 +178,46 @@ export async function runAtomicStream(
     if (!controller.signal.aborted) controller.abort(error);
     return { id, agent, error };
   };
-  function launch(id, agent) {
-    const node = byId.get(id);
+  function launch(ids, agent) {
     const delivery = (async () => {
-      startCase(id);
-      const inputEpoch = epoch;
-      const inputs = outcome(await checkInputs(node, controller.signal, context()));
-      controller.signal.throwIfAborted();
-      if (inputs !== true) return { id, agent, passed: inputs, stage: "input", epoch: inputEpoch };
-      dispatched.add(id);
-      writers.set(agent, id);
-      cursor = (agent + 1) % agents;
-      advance();
-      let receipt;
-      try {
-        receipt = await execute(node, agent, controller.signal, context());
-      } finally {
-        writers.delete(agent);
+      const results = [];
+      const selected = [];
+      for (const id of ids) {
+        startCase(id);
+        const inputEpoch = epoch;
+        const inputs = outcome(await checkInputs(byId.get(id), controller.signal, context()));
+        controller.signal.throwIfAborted();
+        if (inputs === true) selected.push(byId.get(id));
+        else results.push({ id, passed: inputs, stage: "input", epoch: inputEpoch });
       }
-      controller.signal.throwIfAborted();
-      settled.add(id);
-      advance();
-      const outputEpoch = epoch;
-      const passed = outcome(await verify(node, controller.signal, receipt, context()));
-      controller.signal.throwIfAborted();
-      return { id, agent, passed, receipt, stage: "output", epoch: outputEpoch };
-    })().catch((error) => caught(id, agent, error));
+      if (selected.length) {
+        for (const node of selected) dispatched.add(node.id);
+        writers.set(
+          agent,
+          selected.map((node) => node.id),
+        );
+        cursor = (agent + 1) % agents;
+        advance();
+        let receipt;
+        try {
+          receipt = executeBatch
+            ? await executeBatch(selected, agent, controller.signal, context())
+            : await execute(selected[0], agent, controller.signal, context());
+        } finally {
+          writers.delete(agent);
+        }
+        controller.signal.throwIfAborted();
+        for (const node of selected) settled.add(node.id);
+        advance();
+        for (const node of selected) {
+          const outputEpoch = epoch;
+          const passed = outcome(await verify(node, controller.signal, receipt, context()));
+          controller.signal.throwIfAborted();
+          results.push({ id: node.id, passed, receipt, stage: "output", epoch: outputEpoch });
+        }
+      }
+      return { agent, results };
+    })().catch((error) => ({ ...caught(undefined, agent, error), ids }));
     active.set(agent, delivery);
   }
   function reconsider(id, waiting) {
@@ -218,13 +252,14 @@ export async function runAtomicStream(
       while (
         ready.length &&
         active.size < agents &&
-        active.size + deferredOutputs < agents + 1 &&
+        active.size + Math.ceil(deferredOutputs / batchSize) < agents + 1 &&
         !failed.length &&
         !controller.signal.aborted
       ) {
         let agent = cursor;
         while (active.has(agent)) agent = (agent + 1) % agents;
-        launch(ready.shift(), agent);
+        const count = Math.min(batchSize, Math.ceil(ready.length / (agents - active.size)));
+        launch(ready.splice(0, count), agent);
       }
       if (!controller.signal.aborted)
         for (const [id, waiting] of pending)
@@ -243,35 +278,41 @@ export async function runAtomicStream(
       if (result.agent === undefined) checking.delete(result.id);
       else active.delete(result.agent);
       if (result.error) {
-        endCase(result.id, "error");
+        for (const id of result.ids ?? [result.id]) endCase(id, "error");
         fatal ??= controller.signal.reason ?? result.error;
-      } else if (result.passed === "pending") {
-        // A deferred check may already be stale when its promise is consumed.
-        // Only a drained, unchanged frontier can turn pending into a block.
-        if (
-          !active.size &&
-          !checking.size &&
-          (!ready.length || failed.length || result.stage === "output") &&
-          result.epoch === epoch
-        )
-          failed.push(result.id);
-        else
-          pending.set(result.id, {
-            receipt: result.receipt,
-            stage: result.stage,
-            epoch: result.epoch,
-          });
-      } else if (!result.passed) {
-        endCase(result.id, "fail");
-        failed.push(result.id);
       } else {
-        endCase(result.id, "pass");
-        done.add(result.id);
-        advance();
-        for (const next of successors.get(result.id)) {
-          const count = remaining.get(next) - 1;
-          remaining.set(next, count);
-          if (!count) ready.push(next);
+        // Accept successful peers first: their newly verified frontier may make a
+        // pending observation retryable even after the whole batch has drained.
+        const results = result.results ?? [result];
+        results.sort((left, right) => Number(right.passed === true) - Number(left.passed === true));
+        for (const item of results) {
+          if (item.passed === "pending") {
+            if (
+              !active.size &&
+              !checking.size &&
+              (!ready.length || failed.length || item.stage === "output") &&
+              item.epoch === epoch
+            )
+              failed.push(item.id);
+            else
+              pending.set(item.id, {
+                receipt: item.receipt,
+                stage: item.stage,
+                epoch: item.epoch,
+              });
+          } else if (!item.passed) {
+            endCase(item.id, "fail");
+            failed.push(item.id);
+          } else {
+            endCase(item.id, "pass");
+            done.add(item.id);
+            advance();
+            for (const next of successors.get(item.id)) {
+              const count = remaining.get(next) - 1;
+              remaining.set(next, count);
+              if (!count) ready.push(next);
+            }
+          }
         }
       }
     }

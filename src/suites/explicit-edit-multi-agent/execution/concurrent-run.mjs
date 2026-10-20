@@ -34,7 +34,7 @@ function feedback(category) {
   return "The batch requirements are not met.";
 }
 
-/** Stream one ready atomic edit to each free persistent participant sharing a project.
+/** Stream up to ten ready atomic edits per delivery to each free persistent participant.
  * Verified effects unlock dependencies; drained parent-task barriers alone grant
  * Score credit after cumulative structure, build and repeated-pixel checks.
  * Corrections retain edits/history and share the fixed barrier-level budget. If
@@ -44,7 +44,9 @@ function feedback(category) {
  * Reference CAS conflicts are observed; live counts remain unknown unless supplied
  * by the harness. Private plans, gates and future tasks are never agent mounts.
  * createDriver(workspace, state, agent) returns execute(prompt, { signal, round,
- * attempt, atomicId? , deliveryKind? }), async close() and a closed getter.
+ * attempt, atomicId?, atomicIds?, deliveryKind? }), async close() and a closed getter.
+ * atomicId names the first member for native artifact paths; atomicIds lists all
+ * members. One receipt belongs to the delivery, while every member has its own gate.
  * Optional synchronous onCase(event) forwards atomic case lifetimes with their
  * round and attempt for private external watchdogs. It does not set model limits
  * or fabricate observations for retained work or global barrier-repair deliveries.
@@ -371,43 +373,60 @@ export async function runConcurrent(
         };
         report.atomicBarriers.push(state);
         const executions = new Map();
-        async function deliver(node, agent, deliverySignal, context, globalRepair = false) {
+        async function deliver(members, agent, deliverySignal, context, globalRepair = false) {
           const abortDelivery = () => controller.abort(deliverySignal.reason);
           deliverySignal.addEventListener("abort", abortDelivery, { once: true });
           const item = {
             round: round.id,
             attempt,
             agent,
-            tasks: globalRepair ? parentTasks : [node.taskId],
-            ...(globalRepair ? { deliveryKind: "barrier-repair" } : { atomicId: node.id }),
+            tasks: globalRepair ? parentTasks : [...new Set(members.map((node) => node.taskId))],
+            ...(globalRepair
+              ? { deliveryKind: "barrier-repair" }
+              : {
+                  atomicId: members[0].id,
+                  atomicIds: members.map((node) => node.id),
+                  atomicChecks: {},
+                }),
             status: "running",
             startedMs: performance.now() - started,
           };
           report.executions.push(item);
-          if (!globalRepair) startedAtoms.add(node.id);
-          executions.set(node.id, item);
+          for (const node of members) {
+            startedAtoms.add(node.id);
+            executions.set(node.id, item);
+          }
           report.deliveries++;
           if (attempt > 1) report.repairs++;
           const current = globalRepair
             ? barrierRepairTask(publicSourceFiles.get(round.id))
-            : node.prompt;
-          const guidance = `\n\nYou are one of ${agents} persistent agents sharing this writable project. At this dispatch, ${context.writers.size} editing deliveries are active, including yours. Tasks are assigned one at a time to free agents. Other agents may edit the same files concurrently. Do only the current request. Re-read after peer changes, preserve completed work, and never replace a file from a stale whole-file snapshot. Do not leave background writers after your response. Edits and histories are retained across corrections; do not restart, reset the workspace or undo completed work. Dependencies are checked between edits; full verification waits for the barrier.`;
+            : members
+                .map((node) =>
+                  members.length === 1 ? node.prompt : `Atomic edit ${node.id}\n\n${node.prompt}`,
+                )
+                .join("\n\n---\n\n");
+          const environment = `\n\nYou are one of ${agents} persistent agents sharing this writable project. Other agents may edit the same files concurrently. Each agent has a separate retained conversation history. At this dispatch, ${context.activeDeliveries} editing deliveries are active, including yours.`;
           const prompt =
-            current + guidance + (attempt > 1 ? `\n\n${feedback(failure.category)}` : "");
+            current + environment + (attempt > 1 ? `\n\n${feedback(failure.category)}` : "");
           try {
             if (live) {
               item.receipt = await drivers[agent].execute(prompt, {
                 signal: deliverySignal,
                 round: round.id,
                 attempt,
-                ...(globalRepair ? { deliveryKind: "barrier-repair" } : { atomicId: node.id }),
+                ...(globalRepair
+                  ? { deliveryKind: "barrier-repair" }
+                  : { atomicId: members[0].id, atomicIds: members.map((node) => node.id) }),
               });
             } else {
               if (attempt > 1)
                 throw Error("Reference editor has no repair policy; failed state retained");
-              const receipt = await drivers[agent].execute(node);
-              item.receipts = [receipt];
-              report.conflicts += receipt.conflicts;
+              item.receipts = [];
+              for (const node of members) {
+                const receipt = await drivers[agent].execute(node);
+                item.receipts.push(receipt);
+                report.conflicts += receipt.conflicts;
+              }
             }
             item.status = "settled";
             return item.receipt;
@@ -437,7 +456,7 @@ export async function runConcurrent(
         if (barrierRepair && completed.size === nodes.length) {
           const agent = rotation % agents;
           rotation = (agent + 1) % agents;
-          await deliver({ id: round.id }, agent, signal, { writers: new Set([round.id]) }, true);
+          await deliver([], agent, signal, { activeDeliveries: 1 }, true);
           const repaired = checkpoint.revalidate(await readSource(), {
             completed,
             started: startedAtoms,
@@ -447,6 +466,7 @@ export async function runConcurrent(
           stream = { status: completed.size === nodes.length ? "pass" : "blocked", failed: [] };
         } else {
           stream = await runAtomicStream(nodes, {
+            batchSize: ATOMIC_DISPATCH_POLICY.maxBatchSize,
             agents,
             onCase: onCase ? (event) => onCase({ ...event, round: round.id, attempt }) : undefined,
             completed,
@@ -491,16 +511,16 @@ export async function runConcurrent(
                 trace.elapsedMs = performance.now() - started - trace.startedMs;
               }
             },
-            execute: (node, agent, deliverySignal, context) =>
-              deliver(node, agent, deliverySignal, context),
+            executeBatch: (members, agent, deliverySignal, context) =>
+              deliver(members, agent, deliverySignal, context),
             verify: async (node, deliverySignal, _receipt, context) => {
               const checked = await checkpoint.observe(readSource, node.id, context, {
                 signal: deliverySignal,
               });
-              executions.get(node.id).atomicCheck = {
-                status: checked.status,
-                reason: checked.reason ?? null,
-              };
+              const item = executions.get(node.id);
+              const observation = { status: checked.status, reason: checked.reason ?? null };
+              item.atomicChecks[node.id] = observation;
+              if (item.atomicIds.length === 1) item.atomicCheck = observation;
               return decision(checked);
             },
           });
@@ -583,7 +603,7 @@ export async function runConcurrent(
     externalSignal?.removeEventListener("abort", abort);
   }
   if (!live && report.status === "pass") {
-    const acceptedAtomicEdits = new Set(report.executions.map((item) => item.atomicId)).size;
+    const acceptedAtomicEdits = new Set(report.executions.flatMap((item) => item.atomicIds)).size;
     assert.equal(
       acceptedAtomicEdits,
       report.atomic.edits,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { ATOMIC_DISPATCH_POLICY } from "./execution/atomic-stream.mjs";
 
 /** Public benchmark identity; never reuse the original Exact Edit identity. */
 export const MULTI_AGENT_BENCHMARK = "explicit-edit-multi-agent";
@@ -70,6 +71,55 @@ function comparisonKey(result) {
   );
 }
 
+/** Return every atomic member of one native delivery without multiplying its receipt.
+ * atomicId is the first member and names the native artifact directory. Historical
+ * singleton deliveries have no atomicIds array; global repairs have no members.
+ */
+export function atomicDeliveryIds(delivery) {
+  if (delivery.deliveryKind) {
+    assert.ok(!Object.hasOwn(delivery, "atomicIds"), "Global repair cannot name atomic members");
+    return [];
+  }
+  const ids = Object.hasOwn(delivery, "atomicIds") ? delivery.atomicIds : [delivery.atomicId];
+  assert.ok(
+    Array.isArray(ids) && ids.length > 0 && ids.length <= ATOMIC_DISPATCH_POLICY.maxBatchSize,
+    "Invalid atomic batch size",
+  );
+  assert.equal(new Set(ids).size, ids.length, "Duplicate atomic batch member");
+  assert.equal(delivery.atomicId, ids[0], "Atomic representative differs from first batch member");
+  for (const id of ids) {
+    assert.ok(typeof id === "string", "Missing atomic delivery ID");
+    assert.match(id, /^task-\d{3}[-_:][A-Za-z0-9][A-Za-z0-9._:-]*$/);
+  }
+  return ids;
+}
+
+/** Resolve the last delivery for each member, including partial batch corrections. */
+export function latestStreamDeliveries(deliveries) {
+  return new Map(
+    deliveries.flatMap((item) =>
+      item.deliveryKind
+        ? [[item.deliveryKind, item]]
+        : atomicDeliveryIds(item).map((id) => [id, item]),
+    ),
+  );
+}
+
+/** Validate that one delivery contains only its declared parents from this barrier. */
+export function validateAtomicParents(delivery, parents, barrierParents) {
+  const ids = atomicDeliveryIds(delivery);
+  const actual = [...new Set(ids.map((id) => id.slice(0, 8)))];
+  assert.ok(Array.isArray(parents), "Missing atomic parent tasks");
+  assert.deepEqual(
+    [...parents].sort(),
+    actual.sort(),
+    "Atomic delivery contradicts its parent tasks",
+  );
+  assert.ok(
+    parents.every((task) => barrierParents.includes(task)),
+    "Unscheduled atomic parent task",
+  );
+}
 function settledStreamDelivery(execution) {
   const receipt = execution.receipt ?? {};
   return (
@@ -100,6 +150,7 @@ function validateStreamExecutions(raw, rounds) {
     if (Object.hasOwn(execution, "deliveryKind")) {
       assert.equal(execution.deliveryKind, "barrier-repair", "Unsupported stream delivery kind");
       assert.ok(!Object.hasOwn(execution, "atomicId"), "Global repair cannot name an atomic ID");
+      atomicDeliveryIds(execution);
       assert.ok(execution.attempt > 1, "Global repair cannot be an initial delivery");
       assert.ok(Array.isArray(execution.tasks));
       const parents = round.assignments.map((item) => item.task);
@@ -117,7 +168,7 @@ function validateStreamExecutions(raw, rounds) {
           item.attempt < execution.attempt &&
           Object.hasOwn(item, "atomicId"),
       );
-      const retained = new Map(earlier.map((item) => [item.atomicId, item]));
+      const retained = latestStreamDeliveries(earlier);
       assert.ok(
         previousCheck?.status === "fail" && failureCategories.has(previousCheck.category),
         "Global repair lacks a failed barrier",
@@ -127,23 +178,14 @@ function validateStreamExecutions(raw, rounds) {
         "Global repair has failed retained atomic receipts",
       );
       assert.ok(
-        parents.every((task) => earlier.some((item) => item.tasks[0] === task)),
+        parents.every((task) => earlier.some((item) => item.tasks.includes(task))),
         "Global repair lacks retained parent deliveries",
       );
     } else {
-      assert.ok(Array.isArray(execution.tasks) && execution.tasks.length === 1);
-      const task = execution.tasks[0];
-      assert.ok(
-        round.assignments.some((item) => item.task === task),
-        "Unscheduled atomic parent task",
-      );
-      assert.ok(typeof execution.atomicId === "string", "Missing atomic delivery ID");
-      assert.match(execution.atomicId, /^task-\d{3}[-_:][A-Za-z0-9][A-Za-z0-9._:-]*$/);
-      assert.ok(
-        execution.atomicId.startsWith(`${task}-`) ||
-          execution.atomicId.startsWith(`${task}_`) ||
-          execution.atomicId.startsWith(`${task}:`),
-        "Atomic delivery ID contradicts its parent task",
+      validateAtomicParents(
+        execution,
+        execution.tasks,
+        round.assignments.map((item) => item.task),
       );
     }
     assert.ok(["settled", "error"].includes(execution.status), "Invalid atomic delivery status");
@@ -152,7 +194,9 @@ function validateStreamExecutions(raw, rounds) {
     if (execution.deliveryKind || group.some((item) => item.deliveryKind))
       assert.equal(group.length, 0, "Mixed or duplicate global repair delivery");
     assert.ok(
-      !group.some((item) => item.atomicId === execution.atomicId),
+      !group.some((item) =>
+        atomicDeliveryIds(item).some((id) => atomicDeliveryIds(execution).includes(id)),
+      ),
       "Duplicate atomic delivery",
     );
     group.push(execution);
@@ -184,7 +228,7 @@ function validateStreamExecutions(raw, rounds) {
     const earlier = raw.executions.filter(
       (item) => item.round === round.id && item.attempt <= attempt,
     );
-    const latest = new Map(earlier.map((item) => [item.deliveryKind ?? item.atomicId, item]));
+    const latest = latestStreamDeliveries(earlier);
     assert.ok(
       [...latest.values()].every(settledStreamDelivery),
       "Passing barrier has unsettled atomic deliveries",
@@ -192,7 +236,7 @@ function validateStreamExecutions(raw, rounds) {
     assert.ok(
       round.assignments.every((assignment) =>
         earlier.some(
-          (item) => Object.hasOwn(item, "atomicId") && item.tasks[0] === assignment.task,
+          (item) => Object.hasOwn(item, "atomicId") && item.tasks.includes(assignment.task),
         ),
       ),
       "Passing barrier lacks parent task deliveries",

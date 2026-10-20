@@ -10,6 +10,8 @@ import { canonicalModelProvider, loadModelRegistry } from "./model-registry.mjs"
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_MAX_ATTEMPTS,
+  atomicDeliveryIds,
+  latestStreamDeliveries,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 import {
   teamDeliveryDirectory,
@@ -330,12 +332,12 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
           const earlier = deliveries
             .slice(0, ordinal)
             .filter((prior) => Object.hasOwn(prior, "atomicId"));
-          const retained = new Map(earlier.map((prior) => [prior.atomicId, prior]));
+          const retained = latestStreamDeliveries(earlier);
           if (
             priorGrade?.status !== "fail" ||
             !["structure", "build", "behavior"].includes(priorGrade.category) ||
             [...retained.values()].some((prior) => !settledStreamDelivery(prior)) ||
-            taskIds.some((task) => !earlier.some((prior) => prior.tasks[0] === task))
+            taskIds.some((task) => !earlier.some((prior) => prior.tasks.includes(task)))
           )
             throw Error("Global repair lacks retained atomic outputs and failed barrier evidence");
         }
@@ -350,9 +352,13 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
         if (!assigned.length || JSON.stringify(assigned) !== JSON.stringify(item.tasks))
           throw Error("Participant delivery contradicts scheduled tasks");
       }
-      const key = `${item.attempt}:${atomic ? (item.deliveryKind ?? item.atomicId) : item.agent}`;
-      if (deliveryKeys.has(key)) throw Error("Duplicate participant delivery");
-      deliveryKeys.add(key);
+      const ids =
+        atomic && !item.deliveryKind ? atomicDeliveryIds(item) : [item.deliveryKind ?? item.agent];
+      for (const id of ids) {
+        const key = `${item.attempt}:${id}`;
+        if (deliveryKeys.has(key)) throw Error("Duplicate participant delivery");
+        deliveryKeys.add(key);
+      }
       const grade = checks.get(`${barrier.id}-attempt-${item.attempt}`);
       const exactPassed = grade?.status === "pass";
       const receipt = item.receipt ?? {};
@@ -375,7 +381,10 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
         ...(atomic
           ? item.deliveryKind
             ? { deliveryKind: item.deliveryKind }
-            : { atomicId: item.atomicId }
+            : {
+                atomicId: item.atomicId,
+                ...(item.atomicIds ? { atomicIds: [...item.atomicIds] } : {}),
+              }
           : {}),
         taskIds: item.tasks,
         exactPassed,
@@ -417,14 +426,14 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
       if (stopped) throw Error("Joint accepted progress is not a verified prefix");
       const last = deliveries.filter((item) => item.attempt === lastAttempt);
       if (atomic) {
-        const latest = new Map(
-          deliveries.map((item) => [item.deliveryKind ?? item.atomicId, item]),
-        );
+        const latest = latestStreamDeliveries(deliveries);
         if (
           [...latest.values()].some((item) => !settledStreamDelivery(item)) ||
           taskIds.some(
             (task) =>
-              !deliveries.some((item) => Object.hasOwn(item, "atomicId") && item.tasks[0] === task),
+              !deliveries.some(
+                (item) => Object.hasOwn(item, "atomicId") && item.tasks.includes(task),
+              ),
           )
         )
           throw Error("Joint accepted barrier has unsettled atoms");
