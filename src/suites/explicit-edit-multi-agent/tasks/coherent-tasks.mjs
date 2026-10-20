@@ -1,5 +1,4 @@
-const preservation =
-  "Preserve every current body, literal, macro and inactive branch, except the explicitly requested scaffolding changes or bound renames. Keep the neutral identity and all earlier results. Do not add comments. Independent definitions may use any dependency-safe order. Includes and namespace wrappers may differ if the project still builds. A simple unconditional standard using-declaration need not be repeated when an earlier project header supplies it in the required namespace and condition, or when all remaining uses are qualified. An unconditional std::string_literals namespace directive may move with its module if every literal consumer keeps its context. Harmless unconditional standard using-declarations may be added when they do not supply any new unqualified binding. A using-import must not extend an existing project overload family, even when current calls still select the same functions. Preserve other namespace using-directives, aliases and conditional using-declarations. Verification happens after this complete task, not after each table row.";
+import { taskConstraints } from "./task-constraints.mjs";
 
 /** Render one current goal with compact public targets. Shared module setup appears
  * once; optional reference-order anchors are not instructions for the live agent.
@@ -33,7 +32,7 @@ export function coherentTaskPrompt(goal, operations) {
   const setup = modules.size
     ? `\n\nModule setup:\n${[...modules.values()].map((item) => JSON.stringify(item)).join("\n")}`
     : "";
-  return `${goal}\n\nAllowed changes: the module moves, scaffolding cleanup or owner-bound mappings in the target table below. Physical selectors identify current declarations, not a required final order. Each mapping applies only to its listed owners, never every occurrence of its spelling.${setup}\n\nTarget table (one JSON row per related target group):\n${targets.map((item) => JSON.stringify(item)).join("\n")}\n\n${preservation}`;
+  return `${goal}\n\nAllowed changes: the module moves, scaffolding cleanup or owner-bound mappings in the target table below. Physical selectors identify current declarations, not a required final order. Each mapping applies only to its listed owners, never every occurrence of its spelling.${setup}\n\nTarget table (one JSON row per related target group):\n${targets.map((item) => JSON.stringify(item)).join("\n")}\n\n${taskConstraints(operations)}`;
 }
 
 function task(tasks, phase, subsystem, goal, operations) {

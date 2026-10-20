@@ -19,6 +19,7 @@ import { REFERENCE_PLANNER_SLOTS } from "../reference/concurrent-planners.mjs";
 import { ATOMIC_DISPATCH_POLICY, runAtomicStream } from "./atomic-stream.mjs";
 import { atomicOrder } from "../tasks/atomic-effects.mjs";
 import { atomicCheckpoints } from "../tasks/atomic-bundle.mjs";
+import { barrierRepairTask, sourceFilesAfter } from "../tasks/task-constraints.mjs";
 import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_PROTOCOL,
@@ -148,6 +149,21 @@ export async function runConcurrent(
       manifest.final,
       "Atomic schedule changed the final restoration",
     );
+    const publicSourceFiles = new Map();
+    let requiredSourceFiles = Object.keys(initial);
+    for (const round of schedule) {
+      const interval = atomicIntervals.rounds.get(round.id);
+      requiredSourceFiles = sourceFilesAfter(
+        requiredSourceFiles,
+        interval.nodes.flatMap((node) => node.operations),
+      );
+      assert.deepEqual(
+        requiredSourceFiles,
+        contracts.get(round.id).files,
+        "Public task file effects differ from the full barrier contract",
+      );
+      publicSourceFiles.set(round.id, requiredSourceFiles);
+    }
     const contractHashes = Object.fromEntries(
       [...contracts].map(([id, contract]) => [id, digest(JSON.stringify(contract))]),
     );
@@ -373,15 +389,11 @@ export async function runConcurrent(
           report.deliveries++;
           if (attempt > 1) report.repairs++;
           const current = globalRepair
-            ? "Repair the current shared project after the drained barrier failed verification. The requested atomic edits have already been delivered. Preserve completed work and correct only what is needed to make this barrier pass."
+            ? barrierRepairTask(publicSourceFiles.get(round.id))
             : node.prompt;
-          const guidance = `\n\nYou are one of ${agents} persistent agents sharing this writable project. At this dispatch, ${context.writers.size} editing deliveries are active, including yours. Tasks are assigned one at a time to free agents. Other agents may edit the same files concurrently. Do only the current request. Re-read after peer changes, preserve completed work, and never replace a file from a stale whole-file snapshot. Do not leave background writers after your response. Dependencies are checked between edits; full verification waits for the barrier.`;
+          const guidance = `\n\nYou are one of ${agents} persistent agents sharing this writable project. At this dispatch, ${context.writers.size} editing deliveries are active, including yours. Tasks are assigned one at a time to free agents. Other agents may edit the same files concurrently. Do only the current request. Re-read after peer changes, preserve completed work, and never replace a file from a stale whole-file snapshot. Do not leave background writers after your response. Edits and histories are retained across corrections; do not restart, reset the workspace or undo completed work. Dependencies are checked between edits; full verification waits for the barrier.`;
           const prompt =
-            current +
-            guidance +
-            (attempt > 1
-              ? `\n\n${feedback(failure.category)}\nCorrect the current workspace; do not restart or undo earlier completed work.`
-              : "");
+            current + guidance + (attempt > 1 ? `\n\n${feedback(failure.category)}` : "");
           try {
             if (live) {
               item.receipt = await drivers[agent].execute(prompt, {
