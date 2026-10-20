@@ -30,7 +30,9 @@ export function scriptedPiFactory({ runtime, tools, tasks, artifacts, signal }) 
           assert.equal(body.reference, current.token, "Stale scripted tool invocation");
           assert.equal(current.invoked, false, "Duplicate scripted edit invocation");
           current.invoked = true;
-          current.receipt = await editor.execute(current.task);
+          const receipts = [];
+          for (const task of current.tasks) receipts.push(await editor.execute(task));
+          current.receipt = receipts.length === 1 ? receipts[0] : { status: "edited", receipts };
           return { usage: zeroUsage };
         }
         assert.deepEqual(
@@ -83,9 +85,15 @@ export function scriptedPiFactory({ runtime, tools, tasks, artifacts, signal }) 
       },
       async execute(prompt, metadata) {
         assert.equal(current, undefined, "Overlapping scripted Pi delivery");
-        const task = tasks.get(metadata.atomicId);
-        assert.ok(task && prompt.startsWith(task.prompt), "Missing current public atomic node");
-        current = { task, prompt, token: randomUUID(), invoked: false, receipt: undefined };
+        const selected = (metadata.atomicIds ?? [metadata.atomicId]).map((id) => tasks.get(id));
+        assert.ok(selected.length && selected.every(Boolean), "Missing current public atomic node");
+        current = {
+          tasks: selected,
+          prompt,
+          token: randomUUID(),
+          invoked: false,
+          receipt: undefined,
+        };
         const errorOffset = provider.errors.length;
         try {
           const result = await driver.execute(prompt, metadata);

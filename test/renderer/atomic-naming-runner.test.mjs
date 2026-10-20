@@ -150,6 +150,16 @@ int main(int argc, char** argv) {
   return { preparation, final: current, pixels, workload };
 }
 
+function atomicRows(report) {
+  return report.executions.flatMap((row) =>
+    row.atomicIds.map((atomicId, index) => ({
+      ...row,
+      atomicId,
+      atomicCheck: row.atomicChecks[atomicId],
+      receipts: row.receipts ? [row.receipts[index]] : undefined,
+    })),
+  );
+}
 function deliveredBinding(prompt) {
   const targets = prompt.split("\n").flatMap((line) => {
     try {
@@ -159,26 +169,24 @@ function deliveredBinding(prompt) {
       return [];
     }
   });
-  assert.equal(targets.length, 1, "A delivery must not contain its whole coarse naming group");
-  const [target] = targets;
-  assert.equal(target.mapping.length, 1);
-  assert.ok(target.selectors.length > 0);
-  for (const key of [
-    "bindingCertification",
-    "bindingGroups",
-    "plan",
-    "edits",
-    "tokens",
-    "declarations",
-  ])
-    assert.ok(
-      !Object.hasOwn(target, key),
-      `Private or future-binding data reached the delivery: ${key}`,
-    );
-  const owners = [...new Set(target.selectors.map((selector) => selector.owner?.scope))];
-  assert.equal(owners.length, 1);
-  assert.match(owners[0], /^frond::(?:North|South)$/);
-  return { mapping: target.mapping[0], owner: owners[0] };
+  assert.ok(targets.length > 0 && targets.length <= 10);
+  return targets.map((target) => {
+    assert.equal(target.mapping.length, 1);
+    assert.ok(target.selectors.length > 0);
+    for (const key of [
+      "bindingCertification",
+      "bindingGroups",
+      "plan",
+      "edits",
+      "tokens",
+      "declarations",
+    ])
+      assert.ok(!Object.hasOwn(target, key), `Private binding data reached the delivery: ${key}`);
+    const owners = [...new Set(target.selectors.map((selector) => selector.owner?.scope))];
+    assert.equal(owners.length, 1);
+    assert.match(owners[0], /^frond::(?:North|South)$/);
+    return { mapping: target.mapping[0], owner: owners[0] };
+  });
 }
 
 async function waitForPeer(ready, signal) {
@@ -206,8 +214,8 @@ function bindingDrivers({ partialFirst = false } = {}) {
   const histories = [],
     calls = [];
   const concurrent = Promise.withResolvers();
-  const northPeers = Promise.withResolvers();
-  let writes = Promise.resolve();
+  let writes = Promise.resolve(),
+    deliveries = 0;
   const createDriver = async (workspace, _state, agent) => {
     const history = [];
     histories[agent] = history;
@@ -219,45 +227,49 @@ function bindingDrivers({ partialFirst = false } = {}) {
       async execute(prompt, options) {
         assert.equal(closed, false);
         assert.equal(options.deliveryKind, undefined);
-        const binding = deliveredBinding(prompt);
-        const call = { ...binding, ...options, agent, sequence: history.length + 1 };
-        history.push(call);
-        calls.push(call);
-        if (calls.length === 2) concurrent.resolve();
+        const bindings = deliveredBinding(prompt);
+        assert.equal(bindings.length, options.atomicIds.length);
+        const selected = bindings.map((binding, index) => ({
+          ...binding,
+          ...options,
+          atomicId: options.atomicIds[index],
+          agent,
+          sequence: history.length + 1,
+        }));
+        history.push(selected);
+        calls.push(...selected);
+        if (++deliveries >= 2) concurrent.resolve();
         await waitForPeer(concurrent.promise, options.signal);
-        if (binding.owner === "frond::North") {
-          if (calls.filter((item) => item.owner === "frond::North").length >= 2)
-            northPeers.resolve();
-          await waitForPeer(northPeers.promise, options.signal);
+        for (const call of selected) {
+          writes = writes.then(async () => {
+            const file = path.join(workspace, "main.cpp");
+            const source = await readFile(file, "utf8");
+            const functionName = call.owner.split("::").at(-1);
+            const expression = new RegExp(`int ${functionName}\\([^)]*\\) \\{[^}]*\\}`);
+            const selected = source.match(expression);
+            assert.ok(selected, "The public owner must select one current function");
+            assert.equal(source.match(new RegExp(expression.source, "g")).length, 1);
+            const { from, to } = call.mapping;
+            const positions = [...selected[0].matchAll(new RegExp(`\\b${from}\\b`, "g"))];
+            if (partialFirst && from === "a" && options.attempt === 1) {
+              assert.equal(positions.length, 2);
+              call.partial = true;
+            }
+            const selectedPositions = call.partial ? positions.slice(0, 1) : positions;
+            let result = selected[0];
+            for (const position of selectedPositions.reverse())
+              result =
+                result.slice(0, position.index) + to + result.slice(position.index + from.length);
+            call.before = selected[0];
+            await writeFile(
+              file,
+              source.slice(0, selected.index) +
+                result +
+                source.slice(selected.index + selected[0].length),
+            );
+          });
+          await writes;
         }
-        writes = writes.then(async () => {
-          const file = path.join(workspace, "main.cpp");
-          const source = await readFile(file, "utf8");
-          const functionName = binding.owner.split("::").at(-1);
-          const expression = new RegExp(`int ${functionName}\\([^)]*\\) \\{[^}]*\\}`);
-          const selected = source.match(expression);
-          assert.ok(selected, "The public owner must select one current function");
-          assert.equal(source.match(new RegExp(expression.source, "g")).length, 1);
-          const { from, to } = binding.mapping;
-          const positions = [...selected[0].matchAll(new RegExp(`\\b${from}\\b`, "g"))];
-          if (partialFirst && from === "a" && options.attempt === 1) {
-            assert.equal(positions.length, 2);
-            call.partial = true;
-          }
-          const selectedPositions = call.partial ? positions.slice(0, 1) : positions;
-          let result = selected[0];
-          for (const position of selectedPositions.reverse())
-            result =
-              result.slice(0, position.index) + to + result.slice(position.index + from.length);
-          call.before = selected[0];
-          await writeFile(
-            file,
-            source.slice(0, selected.index) +
-              result +
-              source.slice(selected.index + selected[0].length),
-          );
-        });
-        await writes;
         return { sessionId: `naming-agent-${agent}`, sequence: history.length, status: "settled" };
       },
       async close() {
@@ -281,16 +293,18 @@ await test(
       log: quiet,
     });
     assert.equal(reference.status, "pass", JSON.stringify(reference.terminal));
-    assert.equal(reference.deliveries, 4);
+    assert.equal(atomicRows(reference).length, 4);
     assert.equal(reference.repairs, 0);
     assert.equal(reference.acceptedTasks, 2);
     assert.equal(reference.acceptedRounds, 1);
     assert.equal(reference.referencePlannerSlots, 1);
     assert.deepEqual(
-      reference.executions.map((row) => row.atomicId).sort(),
+      atomicRows(reference)
+        .map((row) => row.atomicId)
+        .sort(),
       fixture.workload.nodes.map((node) => node.id).sort(),
     );
-    const receipts = reference.executions.map((row) => row.receipts[0]);
+    const receipts = atomicRows(reference).map((row) => row.receipts[0]);
     assert.equal(new Set(receipts.map((receipt) => receipt.lifetime)).size, 2);
     assert.equal(Math.max(...receipts.map((receipt) => receipt.planner.snapshotAttempts)), 1);
     assert.equal(Math.max(...receipts.map((receipt) => receipt.planner.cacheHits)), 3);
@@ -302,7 +316,7 @@ await test(
     assert.deepEqual(await readTree(path.join(root, "reference/workspace")), fixture.final);
 
     await t.test(
-      "independent same-owner bindings overlap without combined mapping prompts",
+      "independent atomic bindings share ready batches while peer participants remain active",
       async () => {
         const drivers = bindingDrivers();
         const report = await runConcurrent(fixture.preparation, path.join(root, "live"), {
@@ -311,7 +325,7 @@ await test(
           log: quiet,
         });
         assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        assert.equal(report.deliveries, 4);
+        assert.equal(atomicRows(report).length, 4);
         assert.equal(report.repairs, 0);
         const readiness = report.atomicBarriers.flatMap((barrier) => barrier.inputChecks);
         assert.ok(
@@ -326,14 +340,17 @@ await test(
         assert.equal(report.acceptedTasks, 2);
         const northCalls = drivers.calls.filter((call) => call.owner === "frond::North");
         assert.deepEqual(northCalls.map((call) => call.mapping.from).sort(), ["a", "b"]);
-        const northIds = new Set(northCalls.map((call) => call.atomicId));
-        const firstPair = report.executions.filter((row) => northIds.has(row.atomicId));
+        const firstPair = report.executions.filter((row) => row.attempt === 1);
+        assert.equal(new Set(firstPair.map((row) => row.agent)).size, 2);
         assert.ok(
           Math.max(...firstPair.map((row) => row.startedMs)) <
             Math.min(...firstPair.map((row) => row.startedMs + row.elapsedMs)),
         );
         assert.ok(drivers.histories.every((history) => history.length >= 1));
-        assert.ok(drivers.histories.some((history) => history.length >= 2));
+        assert.equal(
+          drivers.histories.reduce((sum, history) => sum + history.length, 0),
+          report.deliveries,
+        );
         assert.ok(report.agentsClosed.every(Boolean));
         assert.deepEqual(report.checks.at(-1).pixels, fixture.pixels);
         assert.deepEqual(await readTree(path.join(root, "live/workspace")), fixture.final);
@@ -350,7 +367,7 @@ await test(
           log: quiet,
         });
         assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        assert.equal(report.deliveries, 5);
+        assert.equal(atomicRows(report).length, 5);
         assert.equal(report.acceptedTasks, 2);
         for (const name of ["b", "c", "d"])
           assert.equal(

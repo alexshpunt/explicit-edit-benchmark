@@ -8,12 +8,12 @@ import { scriptedPiFactory } from "./pi-atomic-reference.mjs";
 
 assert.ok(process.env.RENDERER_PI_RUNTIME, "Set RENDERER_PI_RUNTIME to the installed Pi runtime");
 
-test("real Pi invokes one isolated current-atom edit per bash call and retains distinct histories", async (t) => {
+test("real Pi executes ten current atoms per native bash call and retains distinct histories", async (t) => {
   const root = await mkdtemp(path.resolve(".tmp/pi-atomic-reference-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const workspace = path.join(root, "workspace");
   await mkdir(workspace);
-  const names = ["North", "South", "West"];
+  const names = ["North", "South", ...Array.from({ length: 18 }, (_, i) => `Unit${i}`), "West"];
   const initial = names
     .map(
       (name) =>
@@ -50,10 +50,17 @@ test("real Pi invokes one isolated current-atom edit per bash call and retains d
   t.after(async () => Promise.all(drivers.map((driver) => driver.close())));
   for (let agent = 0; agent < 2; agent++)
     drivers.push(await createDriver(workspace, path.join(root, `state-${agent}`), agent));
-  const deliver = (agent, id) => drivers[agent].execute(tasks.get(id).prompt, { atomicId: id });
-  const [first, peer] = await Promise.all([deliver(0, "North"), deliver(1, "South")]);
+  const deliver = (agent, ids) =>
+    drivers[agent].execute(ids.map((id) => tasks.get(id).prompt).join("\n\n---\n\n"), {
+      atomicId: ids[0],
+      atomicIds: ids,
+    });
+  const [first, peer] = await Promise.all([
+    deliver(0, names.slice(0, 10)),
+    deliver(1, names.slice(10, 20)),
+  ]);
   await assert.rejects(readFile(path.join(workspace, "west.h")), { code: "ENOENT" });
-  const next = await deliver(0, "West");
+  const next = await deliver(0, ["West"]);
   assert.equal(first.sessionId, next.sessionId);
   assert.equal(first.lifetime, next.lifetime);
   assert.equal(first.agentPid, next.agentPid);
@@ -72,7 +79,7 @@ test("real Pi invokes one isolated current-atom edit per bash call and retains d
   }
   assert.equal(
     (await readFile(path.join(workspace, "main.cpp"), "utf8")).match(/#include/g).length,
-    3,
+    21,
   );
 });
 

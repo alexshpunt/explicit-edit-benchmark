@@ -122,6 +122,45 @@ await test("atomic dispatch preserves actual order, repeated participants and re
   assert.equal(projected.trials[1].infrastructureFailure, "not-reached");
 });
 
+await test("a cross-parent batch keeps one native receipt and independent retained atom identities", () => {
+  const report = fixture();
+  const first = report.executions[0];
+  first.tasks = ["task-001", "task-002"];
+  first.atomicIds = report.executions.slice(0, 3).map((item) => item.atomicId);
+  report.executions = [first, report.executions[3]];
+  const projected = normalizeTeamReport(report, profile, "fixture");
+  validate(report, projected);
+  assert.equal(projected.rounds.length, 2);
+  assert.deepEqual(projected.rounds[0].atomicIds, first.atomicIds);
+  assert.equal(
+    projected.rounds.reduce((sum, item) => sum + item.totalTokens, 0),
+    28,
+  );
+  assert.equal(
+    projected.rounds.reduce((sum, item) => sum + item.costUsd, 0),
+    0.5,
+  );
+  assert.equal(projected.trials[0].firstExactPassed, false);
+  assert.equal(projected.trials[0].finalExactPassed, true);
+  const duplicate = structuredClone(report);
+  duplicate.executions.splice(1, 0, { ...report.executions[1], attempt: 1, agent: 3 });
+  assert.throws(() => normalizeTeamReport(duplicate, profile, "fixture"));
+});
+
+await test("batch membership rejects oversize, duplicates, foreign parents and a false representative", () => {
+  for (const atomicIds of [
+    null,
+    [],
+    ["task-001-atom-001", "task-001-atom-001"],
+    ["task-001-atom-001", "task-003-atom-001"],
+    ["task-001-atom-002"],
+    Array.from({ length: 11 }, (_, i) => `task-001-atom-${String(i + 1).padStart(3, "0")}`),
+  ]) {
+    const report = fixture();
+    report.executions[0].atomicIds = atomicIds;
+    assert.throws(() => normalizeTeamReport(report, profile, "fixture"));
+  }
+});
 await test("atomic IDs, parents, pool membership and within-attempt uniqueness fail closed", () => {
   const invalid = [
     (report) => {
@@ -239,106 +278,113 @@ await test("atomic correction exhaustion stays at six joint attempts without per
   assert.throws(() => validate(report, projected));
 });
 
-await test("the common exporter reads every atom's own native file exactly once", async (t) => {
-  const root = await tempDirectory("normalized-atomic-export-");
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const seed = path.join(root, "seed");
-  await bundle(seed, "seed");
-  const [configuration] = await jsonLines(path.join(seed, "configurations.jsonl"));
-  const [seedProfile] = await jsonLines(path.join(seed, "profiles.jsonl"));
-  const raw = path.join(root, "raw");
-  await mkdir(raw);
-  const report = fixture();
-  report.totalTasks = 71;
-  report.totalRounds = 28;
-  report.elapsedMs = 100;
-  report.initial = "d".repeat(64);
-  report.terminal = { category: "driver_exit" };
-  let next = 4;
-  for (let index = 0; index < 26; index++)
-    report.schedule.push({
-      id: `round-${String(index + 3).padStart(3, "0")}`,
-      assignments: Array.from({ length: index < 16 ? 3 : 2 }, () => ({
-        agent: 0,
-        task: `task-${String(next++).padStart(3, "0")}`,
-      })),
-    });
-  assert.equal(next, 72);
-  const suite = {
-    id: MULTI_AGENT_BENCHMARK,
-    protocol: MULTI_AGENT_PROTOCOL,
-    agents: 15,
-    graphWidth: 15,
-    workloadSha256: "b".repeat(64),
-    graphSha256: "c".repeat(64),
-    scheduleSha256: createHash("sha256").update(JSON.stringify(report.schedule)).digest("hex"),
-  };
-  Object.assign(report, suite);
-  await writeFile(
-    path.join(raw, "manifest.json"),
-    JSON.stringify({
-      contract: MULTI_AGENT_PROTOCOL,
-      suite,
-      harnesses: {
-        custom: {
-          ...seedProfile,
-          kind: "custom",
-          version: "1",
-          configurationId: configuration.configurationId,
-          configuration: Object.fromEntries(
-            ["tools", "extensions", "rules", "runtimeFlags", "environment"].map((field) => [
-              field,
-              configuration[field],
-            ]),
-          ),
-        },
-      },
-      oracleRecoveries: 5,
-      retryFailures: 0,
-      concurrency: 15,
-      timeoutMs: null,
-      verifierSha256: "e".repeat(64),
-      tasks: report.schedule.flatMap((barrier) =>
-        barrier.assignments.map((item) => ({ id: item.task, fixtureSha256: report.initial })),
-      ),
-    }),
-  );
-  await writeFile(
-    path.join(raw, "summary.json"),
-    JSON.stringify({ results: [{ profile: "custom", acceptedTasks: 2 }] }),
-  );
-  const directory = path.join(raw, "teams/custom");
-  await mkdir(directory, { recursive: true });
-  await writeFile(path.join(directory, "report.json"), JSON.stringify(report));
-  for (const item of report.executions) {
-    const delivery = path.join(
-      directory,
-      "deliveries",
-      `agent-${item.agent}`,
-      `${item.round}-${item.atomicId}-attempt-${item.attempt}`,
-    );
-    await mkdir(delivery, { recursive: true });
+for (const batched of [false, true])
+  await test(`the common exporter reads each ${batched ? "batch" : "atom"} native file exactly once`, async (t) => {
+    const root = await tempDirectory("normalized-atomic-export-");
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const seed = path.join(root, "seed");
+    await bundle(seed, "seed");
+    const [configuration] = await jsonLines(path.join(seed, "configurations.jsonl"));
+    const [seedProfile] = await jsonLines(path.join(seed, "profiles.jsonl"));
+    const raw = path.join(root, "raw");
+    await mkdir(raw);
+    const report = fixture();
+    if (batched) {
+      const first = report.executions[0];
+      first.atomicIds = report.executions.slice(0, 3).map((item) => item.atomicId);
+      first.tasks = ["task-001", "task-002"];
+      report.executions = [first, report.executions[3]];
+    }
+    report.totalTasks = 71;
+    report.totalRounds = 28;
+    report.elapsedMs = 100;
+    report.initial = "d".repeat(64);
+    report.terminal = { category: "driver_exit" };
+    let next = 4;
+    for (let index = 0; index < 26; index++)
+      report.schedule.push({
+        id: `round-${String(index + 3).padStart(3, "0")}`,
+        assignments: Array.from({ length: index < 16 ? 3 : 2 }, () => ({
+          agent: 0,
+          task: `task-${String(next++).padStart(3, "0")}`,
+        })),
+      });
+    assert.equal(next, 72);
+    const suite = {
+      id: MULTI_AGENT_BENCHMARK,
+      protocol: MULTI_AGENT_PROTOCOL,
+      agents: 15,
+      graphWidth: 15,
+      workloadSha256: "b".repeat(64),
+      graphSha256: "c".repeat(64),
+      scheduleSha256: createHash("sha256").update(JSON.stringify(report.schedule)).digest("hex"),
+    };
+    Object.assign(report, suite);
     await writeFile(
-      path.join(delivery, "tool-calls.json"),
-      JSON.stringify([
-        { type: "tool_execution_start", toolName: "bash", args: { command: "cat source.cpp" } },
-      ]),
+      path.join(raw, "manifest.json"),
+      JSON.stringify({
+        contract: MULTI_AGENT_PROTOCOL,
+        suite,
+        harnesses: {
+          custom: {
+            ...seedProfile,
+            kind: "custom",
+            version: "1",
+            configurationId: configuration.configurationId,
+            configuration: Object.fromEntries(
+              ["tools", "extensions", "rules", "runtimeFlags", "environment"].map((field) => [
+                field,
+                configuration[field],
+              ]),
+            ),
+          },
+        },
+        oracleRecoveries: 5,
+        retryFailures: 0,
+        concurrency: 15,
+        timeoutMs: null,
+        verifierSha256: "e".repeat(64),
+        tasks: report.schedule.flatMap((barrier) =>
+          barrier.assignments.map((item) => ({ id: item.task, fixtureSha256: report.initial })),
+        ),
+      }),
     );
-  }
-  const output = path.join(root, "normalized");
-  await exportNormalizedRun(raw, output, { runId: "atomic-export" });
-  await validateNormalizedRun(output);
-  const rounds = await jsonLines(path.join(output, "rounds.jsonl"));
-  const calls = await jsonLines(path.join(output, "tool-calls.jsonl"));
-  assert.deepEqual(
-    rounds.map((item) => item.atomicId),
-    report.executions.map((item) => item.atomicId),
-  );
-  assert.ok(rounds.every((item) => item.toolCallsObserved));
-  assert.equal(calls.length, report.executions.length);
-  assert.equal(new Set(calls.map((item) => item.roundId)).size, report.executions.length);
-  assert.equal(
-    rounds.reduce((sum, item) => sum + item.totalTokens, 0),
-    56,
-  );
-});
+    await writeFile(
+      path.join(raw, "summary.json"),
+      JSON.stringify({ results: [{ profile: "custom", acceptedTasks: 2 }] }),
+    );
+    const directory = path.join(raw, "teams/custom");
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "report.json"), JSON.stringify(report));
+    for (const item of report.executions) {
+      const delivery = path.join(
+        directory,
+        "deliveries",
+        `agent-${item.agent}`,
+        `${item.round}-${item.atomicId}-attempt-${item.attempt}`,
+      );
+      await mkdir(delivery, { recursive: true });
+      await writeFile(
+        path.join(delivery, "tool-calls.json"),
+        JSON.stringify([
+          { type: "tool_execution_start", toolName: "bash", args: { command: "cat source.cpp" } },
+        ]),
+      );
+    }
+    const output = path.join(root, "normalized");
+    await exportNormalizedRun(raw, output, { runId: "atomic-export" });
+    await validateNormalizedRun(output);
+    const rounds = await jsonLines(path.join(output, "rounds.jsonl"));
+    const calls = await jsonLines(path.join(output, "tool-calls.jsonl"));
+    assert.deepEqual(
+      rounds.map((item) => item.atomicId),
+      report.executions.map((item) => item.atomicId),
+    );
+    assert.ok(rounds.every((item) => item.toolCallsObserved));
+    assert.equal(calls.length, report.executions.length);
+    assert.equal(new Set(calls.map((item) => item.roundId)).size, report.executions.length);
+    assert.equal(
+      rounds.reduce((sum, item) => sum + item.totalTokens, 0),
+      14 * report.executions.length,
+    );
+  });

@@ -18,6 +18,18 @@ import {
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const quiet = () => {};
+function atomicRows(report) {
+  return report.executions.flatMap((row) =>
+    row.atomicIds
+      ? row.atomicIds.map((atomicId, index) => ({
+          ...row,
+          atomicId,
+          atomicCheck: row.atomicChecks[atomicId],
+          receipts: row.receipts ? [row.receipts[index]] : undefined,
+        }))
+      : [row],
+  );
+}
 
 function assertInputTrace(report) {
   for (const barrier of report.atomicBarriers) {
@@ -123,21 +135,16 @@ int main(int argc, char** argv) {
 }
 
 function currentHeader(prompt) {
-  const rows = prompt.split("\n").flatMap((line) => {
+  return prompt.split("\n").flatMap((line) => {
     try {
-      return [JSON.parse(line)];
+      const row = JSON.parse(line);
+      return typeof row.guard === "string"
+        ? [{ phase: "structure", action: "header", ...row }]
+        : [];
     } catch {
       return [];
     }
   });
-  const targets = rows.filter((row) => typeof row.guard === "string");
-  assert.equal(
-    targets.length,
-    1,
-    "Each delivery must contain one current edit, not its parent batch",
-  );
-  assert.ok(!prompt.includes("bindingCertification") && !prompt.includes("naming-plans"));
-  return { phase: "structure", action: "header", ...targets[0] };
 }
 
 async function waitForPeer(ready, signal) {
@@ -156,11 +163,12 @@ function deterministicDrivers({
   breakBuild = false,
   precompletedSouth = false,
 } = {}) {
-  const histories = [];
-  const calls = [];
-  let writes = Promise.resolve();
-  const both = Promise.withResolvers();
-  const peer = Promise.withResolvers();
+  const histories = [],
+    calls = [];
+  let writes = Promise.resolve(),
+    deliveries = 0;
+  const both = Promise.withResolvers(),
+    peer = Promise.withResolvers();
   const createDriver = async (workspace, _state, agent) => {
     if (precompletedSouth && agent === 0) {
       const edited = applyCoherentStructure(await readTree(workspace), {
@@ -183,27 +191,33 @@ function deterministicDrivers({
       async execute(prompt, options) {
         assert.equal(closed, false);
         history.push({ prompt, ...options });
-        calls.push({ agent, prompt, ...options });
         if (options.deliveryKind === "barrier-repair") {
-          assert.equal(options.atomicId, undefined);
-          assert.ok(
-            !prompt.includes("Target table"),
-            "Global repair must not resend the atom inventory",
-          );
+          calls.push({ agent, prompt, ...options });
           writes = writes.then(async () => {
             const file = path.join(workspace, "main.cpp");
-            const text = await readFile(file, "utf8");
-            assert.ok(!text.includes("#include <fstream>"));
-            await writeFile(file, "#include <fstream>\n" + text);
+            const source = await readFile(file, "utf8");
+            assert.ok(!source.includes("#include <fstream>"));
+            await writeFile(file, "#include <fstream>\n" + source);
           });
           await writes;
         } else {
-          const operation = currentHeader(prompt);
-          if (calls.length === 2) both.resolve();
+          const operations = currentHeader(prompt);
+          assert.equal(operations.length, options.atomicIds.length);
+          for (const [index, operation] of operations.entries())
+            calls.push({
+              agent,
+              prompt,
+              ...options,
+              atomicId: options.atomicIds[index],
+              operation,
+            });
+          if (++deliveries >= 2) both.resolve();
           await waitForPeer(both.promise, options.signal);
-          if (skipFirstNorth && operation.guard === "NORTH_H" && options.attempt === 1) {
-            await waitForPeer(peer.promise, options.signal);
-          } else {
+          for (const operation of operations) {
+            if (skipFirstNorth && operation.guard === "NORTH_H" && options.attempt === 1) {
+              await waitForPeer(peer.promise, options.signal);
+              continue;
+            }
             writes = writes.then(async () => {
               const tree = await readTree(workspace);
               const edited =
@@ -243,11 +257,11 @@ await test(
       onCase: (event) => caseEvents.push(event),
     });
     assert.equal(reference.status, "pass", JSON.stringify(reference.terminal));
-    assert.equal(reference.deliveries, 3);
+    assert.equal(atomicRows(reference).length, 3);
     assert.equal(reference.acceptedTasks, 2);
     assert.equal(reference.acceptedRounds, 1);
     assert.equal(caseEvents.length, 6);
-    for (const execution of reference.executions)
+    for (const execution of atomicRows(reference))
       assert.deepEqual(
         caseEvents.filter((event) => event.id === execution.atomicId),
         [
@@ -268,8 +282,8 @@ await test(
           },
         ],
       );
-    assert.equal(new Set(reference.executions.map((row) => row.receipts[0].lifetime)).size, 2);
-    assert.ok(reference.executions.some((row) => row.receipts[0].delivered === 2));
+    assert.equal(new Set(atomicRows(reference).map((row) => row.receipts[0].lifetime)).size, 2);
+    assert.ok(atomicRows(reference).some((row) => row.receipts[0].delivered === 2));
     const proofFile = path.join(preparation, "verification-2.json");
     const proof = JSON.parse(await readFile(proofFile, "utf8"));
     assert.deepEqual(proof.atomic, reference.atomic);
@@ -277,7 +291,7 @@ await test(
     assert.equal(proof.agents, 2);
 
     await t.test(
-      "free persistent participants receive only the current atom and retain their histories",
+      "free persistent participants receive only ready batch members in their retained histories",
       async () => {
         const drivers = deterministicDrivers();
         const report = await runConcurrent(preparation, path.join(root, "live"), {
@@ -285,19 +299,22 @@ await test(
           log: quiet,
         });
         assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        assert.equal(report.deliveries, 3);
+        assert.equal(atomicRows(report).length, 3);
         assert.equal(report.acceptedTasks, 2);
         assert.equal(
           report.repairs,
           0,
           JSON.stringify({
-            executions: report.executions,
+            executions: atomicRows(report),
             barriers: report.atomicBarriers,
             checks: report.checks,
           }),
         );
         assert.equal(new Set(drivers.calls.map((row) => row.atomicId)).size, 3);
-        assert.equal(drivers.histories.filter((history) => history.length === 2).length, 1);
+        assert.equal(
+          drivers.histories.reduce((sum, history) => sum + history.length, 0),
+          report.deliveries,
+        );
         assert.ok(report.agentsClosed.every(Boolean));
         assertInputTrace(report);
         assert.ok(
@@ -362,22 +379,21 @@ await test(
             log: quiet,
           });
           assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-          const byGuard = (guard) =>
-            drivers.calls.filter((row) => currentHeader(row.prompt).guard === guard);
+          const byGuard = (guard) => drivers.calls.filter((row) => row.operation?.guard === guard);
           assert.equal(
             byGuard("NORTH_H").length,
             2,
             JSON.stringify({
               repetition,
               calls: drivers.calls.map(({ atomicId, attempt }) => ({ atomicId, attempt })),
-              executions: report.executions,
+              executions: atomicRows(report),
               barriers: report.atomicBarriers,
               checks: report.checks,
             }),
           );
           assert.equal(byGuard("SOUTH_H").length, 1);
           assert.equal(byGuard("WEST_H").length, 1);
-          assert.equal(report.deliveries, 4);
+          assert.equal(atomicRows(report).length, 4);
           assert.deepEqual(
             byGuard("NORTH_H").map((row) => row.attempt),
             [1, 2],
@@ -403,7 +419,7 @@ await test(
           );
           // Failure drains existing deliveries, but does not require WEST to
           // have started. Retain every verified peer, whichever finishes first.
-          const verifiedPeers = report.executions.filter(
+          const verifiedPeers = atomicRows(report).filter(
             (row) => row.attempt === 1 && row.atomicCheck?.status === "pass",
           );
           assert.ok(verifiedPeers.length > 0, "The correction must retain a verified peer");
@@ -412,7 +428,7 @@ await test(
             verifiedPeers.map((row) => row.atomicId).sort(),
             JSON.stringify({
               repetition,
-              executions: report.executions,
+              executions: atomicRows(report),
               barriers: report.atomicBarriers,
             }),
           );
@@ -430,7 +446,7 @@ await test(
           log: quiet,
         });
         assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        assert.equal(report.deliveries, 4);
+        assert.equal(atomicRows(report).length, 4);
         assert.equal(report.repairs, 1);
         assert.equal(report.acceptedTasks, 2);
         assertInputTrace(report);
@@ -439,10 +455,10 @@ await test(
           [],
           "Global repair must not fabricate atom eligibility checks",
         );
-        const atoms = report.executions.filter((row) => row.atomicId);
+        const atoms = atomicRows(report).filter((row) => row.atomicId);
         assert.equal(atoms.length, 3);
         assert.ok(atoms.every((row) => row.attempt === 1 && row.atomicCheck.status === "pass"));
-        const repairs = report.executions.filter((row) => row.deliveryKind === "barrier-repair");
+        const repairs = atomicRows(report).filter((row) => row.deliveryKind === "barrier-repair");
         assert.equal(repairs.length, 1);
         assert.equal(repairs[0].atomicId, undefined);
         assert.equal(repairs[0].attempt, 2);
@@ -486,7 +502,7 @@ await test(
         const output = path.join(root, "dependent-live");
         const report = await runConcurrent(selected, output, { ...drivers, log: quiet });
         assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        assert.equal(report.deliveries, 3);
+        assert.equal(atomicRows(report).length, 3);
         assertInputTrace(report);
         const checks = report.atomicBarriers[0].inputChecks.filter(
           (check) => check.atomicId === south.id,
@@ -499,10 +515,10 @@ await test(
           status: "pass",
           reason: null,
         });
-        const dependent = report.executions.find((row) => row.atomicId === south.id);
+        const dependent = atomicRows(report).find((row) => row.atomicId === south.id);
         assert.ok(passed.startedMs + passed.elapsedMs <= dependent.startedMs);
         assert.equal(
-          report.executions.find((row) => row.atomicId === north.id).atomicCheck.status,
+          atomicRows(report).find((row) => row.atomicId === north.id).atomicCheck.status,
           "pass",
         );
         const saved = JSON.parse(await readFile(path.join(output, "report.json"), "utf8"));
