@@ -283,6 +283,27 @@ function headerLength(record) {
   }
 }
 
+function grouped(records, keyOf) {
+  const groups = new Map();
+  for (const record of records) {
+    const key = keyOf(record);
+    if (key === undefined) continue;
+    const group = groups.get(key);
+    if (group) group.push(record);
+    else groups.set(key, [record]);
+  }
+  return groups;
+}
+
+// Only coarse invariants belong in this key. Masked header matching still runs
+// below, and file/context differences must not narrow the global copy count.
+function familyKey(record) {
+  if (record.kind === "conditional")
+    return JSON.stringify([record.kind, record.scope, record.directives]);
+  if (record.kind !== "owner") return;
+  const header = headerLength(record);
+  return JSON.stringify([record.kind, record.scope, header, record.tokens[header]]);
+}
 function sameFamily(candidate, entry, header) {
   if (entry.record.kind === "conditional")
     return (
@@ -299,29 +320,35 @@ function sameFamily(candidate, entry, header) {
   );
 }
 
-function occurrenceStatus(entry, actualRecords, tree, cache, input) {
+function occurrenceStatus(entry, actualById, contract, tree, cache, input) {
   const { file, occurrences } = entry.occurrence;
   const name = entry.record.file;
   if (!cache.has(name)) {
     const source = tree[name];
     const tokens = typeof source === "string" ? atomicFileTokens(source) : [];
     const directives = typeof source === "string" ? atomicFileDirectives(source) : [];
-    cache.set(name, { tokens, directives });
+    // Every entry for this file uses the same validated trusted witness. Reuse
+    // only its file check within this call, never an occurrence's mask outcome.
+    const valid =
+      tokens.length === file.tokens.length &&
+      JSON.stringify(directives) === JSON.stringify(file.directives) &&
+      tokens.every((token, index) =>
+        file.slots.has(index) ? identifier(token) : token === file.tokens[index],
+      );
+    cache.set(name, { tokens, valid });
   }
   const view = cache.get(name);
   const { tokens } = view;
   const claims = [];
-  if (
-    tokens.length !== file.tokens.length ||
-    JSON.stringify(view.directives) !== JSON.stringify(file.directives) ||
-    !tokens.every((token, index) =>
-      file.slots.has(index) ? identifier(token) : token === file.tokens[index],
-    )
-  )
-    return { status: "unobservable", reason: "occurrence-file", claims };
+  if (!view.valid) return { status: "unobservable", reason: "occurrence-file", claims };
   if (!view.owners) {
     try {
-      view.owners = atomicFileOwners({ [name]: tree[name] });
+      // Keep every physical owner at a coordinate; an index must not overwrite
+      // an ambiguous boundary and turn it into a unique occurrence.
+      view.owners = grouped(
+        atomicFileOwners({ [name]: tree[name] }, { contract }),
+        (owner) => owner.tokenStart,
+      );
     } catch {
       return { status: "unobservable", reason: "occurrence-boundary", claims };
     }
@@ -332,17 +359,13 @@ function occurrenceStatus(entry, actualRecords, tree, cache, input) {
       occurrence.tokenStart,
       occurrence.tokenStart + entry.record.tokens.length,
     );
-    const located = view.owners.filter(
+    const located = (view.owners.get(occurrence.tokenStart) ?? []).filter(
       (owner) =>
-        owner.tokenStart === occurrence.tokenStart &&
         owner.tokenLength === entry.record.tokens.length &&
         context(owner.record) === entry.context &&
         JSON.stringify(owner.record.tokens) === JSON.stringify(actual),
     );
-    const found =
-      located.length === 1
-        ? actualRecords.find((candidate) => candidate.id === located[0].record.id)
-        : undefined;
+    const found = located.length === 1 ? actualById.get(located[0].record.id) : undefined;
     if (!found) {
       Object.assign(outcome, { status: "unobservable", reason: "occurrence-boundary" });
       continue;
@@ -425,6 +448,9 @@ function occurrenceStatus(entry, actualRecords, tree, cache, input) {
  * never an entire family. Non-pass results must still prevent acceptance.
  * Optional readInventory is a controller-owned exact-source lexical reader. It
  * may reuse immutable records, never expected answers or earlier gate decisions.
+ * Lookup indexes and shared occurrence-file checks are local to one evaluation.
+ * They retain duplicate boundary candidates and complete global family counts;
+ * every record and occurrence still evaluates its own current/peer masks.
  * This lexical projection is not semantic compilation or global preservation:
  * the controller must stabilize observations, block successors on non-pass, and
  * retain the drained full barriers and their whole-project checks.
@@ -443,9 +469,9 @@ export function evaluateAtomicBindingGate(
   const files = validateOccurrenceFiles(occurrenceFiles);
   const entries = validate(records, physicalOnly, files, input);
   const references = trustedFamilies(records, familyRecords);
-  let actual;
+  let contract;
   try {
-    actual = readInventory(tree).obligations;
+    contract = readInventory(tree);
   } catch (error) {
     return {
       status: activeWrites ? "pending" : "unobservable",
@@ -457,6 +483,14 @@ export function evaluateAtomicBindingGate(
       message: error.message,
     };
   }
+  const actual = contract.obligations;
+  const actualById = new Map();
+  for (const record of actual) if (!actualById.has(record.id)) actualById.set(record.id, record);
+  const actualByContext = grouped(actual, (record) =>
+    JSON.stringify([context(record), record.tokens?.length]),
+  );
+  const actualFamilies = grouped(actual, familyKey);
+  const expectedFamilies = grouped(references, familyKey);
   const used = new Map();
   const physical = new Map();
   const fileTokens = new Map();
@@ -476,17 +510,21 @@ export function evaluateAtomicBindingGate(
   }
   const outcomes = entries.map((entry) => {
     if (entry.occurrence) {
-      const { claims, ...result } = occurrenceStatus(entry, actual, tree, fileTokens, input);
+      const { claims, ...result } = occurrenceStatus(
+        entry,
+        actualById,
+        contract,
+        tree,
+        fileTokens,
+        input,
+      );
       const outcome = { id: entry.record.id, ...result };
       for (const claim of claims) reserve(claim.record, outcome, claim.key);
       return outcome;
     }
-    const candidates = actual.filter(
-      (record) =>
-        context(record) === entry.context &&
-        record.tokens.length === entry.record.tokens.length &&
-        matches(record.tokens, entry.record.tokens, entry.masks),
-    );
+    const candidates = (
+      actualByContext.get(JSON.stringify([entry.context, entry.record.tokens.length])) ?? []
+    ).filter((record) => matches(record.tokens, entry.record.tokens, entry.masks));
     const count = candidates.reduce((sum, record) => sum + record.count, 0);
     const outcome =
       !candidates.length || count !== entry.record.count
@@ -540,10 +578,11 @@ export function evaluateAtomicBindingGate(
     // A retained definition cannot disappear merely because it moved to another
     // file or its body was corrupted. Count matching declarators and definition
     // boundaries globally; expected records enumerate legitimate copies.
-    const expectedCount = references
+    const key = familyKey(entry.record);
+    const expectedCount = (expectedFamilies.get(key) ?? [])
       .filter((candidate) => sameFamily(candidate, entry, header))
       .reduce((sum, candidate) => sum + candidate.count, 0);
-    const actualCount = actual
+    const actualCount = (actualFamilies.get(key) ?? [])
       .filter((candidate) => sameFamily(candidate, entry, header))
       .reduce((sum, candidate) => sum + candidate.count, 0);
     if (actualCount !== expectedCount && outcomes[index].reason !== "ambiguous-owner")
