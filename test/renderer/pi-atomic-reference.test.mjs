@@ -8,12 +8,12 @@ import { scriptedPiFactory } from "./pi-atomic-reference.mjs";
 
 assert.ok(process.env.RENDERER_PI_RUNTIME, "Set RENDERER_PI_RUNTIME to the installed Pi runtime");
 
-test("real Pi executes ten current atoms per native bash call and retains distinct histories", async (t) => {
+test("real Pi executes fifty current atoms per native bash call and retains distinct histories", async (t) => {
   const root = await mkdtemp(path.resolve(".tmp/pi-atomic-reference-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const workspace = path.join(root, "workspace");
   await mkdir(workspace);
-  const names = ["North", "South", ...Array.from({ length: 18 }, (_, i) => `Unit${i}`), "West"];
+  const names = ["North", "South", ...Array.from({ length: 98 }, (_, i) => `Unit${i}`), "West"];
   const initial = names
     .map(
       (name) =>
@@ -56,10 +56,12 @@ test("real Pi executes ten current atoms per native bash call and retains distin
       atomicIds: ids,
     });
   const [first, peer] = await Promise.all([
-    deliver(0, names.slice(0, 10)),
-    deliver(1, names.slice(10, 20)),
+    deliver(0, names.slice(0, 50)),
+    deliver(1, names.slice(50, 100)),
   ]);
   await assert.rejects(readFile(path.join(workspace, "west.h")), { code: "ENOENT" });
+  assert.equal(first.scriptedReference.receipts.length, 50);
+  assert.equal(peer.scriptedReference.receipts.length, 50);
   const next = await deliver(0, ["West"]);
   assert.equal(first.sessionId, next.sessionId);
   assert.equal(first.lifetime, next.lifetime);
@@ -79,7 +81,7 @@ test("real Pi executes ten current atoms per native bash call and retains distin
   }
   assert.equal(
     (await readFile(path.join(workspace, "main.cpp"), "utf8")).match(/#include/g).length,
-    21,
+    101,
   );
 });
 

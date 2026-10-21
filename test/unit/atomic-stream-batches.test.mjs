@@ -5,23 +5,23 @@ import { runAtomicStream } from "../../src/suites/explicit-edit-multi-agent/exec
 const node = (id, dependencies = []) => ({ id, dependencies });
 const turn = () => new Promise((resolve) => setImmediate(resolve));
 
-test("ten ready edits share one delivery while every participant can stay busy", async () => {
-  const nodes = Array.from({ length: 150 }, (_, index) => node(`edit-${index}`));
+test("fifty ready edits share one delivery while every participant can stay busy", async () => {
+  const nodes = Array.from({ length: 750 }, (_, index) => node(`edit-${index}`));
   const release = Promise.withResolvers();
   const batches = [];
   const active = new Set();
   const result = await runAtomicStream(nodes, {
     agents: 15,
-    batchSize: 10,
+    batchSize: 50,
     executeBatch: async (items, agent, _signal, context) => {
       assert.ok(!active.has(agent));
       active.add(agent);
       batches.push({ ids: items.map((item) => item.id), agent });
-      assert.equal(items.length, 10);
+      assert.equal(items.length, 50);
       assert.ok(items.every((item) => context.writers.has(item.id)));
       if (batches.length === 15) release.resolve();
       await release.promise;
-      assert.equal(context.writers.size, 150);
+      assert.equal(context.writers.size, 750);
       active.delete(agent);
       return { delivery: agent };
     },
@@ -36,6 +36,21 @@ test("ten ready edits share one delivery while every participant can stay busy",
   );
 });
 
+test("a delivery cannot exceed fifty independently ready edits", async () => {
+  let dispatched = false;
+  await assert.rejects(
+    runAtomicStream([node("first")], {
+      agents: 15,
+      batchSize: 51,
+      executeBatch: async () => {
+        dispatched = true;
+      },
+      verify: async () => true,
+    }),
+    /Invalid atomic batch size/,
+  );
+  assert.equal(dispatched, false);
+});
 test("a small ready frontier uses all free participants rather than one full batch", async () => {
   const release = Promise.withResolvers();
   const batches = [];
@@ -43,7 +58,7 @@ test("a small ready frontier uses all free participants rather than one full bat
     Array.from({ length: 15 }, (_, i) => node(`edit-${i}`)),
     {
       agents: 15,
-      batchSize: 10,
+      batchSize: 50,
       executeBatch: async (items, agent) => {
         batches.push({ ids: items.map((item) => item.id), agent });
         if (batches.length === 15) release.resolve();
@@ -64,7 +79,7 @@ test("an undispatched dependency cannot enter its predecessor's batch", async ()
     [node("first"), node("dependent", ["first"]), node("peer")],
     {
       agents: 1,
-      batchSize: 10,
+      batchSize: 50,
       executeBatch: async (items) => {
         for (const item of items) assert.ok(item.dependencies.every((id) => verified.has(id)));
         batches.push(items.map((item) => item.id));
@@ -85,7 +100,7 @@ test("a failed batch member retains verified peers and correction delivers only 
   const batches = [];
   const first = await runAtomicStream(nodes, {
     agents: 1,
-    batchSize: 10,
+    batchSize: 50,
     executeBatch: async (items) => batches.push(items.map((item) => item.id)),
     verify: async (item) => item.id !== "wrong",
   });
@@ -94,7 +109,7 @@ test("a failed batch member retains verified peers and correction delivers only 
   assert.deepEqual([...first.completed], ["peer"]);
   const repaired = await runAtomicStream(nodes, {
     agents: 1,
-    batchSize: 10,
+    batchSize: 50,
     completed: first.completed,
     started: first.started,
     executeBatch: async (items) => batches.push(items.map((item) => item.id)),
@@ -108,7 +123,7 @@ test("preflight checks every member and excludes unmet inputs from the native de
   const delivered = [];
   const result = await runAtomicStream([node("ready"), node("invalid"), node("peer")], {
     agents: 1,
-    batchSize: 10,
+    batchSize: 50,
     checkInputs: async (item) => item.id !== "invalid",
     executeBatch: async (items) => delivered.push(...items.map((item) => item.id)),
     verify: async () => true,
@@ -127,7 +142,7 @@ test("batch execution failure aborts and settles peer deliveries before returnin
     Array.from({ length: 20 }, (_, i) => node(`edit-${i}`)),
     {
       agents: 2,
-      batchSize: 10,
+      batchSize: 50,
       executeBatch: async (_items, agent, signal) => {
         if (++started === 2) entered.resolve();
         await entered.promise;
@@ -153,7 +168,7 @@ test("pending member gates retry verification without repeating the batch delive
   let calls = 0;
   const result = await runAtomicStream([node("north"), node("south")], {
     agents: 1,
-    batchSize: 10,
+    batchSize: 50,
     executeBatch: async () => calls++,
     verify: async (item) => {
       if (item.id === "north" && !first.has(item.id)) {

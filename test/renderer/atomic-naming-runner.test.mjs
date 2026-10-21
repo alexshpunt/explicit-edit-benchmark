@@ -169,7 +169,7 @@ function deliveredBinding(prompt) {
       return [];
     }
   });
-  assert.ok(targets.length > 0 && targets.length <= 10);
+  assert.ok(targets.length > 0 && targets.length <= 50);
   return targets.map((target) => {
     assert.equal(target.mapping.length, 1);
     assert.ok(target.selectors.length > 0);

@@ -147,6 +147,33 @@ await test("a cross-parent batch keeps one native receipt and independent retain
   assert.throws(() => normalizeTeamReport(duplicate, profile, "fixture"));
 });
 
+await test("fifty atomic members retain one native usage receipt and unchanged group credit", () => {
+  const report = fixture();
+  const first = report.executions[0];
+  first.atomicIds = Array.from(
+    { length: 50 },
+    (_, i) => `task-001-atom-${String(i + 1).padStart(3, "0")}`,
+  );
+  report.executions = [first, ...report.executions.slice(2)];
+  const projected = normalizeTeamReport(report, profile, "fixture");
+  validate(report, projected);
+  assert.equal(projected.rounds.length, 3);
+  assert.deepEqual(projected.rounds[0].atomicIds, first.atomicIds);
+  assert.equal(
+    projected.rounds.reduce((sum, item) => sum + item.totalTokens, 0),
+    42,
+  );
+  assert.equal(
+    projected.rounds.reduce((sum, item) => sum + item.costUsd, 0),
+    0.75,
+  );
+  assert.equal(
+    projected.rounds.reduce((sum, item) => sum + item.toolCallCount, 0),
+    3,
+  );
+  assert.equal(projected.trials[0].firstExactPassed, false);
+  assert.equal(projected.trials[0].finalExactPassed, true);
+});
 await test("batch membership rejects oversize, duplicates, foreign parents and a false representative", () => {
   for (const atomicIds of [
     null,
@@ -154,7 +181,7 @@ await test("batch membership rejects oversize, duplicates, foreign parents and a
     ["task-001-atom-001", "task-001-atom-001"],
     ["task-001-atom-001", "task-003-atom-001"],
     ["task-001-atom-002"],
-    Array.from({ length: 11 }, (_, i) => `task-001-atom-${String(i + 1).padStart(3, "0")}`),
+    Array.from({ length: 51 }, (_, i) => `task-001-atom-${String(i + 1).padStart(3, "0")}`),
   ]) {
     const report = fixture();
     report.executions[0].atomicIds = atomicIds;
