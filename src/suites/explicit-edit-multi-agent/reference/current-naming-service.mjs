@@ -86,11 +86,62 @@ const unrelatedFunctionRequest = (task, spellings) =>
           ),
       ),
   );
+// Count only flat parameter lists and simple single-type template arguments.
+// Nested declarators, defaults and templates containing commas stay unknown.
+// This excludes incompatible candidates; it never proves a binding or a rename.
+function simpleParameterCount(source) {
+  const list = /^\s*\(([^()]*)\)/.exec(source)?.[1];
+  if (list === undefined) return undefined;
+  const flat = list.replace(
+    /\b(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*\s*<\s*(?:const\s+)?(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*(?:\s*[*&])?\s*>/g,
+    "TemplateType",
+  );
+  if (!/^[\s:,*&]*$/.test(flat.replace(/[A-Za-z_]\w*/g, ""))) return undefined;
+  if (!flat.trim() || flat.trim() === "void") return 0;
+  const parameters = flat.split(",");
+  return parameters.every((parameter) => parameter.trim()) ? parameters.length : undefined;
+}
 // Use the unique physical function-definition candidate, not uniqueness of the
 // variable's spelling across unrelated owners. This only chooses a compiler view:
 // its AST must still prove the exact owner and a definition-local binding in that
 // implementation. Alternate include contexts and manufactured spellings reject it.
-function localTranslationUnit(tree, task) {
+function mayContainBinding(task, source) {
+  if (!source) return true;
+  let units;
+  try {
+    units = cppStructure(source, { expandNamespaceConditionals: true }).units;
+  } catch {
+    return true; // Unsupported preprocessed syntax cannot exclude a compiler candidate.
+  }
+  return task.operations.every((operation) => {
+    const owner = operation.selectors[0].owner;
+    const name = owner.scope.split("::").at(-1);
+    const expectedCount = simpleParameterCount(owner.signature.slice(owner.signature.indexOf("(")));
+    const from = operation.mapping[0].from;
+    let found = false;
+    for (const unit of units) {
+      if (!unit.definition) continue;
+      const text = source.slice(unit.start, unit.end);
+      const header = text.slice(0, text.indexOf("{"));
+      const candidates = cppTokens(header).filter(
+        (token) => token.text === name && /^\s*\(/.test(header.slice(token.end)),
+      );
+      if (!candidates.length) continue;
+      found = true;
+      if (
+        expectedCount !== undefined &&
+        candidates.every((token) => {
+          const count = simpleParameterCount(header.slice(token.end));
+          return count !== undefined && count !== expectedCount;
+        })
+      )
+        continue;
+      if (cppTokens(text).some((token) => token.text === from)) return true;
+    }
+    return !found; // Missing owner coverage is unknown, not proof of absence.
+  });
+}
+async function localTranslationUnit(tree, task, resolveOwners) {
   if (
     !task.operations.every((operation) => {
       const selector = operation.selectors?.[0];
@@ -103,7 +154,9 @@ function localTranslationUnit(tree, task) {
         selector.kind === "variable" &&
         typeof selector.owner?.scope === "string" &&
         selector.owner.scope.length > 0 &&
-        selector.scope === selector.owner.scope + "::" + from &&
+        typeof selector.scope === "string" &&
+        selector.scope.startsWith(selector.owner.scope + "::") &&
+        selector.scope.endsWith("::" + from) &&
         typeof selector.owner.signature === "string" &&
         selector.owner.signature.length > 0 &&
         selector.owner.definition === true
@@ -115,7 +168,7 @@ function localTranslationUnit(tree, task) {
     task.operations.map((operation) => operation.selectors[0].owner.scope.split("::").at(-1)),
   );
   if ([...owners].some((name) => !/^[A-Za-z_]\w*$/.test(name))) return undefined;
-  let selected;
+  const candidates = [];
   for (const [file, source] of Object.entries(tree)) {
     const joined = source.replace(/\\\r?\n/g, "");
     if (/\?\?[/=]/.test(joined)) return undefined;
@@ -136,15 +189,17 @@ function localTranslationUnit(tree, task) {
         if (owners.has(token.text) && /^\s*\(/.test(header.slice(token.end))) found.add(token.text);
     }
     if (![...owners].every((name) => found.has(name))) continue;
-    if (selected && selected !== file) return undefined;
-    selected = file;
+    candidates.push(file);
   }
-  return selected && standaloneTranslationUnit(tree, selected) ? selected : undefined;
+  if (!candidates.length) return undefined;
+  if (candidates.length === 1)
+    return standaloneTranslationUnit(tree, candidates[0]) ? candidates[0] : undefined;
+  return resolveOwners(tree, task, candidates);
 }
 function standaloneTranslationUnit(tree, selected) {
   for (const [file, source] of Object.entries(tree)) {
     const joined = source.replace(/\\\r?\n/g, "");
-    if (/\?\?[/=]/.test(joined)) return false;
+    if (/\?\?[/=]/.test(joined) || /^[ \t]*(?:#|%:)[ \t]*(?:line\b|\d)/m.test(joined)) return false;
     for (const include of includeDirectives(joined)) {
       const relative = path.posix.normalize(
         path.posix.join(path.posix.dirname(file), include.file),
@@ -267,6 +322,15 @@ async function headerRequest(tree, task, readActiveMacros) {
  * that view, project trigraph ambiguity, a repeated implementation owner or an
  * include of that implementation rejects this optimization. Complete source
  * identity, current owner/signature selection and errors in that TU still apply.
+ * Nested lambda/operator scopes may sit below that enclosing function owner;
+ * their complete nested scope and owner signature are still matched by the AST.
+ * Same-spelling implementation candidates are disambiguated by actual compiler
+ * owner scope/signature. Only known acknowledged local renames retain that proof;
+ * repeated physical owners and unknown input reopen or reject the selection.
+ * Before body compilation, actual preprocessing may exclude an implementation
+ * whose same-spelling definition units cannot contain the requested variable.
+ * Generated spellings remain visible. Missing owner coverage, explicit line
+ * directives and unsupported syntax require ordinary AST proof, not exclusion.
  * A variable binding may also use one implementation when every literal spelling
  * is confined to that standalone TU. Multiple block-scope extern owners and its
  * namespace declaration remain compiler-selected together. Every other TU is
@@ -350,33 +414,83 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     return active;
   };
   const externalViews = new Map();
+  const preprocessedTU = async (tree, file) => {
+    check();
+    const source = joinedProject(tree, [file]).source;
+    const identity = treeIdentity({ [file]: source });
+    let view = externalViews.get(file);
+    if (view?.identity !== identity) {
+      await mkdir(directory, { recursive: true });
+      const sourcePath = path.resolve(directory, "external.cpp");
+      await writeFile(sourcePath, source);
+      const { stdout } = await execFile(
+        "clang++",
+        ["-std=c++17", "-pthread", "-E", "-dD", sourcePath],
+        { timeout: 45_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } },
+      );
+      let inProject = false;
+      const project = [];
+      for (const line of stdout.split("\n")) {
+        const marker = /^#\s+\d+\s+"([^"]+)"/.exec(line);
+        if (marker) inProject = marker[1] === sourcePath;
+        else if (inProject) project.push(line);
+      }
+      const explicitLines = /^[ \t]*(?:#|%:)[ \t]*(?:line\b|\d)/m.test(
+        source.replace(/\\\r?\n/g, ""),
+      );
+      view = { identity, source: stdout, project: explicitLines ? undefined : project.join("\n") };
+      externalViews.set(file, view);
+    }
+    return view;
+  };
   const externalUse = async (tree, selected, spelling) => {
     for (const file of Object.keys(tree).filter(
       (name) => name.endsWith(".cpp") && name !== selected,
-    )) {
-      check();
-      const source = joinedProject(tree, [file]).source;
-      const identity = treeIdentity({ [file]: source });
-      let view = externalViews.get(file);
-      if (view?.identity !== identity) {
-        await mkdir(directory, { recursive: true });
-        const sourcePath = path.resolve(directory, "external.cpp");
-        await writeFile(sourcePath, source);
-        const { stdout } = await execFile(
-          "clang++",
-          ["-std=c++17", "-pthread", "-E", "-P", sourcePath],
-          {
-            timeout: 45_000,
-            maxBuffer: 64 * 1024 * 1024,
-            env: { ...process.env, LC_ALL: "C" },
-          },
-        );
-        view = { identity, source: stdout };
-        externalViews.set(file, view);
-      }
-      if (spelling.test(view.source)) return true;
-    }
+    ))
+      if (spelling.test((await preprocessedTU(tree, file)).source)) return true;
     return false;
+  };
+  let ownerIdentity;
+  let ownerSnapshot = 0;
+  const ownerMatches = new Map();
+  const resolveOwners = async (tree, task, candidates) => {
+    const identity = treeIdentity(tree);
+    if (ownerIdentity !== identity) {
+      ownerMatches.clear();
+      ownerIdentity = identity;
+    }
+    const owners = task.operations.map((operation) => operation.selectors[0].owner);
+    const matches = [];
+    for (const file of candidates) {
+      check();
+      const view = await preprocessedTU(tree, file);
+      if (!mayContainBinding(task, view.project)) continue;
+      if (!standaloneTranslationUnit(tree, file)) return undefined;
+      const key = JSON.stringify({ file, owners });
+      let proof = ownerMatches.get(key);
+      if (!proof) {
+        const analysis = path.join(directory, `owner-${++ownerSnapshot}`);
+        await mkdir(analysis, { recursive: true });
+        let session;
+        try {
+          session = await scopedNamingSession(tree, analysis, { file });
+          proof = {
+            matches: owners.every((owner) => session.hasDefinitionOwner(owner)),
+            names: new Set(
+              owners.flatMap((owner) =>
+                cppTokens(owner.scope + " " + owner.signature).map((token) => token.text),
+              ),
+            ),
+          };
+          ownerMatches.set(key, proof);
+        } finally {
+          session?.close();
+          await rm(analysis, { recursive: true, force: true });
+        }
+      }
+      if (proof.matches) matches.push(file);
+    }
+    return matches.length === 1 ? matches[0] : undefined;
   };
   const open = async (tree, file, allowAbsentOwners = false) => {
     check();
@@ -499,7 +613,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         const explainedFullView = state && state.file === undefined && state.expected === identity;
         const localFile =
           !explainedFullView && task.operations[0].category !== "helpers"
-            ? localTranslationUnit(before, task)
+            ? await localTranslationUnit(before, task, resolveOwners)
             : undefined;
         const file =
           task.operations[0].category === "helpers"
@@ -581,6 +695,10 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           after,
           plans,
           types: state.types,
+          localDefinitionOnly,
+          changedNames: task.operations.flatMap((operation) =>
+            operation.mapping.flatMap((item) => [item.from, item.to]),
+          ),
           unrelatedTypes: unrelatedFunctionRequest(task, state.typeSpellings),
           ...(state.file === headerBindings ? { headerBefore: state.expected } : {}),
           ...(retainedTypes
@@ -616,6 +734,14 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         "CAS acknowledgement differs from pending naming transaction",
       );
       const accepted = pending;
+      if (accepted.localDefinitionOnly && ownerIdentity === accepted.before) {
+        for (const [key, proof] of ownerMatches)
+          if (accepted.changedNames.some((name) => proof.names.has(name))) ownerMatches.delete(key);
+        ownerIdentity = treeIdentity(after);
+      } else {
+        ownerIdentity = undefined;
+        ownerMatches.clear();
+      }
       pending = undefined;
       if (
         accepted.disposable ||
@@ -634,6 +760,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
       invalidate();
       macroState = undefined;
       externalViews.clear();
+      ownerMatches.clear();
     },
   };
 }
