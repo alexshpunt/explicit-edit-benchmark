@@ -495,6 +495,30 @@ export async function scopedNamingSession(
   }
   return {
     close: () => compiler?.close(),
+    /** Check an actual physical function owner without consuming any rename.
+     * Used only to disambiguate same-spelling implementation candidates. */
+    hasDefinitionOwner(owner) {
+      const name = owner.scope.split("::").at(-1);
+      const request = {
+        id: "physical-owner",
+        category: "functions-types",
+        mapping: [{ from: name, to: name }],
+        selectors: [{ kind: "function", scope: owner.scope, owner }],
+      };
+      const selected = selectedDeclarations(
+        roots,
+        [request],
+        image.source,
+        renamed,
+        image.physical,
+        undefined,
+        true,
+        declarations,
+      );
+      return selected.some(
+        (entry) => image.physical(entry.offset, Buffer.byteLength(entry.name)).file === file,
+      );
+    },
     async plan(request, { localDefinitionOnly = false } = {}) {
       const selection = select(request);
       if (
