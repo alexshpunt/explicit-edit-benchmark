@@ -139,19 +139,50 @@ function localTranslationUnit(tree, task) {
     if (selected && selected !== file) return undefined;
     selected = file;
   }
-  if (!selected) return undefined;
-  for (const [file, source] of Object.entries(tree))
-    for (const include of includeDirectives(source.replace(/\\\r?\n/g, ""))) {
+  return selected && standaloneTranslationUnit(tree, selected) ? selected : undefined;
+}
+function standaloneTranslationUnit(tree, selected) {
+  for (const [file, source] of Object.entries(tree)) {
+    const joined = source.replace(/\\\r?\n/g, "");
+    if (/\?\?[/=]/.test(joined)) return false;
+    for (const include of includeDirectives(joined)) {
       const relative = path.posix.normalize(
         path.posix.join(path.posix.dirname(file), include.file),
       );
       const target = [relative, include.file, "support/" + include.file].find(
         (name) => typeof tree[name] === "string",
       );
-      if (target === selected) return undefined;
+      if (target === selected) return false;
     }
-  if (/##|%:%:/.test(joinedProject(tree, [selected]).source.replace(/\\\r?\n/g, "")))
+  }
+  return !/##|%:%:/.test(joinedProject(tree, [selected]).source.replace(/\\\r?\n/g, ""));
+}
+async function confinedVariableTranslationUnit(tree, task, externalUse) {
+  if (
+    !task.operations.every(
+      (operation) =>
+        operation.category === "locals-parameters" &&
+        operation.mapping?.length === 1 &&
+        /^[A-Za-z_]\w*$/.test(operation.mapping[0].from) &&
+        operation.selectors?.length &&
+        operation.selectors.every((selector) => selector.kind === "variable"),
+    )
+  )
     return undefined;
+  const names = task.operations.map((operation) => operation.mapping[0].from);
+  const spelling = new RegExp(`\\b(?:${names.join("|")})\\b`);
+  const sources = Object.entries(tree).map(([file, source]) => [
+    file,
+    source.replace(/\\\r?\n/g, ""),
+  ]);
+  const files = sources.filter(([, source]) => spelling.test(source)).map(([file]) => file);
+  if (files.length !== 1 || !files[0].endsWith(".cpp")) return undefined;
+  const selected = files[0];
+  if (!standaloneTranslationUnit(tree, selected)) return undefined;
+  // Raw spelling closure is insufficient when another TU can manufacture a name.
+  // Preprocessing retains its actual includes/macros without requiring unrelated
+  // function bodies to be semantically valid during a concurrent move.
+  if (await externalUse(tree, selected, spelling)) return undefined;
   return selected;
 }
 async function implementationHeaderContext(tree, spelling, readActiveMacros) {
@@ -236,6 +267,12 @@ async function headerRequest(tree, task, readActiveMacros) {
  * that view, project trigraph ambiguity, a repeated implementation owner or an
  * include of that implementation rejects this optimization. Complete source
  * identity, current owner/signature selection and errors in that TU still apply.
+ * A variable binding may also use one implementation when every literal spelling
+ * is confined to that standalone TU. Multiple block-scope extern owners and its
+ * namespace declaration remain compiler-selected together. Every other TU is
+ * actually preprocessed; generated uses and alternate implementation includes
+ * reject the view. Text is cached only for identical complete TU input.
+ * Selected includes and owner signatures still compile; no declarations are added.
  * An already valid complete-project snapshot takes priority over a narrower
  * local view; unexplained whole-source changes still invalidate that reuse.
  * Other owned-variable requests first compile the current headers alone, since
@@ -311,6 +348,35 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     );
     macroState = { identity, active };
     return active;
+  };
+  const externalViews = new Map();
+  const externalUse = async (tree, selected, spelling) => {
+    for (const file of Object.keys(tree).filter(
+      (name) => name.endsWith(".cpp") && name !== selected,
+    )) {
+      check();
+      const source = joinedProject(tree, [file]).source;
+      const identity = treeIdentity({ [file]: source });
+      let view = externalViews.get(file);
+      if (view?.identity !== identity) {
+        await mkdir(directory, { recursive: true });
+        const sourcePath = path.resolve(directory, "external.cpp");
+        await writeFile(sourcePath, source);
+        const { stdout } = await execFile(
+          "clang++",
+          ["-std=c++17", "-pthread", "-E", "-P", sourcePath],
+          {
+            timeout: 45_000,
+            maxBuffer: 64 * 1024 * 1024,
+            env: { ...process.env, LC_ALL: "C" },
+          },
+        );
+        view = { identity, source: stdout };
+        externalViews.set(file, view);
+      }
+      if (spelling.test(view.source)) return true;
+    }
+    return false;
   };
   const open = async (tree, file, allowAbsentOwners = false) => {
     check();
@@ -430,19 +496,23 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         // before probing a narrower view: that probe may itself run Clang's
         // preprocessor. Unknown source still takes the complete selection path,
         // and the type/owner guards below still decide whether reuse is valid.
+        const explainedFullView = state && state.file === undefined && state.expected === identity;
+        const localFile =
+          !explainedFullView && task.operations[0].category !== "helpers"
+            ? localTranslationUnit(before, task)
+            : undefined;
         const file =
           task.operations[0].category === "helpers"
             ? task.operations[0].file
-            : state && state.file === undefined && state.expected === identity
+            : explainedFullView
               ? undefined
-              : (localTranslationUnit(before, task) ??
+              : (localFile ??
+                (await confinedVariableTranslationUnit(before, task, externalUse)) ??
                 (Object.keys(before).some((name) => headerPath.test(name)) &&
                 (await headerRequest(before, task, readActiveMacros))
                   ? headerBindings
                   : undefined));
-        const localDefinitionOnly =
-          typeof file === "string" &&
-          task.operations.every((operation) => operation.category === "locals-parameters");
+        const localDefinitionOnly = Boolean(localFile);
         const retainedTypes =
           plainTypeRequest(task) ||
           unrelatedOwnedTypeRequest(task, state?.typeSpellings ?? new Set());
@@ -563,6 +633,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
       stopped = true;
       invalidate();
       macroState = undefined;
+      externalViews.clear();
     },
   };
 }
