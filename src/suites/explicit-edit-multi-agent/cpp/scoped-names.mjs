@@ -430,6 +430,7 @@ export async function scopedNamingSession(
   const keepEdit = (...args) => directCallFilter()(...args);
   const consumed = new Set();
   const renamed = new Map();
+  let probed;
   const siteKey = (edit) => JSON.stringify([edit.file, edit.start]);
   const planSignature = (plan) =>
     JSON.stringify(
@@ -486,6 +487,7 @@ export async function scopedNamingSession(
     return { id, edits: [...physical.values()] };
   }
   function commit(selection, plan) {
+    probed = undefined;
     for (const edit of plan.edits)
       if (consumed.has(siteKey(edit)))
         throw new Error("Binding already changed by an earlier request");
@@ -495,17 +497,12 @@ export async function scopedNamingSession(
   }
   return {
     close: () => compiler?.close(),
-    /** Check an actual physical function owner without consuming any rename.
-     * Used only to disambiguate same-spelling implementation candidates. */
-    hasDefinitionOwner(owner) {
-      const name = owner.scope.split("::").at(-1);
-      const request = {
-        id: "physical-owner",
-        category: "functions-types",
-        mapping: [{ from: name, to: name }],
-        selectors: [{ kind: "function", scope: owner.scope, owner }],
-      };
-      const selected = selectedDeclarations(
+    /** Check exact definition-local bindings in this physical implementation.
+     * This consumes no rename. An immediate identical plan reuses the selection;
+     * any committed request discards the probe. Consumed declarations do not match. */
+    hasLocalBinding(request) {
+      probed = undefined;
+      const selection = selectedDeclarations(
         roots,
         [request],
         image.source,
@@ -515,12 +512,22 @@ export async function scopedNamingSession(
         true,
         declarations,
       );
-      return selected.some(
-        (entry) => image.physical(entry.offset, Buffer.byteLength(entry.name)).file === file,
-      );
+      const found =
+        selection.length > 0 &&
+        request.mapping.every((mapping) =>
+          selection.some((entry) => entry.name === mapping.from),
+        ) &&
+        selection.every((entry) => {
+          const site = image.physical(entry.offset, Buffer.byteLength(entry.name));
+          return entry.localDefinition && site.file === file && !consumed.has(siteKey(site));
+        });
+      if (found) probed = { key: JSON.stringify(request), selection };
+      return found;
     },
     async plan(request, { localDefinitionOnly = false } = {}) {
-      const selection = select(request);
+      const selection =
+        probed?.key === JSON.stringify(request) ? probed.selection : select(request);
+      probed = undefined;
       if (
         localDefinitionOnly &&
         selection.some(
