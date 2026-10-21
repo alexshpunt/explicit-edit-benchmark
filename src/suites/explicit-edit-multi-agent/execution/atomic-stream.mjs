@@ -12,7 +12,7 @@ export const ATOMIC_DISPATCH_POLICY = Object.freeze({
   barrierRecovery: "single-global-delivery",
   taskConstraints: TASK_CONSTRAINTS_VERSION,
   environment: "shared-project-facts-v1",
-  maxBatchSize: 10,
+  maxBatchSize: 50,
 });
 
 function graphState(nodes, completed) {
@@ -59,7 +59,7 @@ function graphState(nodes, completed) {
  * Editing failure drains peers; operational failure aborts and awaits them.
  * The caller owns corrections and current-workspace completion revalidation.
  * executeBatch(nodes, agent, signal, context) performs one native delivery for up to
- * batchSize edits (default 1, maximum 10). A small ready frontier is spread across
+ * batchSize edits (default 1, maximum 50). A small ready frontier is spread across
  * free participants before filling batches. The singleton execute(node, ...) callback
  * is available only with batchSize 1. verify(node, signal, receipt,
  * context) and optional checkInputs(node, signal, context) return true, false or
