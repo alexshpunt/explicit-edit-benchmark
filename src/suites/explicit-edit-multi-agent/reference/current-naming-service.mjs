@@ -327,6 +327,10 @@ async function headerRequest(tree, task, readActiveMacros) {
  * Same-spelling implementation candidates are disambiguated by actual compiler
  * owner scope/signature. Only known acknowledged local renames retain that proof;
  * repeated physical owners and unknown input reopen or reject the selection.
+ * A successfully compiled .cpp candidate that lacks the requested owner/binding
+ * does not exclude a header-defined overload. Such selection misses try actual
+ * headers; an absent header binding preserves the original selection error.
+ * Selected implementation and header compiler errors still fail.
  * Before body compilation, actual preprocessing may exclude an implementation
  * whose same-spelling definition units cannot contain the requested variable.
  * Generated spellings remain visible. Missing owner coverage, explicit line
@@ -615,7 +619,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           !explainedFullView && task.operations[0].category !== "helpers"
             ? await localTranslationUnit(before, task, resolveOwners)
             : undefined;
-        const file =
+        let file =
           task.operations[0].category === "helpers"
             ? task.operations[0].file
             : explainedFullView
@@ -626,7 +630,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
                 (await headerRequest(before, task, readActiveMacros))
                   ? headerBindings
                   : undefined));
-        const localDefinitionOnly = Boolean(localFile);
+        let localDefinitionOnly = Boolean(localFile);
         const retainedTypes =
           plainTypeRequest(task) ||
           unrelatedOwnedTypeRequest(task, state?.typeSpellings ?? new Set());
@@ -650,35 +654,61 @@ export function currentNamingPlanner(directory, { signal } = {}) {
             return await separateCurrent();
           }
         }
+        const selectPlans = async () => {
+          const selected = [];
+          for (const operation of task.operations)
+            selected.push(await state.session.plan(operation, { localDefinitionOnly }));
+          return selected;
+        };
         let plans;
         try {
-          plans = [];
-          for (const operation of task.operations)
-            plans.push(await state.session.plan(operation, { localDefinitionOnly }));
+          plans = await selectPlans();
         } catch (error) {
-          // The indexed public selector may have become stale after a known scope
-          // or written signature rename. Reopen the ACTUAL source, never translate
-          // a selector by broad text replacement or fall back to saved answers.
-          if (!reused && file !== headerBindings) {
-            invalidate();
-            throw error;
+          if (
+            localDefinitionOnly &&
+            (error.message.startsWith("Missing current owner/signature binding:") ||
+              error.message.startsWith("Unsupported local reference")) &&
+            Object.keys(before).some((name) => headerPath.test(name))
+          ) {
+            // A physical .cpp name candidate may be another overload, while the
+            // requested definition lives in a header. Its successful compilation
+            // does not prove that the requested binding belongs to that view.
+            // Only an exact actual-header compiler plan can recover this miss.
+            file = headerBindings;
+            localDefinitionOnly = false;
+            reused = false;
+            try {
+              await fresh(before, file);
+              plans = await selectPlans();
+            } catch (headerError) {
+              invalidate();
+              if (headerError.message.startsWith("Missing current owner/signature binding:"))
+                throw error;
+              throw headerError;
+            }
           }
-          try {
-            await fresh(before, file === headerBindings ? undefined : file);
-          } catch (freshError) {
-            invalidate();
-            if (file !== headerBindings || !freshError.message.startsWith("Compiler AST failed:"))
+          if (!plans) {
+            // Reopen the ACTUAL source after a missed cached/header selector.
+            // Never translate selectors or fall back to saved reference answers.
+            if (!reused && file !== headerBindings) {
+              invalidate();
+              throw error;
+            }
+            try {
+              await fresh(before, file === headerBindings ? undefined : file);
+            } catch (freshError) {
+              invalidate();
+              if (file !== headerBindings || !freshError.message.startsWith("Compiler AST failed:"))
+                throw freshError;
+              return await separateCurrent();
+            }
+            reused = false;
+            try {
+              plans = await selectPlans();
+            } catch (freshError) {
+              invalidate();
               throw freshError;
-            return await separateCurrent();
-          }
-          reused = false;
-          try {
-            plans = [];
-            for (const operation of task.operations)
-              plans.push(await state.session.plan(operation, { localDefinitionOnly }));
-          } catch (freshError) {
-            invalidate();
-            throw freshError;
+            }
           }
         }
         check();
