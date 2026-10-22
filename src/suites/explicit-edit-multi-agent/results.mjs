@@ -17,7 +17,7 @@ export const MULTI_AGENT_POLICY = Object.freeze({
   trialTimeoutMs: null,
   attemptTimeoutMs: null,
   oracleRecoveries: 5,
-  feedbackMode: "coarse",
+  feedbackMode: "task-scoped-diagnostics",
   workspace: "shared-live",
   checkpoint: "ready-task-barrier",
   commitOrder: "observed-not-prescribed",
@@ -73,13 +73,10 @@ function comparisonKey(result) {
 
 /** Return every atomic member of one native delivery without multiplying its receipt.
  * atomicId is the first member and names the native artifact directory. Historical
- * singleton deliveries have no atomicIds array; global repairs have no members.
+ * singleton deliveries have no atomicIds array. Unscoped global repairs are invalid.
  */
 export function atomicDeliveryIds(delivery) {
-  if (delivery.deliveryKind) {
-    assert.ok(!Object.hasOwn(delivery, "atomicIds"), "Global repair cannot name atomic members");
-    return [];
-  }
+  assert.ok(!Object.hasOwn(delivery, "deliveryKind"), "Unscoped global repair is not permitted");
   const ids = Object.hasOwn(delivery, "atomicIds") ? delivery.atomicIds : [delivery.atomicId];
   assert.ok(
     Array.isArray(ids) && ids.length > 0 && ids.length <= ATOMIC_DISPATCH_POLICY.maxBatchSize,
@@ -96,13 +93,7 @@ export function atomicDeliveryIds(delivery) {
 
 /** Resolve the last delivery for each member, including partial batch corrections. */
 export function latestStreamDeliveries(deliveries) {
-  return new Map(
-    deliveries.flatMap((item) =>
-      item.deliveryKind
-        ? [[item.deliveryKind, item]]
-        : atomicDeliveryIds(item).map((id) => [id, item]),
-    ),
-  );
+  return new Map(deliveries.flatMap((item) => atomicDeliveryIds(item).map((id) => [id, item])));
 }
 
 /** Validate that one delivery contains only its declared parents from this barrier. */
@@ -134,6 +125,7 @@ function settledStreamDelivery(execution) {
 function validateStreamExecutions(raw, rounds) {
   const deliveries = new Map();
   const positions = new Map(raw.schedule.map((round, index) => [round.id, index]));
+  const owners = new Map();
   let previous = -1;
   for (const execution of raw.executions) {
     const round = rounds.get(execution.round);
@@ -147,52 +139,20 @@ function validateStreamExecutions(raw, rounds) {
     previous = ordered;
     integer(execution.agent);
     assert.ok(execution.agent < raw.agents, "Atomic participant is outside the team pool");
-    if (Object.hasOwn(execution, "deliveryKind")) {
-      assert.equal(execution.deliveryKind, "barrier-repair", "Unsupported stream delivery kind");
-      assert.ok(!Object.hasOwn(execution, "atomicId"), "Global repair cannot name an atomic ID");
-      atomicDeliveryIds(execution);
-      assert.ok(execution.attempt > 1, "Global repair cannot be an initial delivery");
-      assert.ok(Array.isArray(execution.tasks));
-      const parents = round.assignments.map((item) => item.task);
-      assert.deepEqual(
-        [...execution.tasks].sort(),
-        [...parents].sort(),
-        "Global repair needs every barrier parent exactly once",
-      );
-      const previousCheck = raw.checks.find(
-        (item) => item.label === `${round.id}-attempt-${execution.attempt - 1}`,
-      );
-      const earlier = raw.executions.filter(
-        (item) =>
-          item.round === round.id &&
-          item.attempt < execution.attempt &&
-          Object.hasOwn(item, "atomicId"),
-      );
-      const retained = latestStreamDeliveries(earlier);
-      assert.ok(
-        previousCheck?.status === "fail" && failureCategories.has(previousCheck.category),
-        "Global repair lacks a failed barrier",
-      );
-      assert.ok(
-        [...retained.values()].every(settledStreamDelivery),
-        "Global repair has failed retained atomic receipts",
-      );
-      assert.ok(
-        parents.every((task) => earlier.some((item) => item.tasks.includes(task))),
-        "Global repair lacks retained parent deliveries",
-      );
-    } else {
-      validateAtomicParents(
-        execution,
-        execution.tasks,
-        round.assignments.map((item) => item.task),
-      );
+    validateAtomicParents(
+      execution,
+      execution.tasks,
+      round.assignments.map((item) => item.task),
+    );
+    for (const id of atomicDeliveryIds(execution)) {
+      const key = `${round.id}:${id}`;
+      if (owners.has(key))
+        assert.equal(owners.get(key), execution.agent, "Repair changed task executor");
+      else owners.set(key, execution.agent);
     }
     assert.ok(["settled", "error"].includes(execution.status), "Invalid atomic delivery status");
     const key = `${round.id}:${execution.attempt}`;
     const group = deliveries.get(key) ?? [];
-    if (execution.deliveryKind || group.some((item) => item.deliveryKind))
-      assert.equal(group.length, 0, "Mixed or duplicate global repair delivery");
     assert.ok(
       !group.some((item) =>
         atomicDeliveryIds(item).some((id) => atomicDeliveryIds(execution).includes(id)),

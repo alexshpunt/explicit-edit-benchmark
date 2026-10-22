@@ -320,6 +320,11 @@ function sameFamily(candidate, entry, header) {
   );
 }
 
+function identifierViolations(tokens, masks) {
+  return [...masks.values()]
+    .filter((mask) => mask.role === "current" && tokens[mask.index] !== mask.to)
+    .map((mask) => ({ expected: mask.to, actual: tokens[mask.index] }));
+}
 function occurrenceStatus(entry, actualById, contract, tree, cache, input) {
   const { file, occurrences } = entry.occurrence;
   const name = entry.record.file;
@@ -378,14 +383,11 @@ function occurrenceStatus(entry, actualById, contract, tree, cache, input) {
       Object.assign(outcome, { status: "unobservable", reason: "occurrence-owner" });
       continue;
     }
-    if (
-      outcome.status !== "unobservable" &&
-      !input &&
-      [...occurrence.masks.values()].some(
-        (mask) => mask.role === "current" && actual[mask.index] !== mask.to,
-      )
-    )
+    const violations = input ? [] : identifierViolations(actual, occurrence.masks);
+    if (outcome.status !== "unobservable" && violations.length) {
       outcome.status = "fail";
+      outcome.identifiers = [...(outcome.identifiers ?? []), ...violations];
+    }
   }
   return outcome;
 }
@@ -541,6 +543,10 @@ export function evaluateAtomicBindingGate(
                 ? "pass"
                 : "fail",
           };
+    if (outcome.status === "fail")
+      outcome.identifiers = candidates.flatMap((record) =>
+        identifierViolations(record.tokens, entry.masks),
+      );
     for (const found of candidates) reserve(found, outcome);
     return outcome;
   });
