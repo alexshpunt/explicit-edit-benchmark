@@ -73,6 +73,7 @@ export async function buildOfficialManifest(normalizedDirectory, options) {
       configurationHashes: [...new Set(hashes)].sort(),
       tasks,
       runPolicy: normalized.policy,
+      ...(team?.atomic ? { atomic: team.atomic } : {}),
     },
     lifecycle: {
       state: lifecycleState,
@@ -110,6 +111,11 @@ export async function validateOfficialManifest(
       release.scheduleSha256 !== team.scheduleSha256
     )
       throw Error("official manifest: workload, graph or schedule does not match policy");
+    if (
+      !team.atomic ||
+      Object.keys(release.atomic).some((field) => release.atomic[field] !== team.atomic[field])
+    )
+      throw Error("official manifest: atomic identity does not match policy");
     if (runner.verifierSha256 !== (await suiteVerifier()))
       throw Error("release policy: verifier does not match trusted multi-agent runner");
   }
@@ -160,6 +166,7 @@ export async function validateOfficialManifest(
       "configurationHashes",
       "tasks",
       "runPolicy",
+      ...(team?.atomic ? ["atomic"] : []),
     ],
     "official manifest.normalized",
   );

@@ -11,6 +11,7 @@ import {
   MULTI_AGENT_POLICY,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 import { verifierSha256 } from "./verifier-identity.mjs";
+import { validateAtomicIdentity } from "./normalized-team-protocol.mjs";
 
 /** Identify the trusted suite implementation using portable source-relative names.
  * No private configuration or generated run output is part of the verifier identity.
@@ -72,6 +73,34 @@ export async function runMultiAgentBatch({
   assert.equal(proof.status, "pass");
   assert.equal(proof.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent proof protocol");
   assert.deepEqual(proof.policy, MULTI_AGENT_POLICY, "Unsupported Multi-Agent proof policy");
+  validateAtomicIdentity(manifest.atomic);
+  assert.deepEqual(
+    proof.atomic,
+    manifest.atomic,
+    "Concurrent live runs need a matched atomic stream proof",
+  );
+  assert.equal(proof.agents, 15, "Atomic proof participant count differs");
+  assert.equal(
+    proof.acceptedAtomicEdits,
+    manifest.atomic.edits,
+    "Atomic proof inventory is incomplete",
+  );
+  for (const [file, field] of [
+    ["tasks.json", "workloadSha256"],
+    ["batches.json", "batchesSha256"],
+  ]) {
+    const bytes = await readFile(path.join(preparation, "atomic", file));
+    assert.equal(
+      createHash("sha256").update(bytes).digest("hex"),
+      manifest.atomic[field],
+      `Atomic ${file} changed`,
+    );
+    if (file === "tasks.json") {
+      const workload = JSON.parse(bytes);
+      assert.equal(workload.version, "renderer-atomic-workload-v1");
+      assert.equal(workload.nodes.length, manifest.atomic.edits, "Atomic inventory count differs");
+    }
+  }
   const tasks = JSON.parse(await readFile(path.join(preparation, "tasks.json"), "utf8"));
   const json = (file, value) =>
     writeFile(path.join(root, file), JSON.stringify(value, null, 2) + "\n");
@@ -94,6 +123,7 @@ export async function runMultiAgentBatch({
       workloadSha256: manifest.workloadSha256,
       graphSha256: manifest.graphSha256,
       scheduleSha256: proof.scheduleSha256,
+      atomic: manifest.atomic,
     },
   });
   const summary = { suite: MULTI_AGENT_BENCHMARK, profiles: {}, results: [] };

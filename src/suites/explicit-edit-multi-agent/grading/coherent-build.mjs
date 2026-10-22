@@ -10,7 +10,9 @@ const exec = promisify(execFile);
 
 /** Build a read-only candidate snapshot and render both scenes twice in separate
  * namespaces. Trusted contracts, pixels, host files and credentials are not mounts.
- * Output logs are private evidence; no compiler or render diagnostics reach the agent.
+ * Output logs remain private evidence. The concurrent controller may project located
+ * candidate compiler diagnostics into task-scoped feedback; raw commands and logs
+ * are never agent input.
  */
 export async function buildCoherentCandidate(source, evidence, tree, { signal } = {}) {
   await mkdir(evidence);

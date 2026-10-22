@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { ATOMIC_DISPATCH_POLICY } from "./execution/atomic-stream.mjs";
 
 /** Public benchmark identity; never reuse the original Exact Edit identity. */
 export const MULTI_AGENT_BENCHMARK = "explicit-edit-multi-agent";
@@ -16,7 +17,7 @@ export const MULTI_AGENT_POLICY = Object.freeze({
   trialTimeoutMs: null,
   attemptTimeoutMs: null,
   oracleRecoveries: 5,
-  feedbackMode: "coarse",
+  feedbackMode: "task-scoped-diagnostics",
   workspace: "shared-live",
   checkpoint: "ready-task-barrier",
   commitOrder: "observed-not-prescribed",
@@ -68,6 +69,143 @@ function comparisonKey(result) {
       policy: result.policy,
     }),
   );
+}
+
+/** Return every atomic member of one native delivery without multiplying its receipt.
+ * atomicId is the first member and names the native artifact directory. Historical
+ * singleton deliveries have no atomicIds array. Unscoped global repairs are invalid.
+ */
+export function atomicDeliveryIds(delivery) {
+  assert.ok(!Object.hasOwn(delivery, "deliveryKind"), "Unscoped global repair is not permitted");
+  const ids = Object.hasOwn(delivery, "atomicIds") ? delivery.atomicIds : [delivery.atomicId];
+  assert.ok(
+    Array.isArray(ids) && ids.length > 0 && ids.length <= ATOMIC_DISPATCH_POLICY.maxBatchSize,
+    "Invalid atomic batch size",
+  );
+  assert.equal(new Set(ids).size, ids.length, "Duplicate atomic batch member");
+  assert.equal(delivery.atomicId, ids[0], "Atomic representative differs from first batch member");
+  for (const id of ids) {
+    assert.ok(typeof id === "string", "Missing atomic delivery ID");
+    assert.match(id, /^task-\d{3}[-_:][A-Za-z0-9][A-Za-z0-9._:-]*$/);
+  }
+  return ids;
+}
+
+/** Resolve the last delivery for each member, including partial batch corrections. */
+export function latestStreamDeliveries(deliveries) {
+  return new Map(deliveries.flatMap((item) => atomicDeliveryIds(item).map((id) => [id, item])));
+}
+
+/** Validate that one delivery contains only its declared parents from this barrier. */
+export function validateAtomicParents(delivery, parents, barrierParents) {
+  const ids = atomicDeliveryIds(delivery);
+  const actual = [...new Set(ids.map((id) => id.slice(0, 8)))];
+  assert.ok(Array.isArray(parents), "Missing atomic parent tasks");
+  assert.deepEqual(
+    [...parents].sort(),
+    actual.sort(),
+    "Atomic delivery contradicts its parent tasks",
+  );
+  assert.ok(
+    parents.every((task) => barrierParents.includes(task)),
+    "Unscheduled atomic parent task",
+  );
+}
+function settledStreamDelivery(execution) {
+  const receipt = execution.receipt ?? {};
+  return (
+    execution.status === "settled" &&
+    !receipt.providerFailure &&
+    !receipt.timedOut &&
+    !receipt.eventErrors &&
+    (receipt.exitCode === undefined || receipt.exitCode === null || receipt.exitCode === 0)
+  );
+}
+
+function validateStreamExecutions(raw, rounds) {
+  const deliveries = new Map();
+  const positions = new Map(raw.schedule.map((round, index) => [round.id, index]));
+  const owners = new Map();
+  let previous = -1;
+  for (const execution of raw.executions) {
+    const round = rounds.get(execution.round);
+    assert.ok(round, "Atomic delivery has an unknown barrier");
+    const position = positions.get(round.id);
+    assert.ok(position <= raw.acceptedRounds, "Atomic work continued beyond the stopped barrier");
+    integer(execution.attempt, 1);
+    assert.ok(execution.attempt <= MULTI_AGENT_MAX_ATTEMPTS);
+    const ordered = position * MULTI_AGENT_MAX_ATTEMPTS + execution.attempt;
+    assert.ok(ordered >= previous, "Atomic dispatch order moved to an earlier barrier or attempt");
+    previous = ordered;
+    integer(execution.agent);
+    assert.ok(execution.agent < raw.agents, "Atomic participant is outside the team pool");
+    validateAtomicParents(
+      execution,
+      execution.tasks,
+      round.assignments.map((item) => item.task),
+    );
+    for (const id of atomicDeliveryIds(execution)) {
+      const key = `${round.id}:${id}`;
+      if (owners.has(key))
+        assert.equal(owners.get(key), execution.agent, "Repair changed task executor");
+      else owners.set(key, execution.agent);
+    }
+    assert.ok(["settled", "error"].includes(execution.status), "Invalid atomic delivery status");
+    const key = `${round.id}:${execution.attempt}`;
+    const group = deliveries.get(key) ?? [];
+    assert.ok(
+      !group.some((item) =>
+        atomicDeliveryIds(item).some((id) => atomicDeliveryIds(execution).includes(id)),
+      ),
+      "Duplicate atomic delivery",
+    );
+    group.push(execution);
+    deliveries.set(key, group);
+  }
+  for (const round of rounds.values()) {
+    const attempts = [
+      ...new Set(
+        raw.executions.filter((item) => item.round === round.id).map((item) => item.attempt),
+      ),
+    ];
+    assert.ok(
+      attempts.every((attempt, index) => attempt === index + 1),
+      "Non-contiguous atomic corrections",
+    );
+  }
+  for (const check of raw.checks.filter((item) => item.contractId !== "initial")) {
+    const round = rounds.get(check.contractId);
+    assert.ok(round);
+    const prefix = `${round.id}-attempt-`;
+    assert.ok(check.label.startsWith(prefix));
+    const attempt = Number(check.label.slice(prefix.length));
+    integer(attempt, 1);
+    assert.ok(attempt <= MULTI_AGENT_MAX_ATTEMPTS);
+    assert.equal(check.label, `${prefix}${attempt}`);
+    const group = deliveries.get(`${round.id}:${attempt}`);
+    assert.ok(group?.length > 0, "Barrier lacks an atomic delivery opportunity");
+    if (check.status !== "pass") continue;
+    const earlier = raw.executions.filter(
+      (item) => item.round === round.id && item.attempt <= attempt,
+    );
+    const latest = latestStreamDeliveries(earlier);
+    assert.ok(
+      [...latest.values()].every(settledStreamDelivery),
+      "Passing barrier has unsettled atomic deliveries",
+    );
+    assert.ok(
+      round.assignments.every((assignment) =>
+        earlier.some(
+          (item) => Object.hasOwn(item, "atomicId") && item.tasks.includes(assignment.task),
+        ),
+      ),
+      "Passing barrier lacks parent task deliveries",
+    );
+    assert.ok(
+      !raw.executions.some((item) => item.round === round.id && item.attempt > attempt),
+      "Atomic work continued after joint acceptance",
+    );
+  }
 }
 
 /** Validate one safe result. This checks internal consistency, not authenticity of
@@ -263,30 +401,38 @@ export function multiAgentResult(raw) {
     }
   }
   assert.ok(Array.isArray(raw.executions));
-  const deliveries = new Set();
-  for (const execution of raw.executions) {
-    const round = rounds.get(execution.round);
-    assert.ok(round);
-    integer(execution.attempt, 1);
-    assert.ok(execution.attempt <= MULTI_AGENT_MAX_ATTEMPTS);
-    const id = `${execution.round}:${execution.attempt}:${execution.agent}`;
-    assert.ok(!deliveries.has(id), "Duplicate agent delivery");
-    deliveries.add(id);
-    assert.deepEqual(
-      execution.tasks,
-      round.assignments.filter((item) => item.agent === execution.agent).map((item) => item.task),
-    );
-    assert.ok(execution.tasks.length > 0);
-  }
-  for (const check of raw.checks.filter((item) => item.contractId !== "initial")) {
-    const match = /^round-\d{3,}-attempt-(\d)$/.exec(check.label);
-    assert.ok(match);
-    const round = rounds.get(check.contractId);
-    for (const agent of new Set(round.assignments.map((item) => item.agent)))
-      assert.ok(
-        deliveries.has(`${round.id}:${match[1]}:${agent}`),
-        "Barrier lacks a participant delivery",
+  if (
+    raw.executions.some(
+      (item) => Object.hasOwn(item, "atomicId") || Object.hasOwn(item, "deliveryKind"),
+    )
+  ) {
+    validateStreamExecutions(raw, rounds);
+  } else {
+    const deliveries = new Set();
+    for (const execution of raw.executions) {
+      const round = rounds.get(execution.round);
+      assert.ok(round);
+      integer(execution.attempt, 1);
+      assert.ok(execution.attempt <= MULTI_AGENT_MAX_ATTEMPTS);
+      const id = `${execution.round}:${execution.attempt}:${execution.agent}`;
+      assert.ok(!deliveries.has(id), "Duplicate agent delivery");
+      deliveries.add(id);
+      assert.deepEqual(
+        execution.tasks,
+        round.assignments.filter((item) => item.agent === execution.agent).map((item) => item.task),
       );
+      assert.ok(execution.tasks.length > 0);
+    }
+    for (const check of raw.checks.filter((item) => item.contractId !== "initial")) {
+      const match = /^round-\d{3,}-attempt-(\d)$/.exec(check.label);
+      assert.ok(match);
+      const round = rounds.get(check.contractId);
+      for (const agent of new Set(round.assignments.map((item) => item.agent)))
+        assert.ok(
+          deliveries.has(`${round.id}:${match[1]}:${agent}`),
+          "Barrier lacks a participant delivery",
+        );
+    }
   }
   assert.equal(raw.deliveries, raw.executions.length);
   assert.equal(raw.repairs, raw.executions.filter((item) => item.attempt > 1).length);

@@ -190,7 +190,14 @@ function parseJsonLines(content, name, schemaVersion) {
           ? name === "trials.jsonl"
             ? ["taskIds"]
             : name === "rounds.jsonl"
-              ? ["agent", "barrierAttempt", "taskIds"]
+              ? [
+                  "agent",
+                  "barrierAttempt",
+                  "taskIds",
+                  ...["atomicId", "atomicIds", "deliveryKind"].filter((field) =>
+                    Object.hasOwn(row, field),
+                  ),
+                ]
               : []
           : [];
       exactKeys(row, [...fields, ...teamFields], label);

@@ -331,9 +331,9 @@ export function makeAdapter({
           "json",
           "-p",
           ...(installed ? ["--extension", installed.entry] : []),
-          "--",
-          "{prompt}",
         ],
+        // Stdin keeps large assignments out of the operating system's argument-size limit.
+        promptStdin: true,
         env: {
           ...env,
           PI_CODING_AGENT_DIR: "/state/pi",
