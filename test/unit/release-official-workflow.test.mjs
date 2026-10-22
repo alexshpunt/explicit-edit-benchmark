@@ -161,6 +161,26 @@ test("controlled release evidence authorizes only matching source and leaves ori
     await assert.rejects(prepareReleasePolicy(original, current, root), /Reference .* differs/);
   }
   await writeFile(evidenceFile, JSON.stringify(evidence));
+  for (const change of [
+    (value) => {
+      delete value.release.atomic;
+    },
+    (value) => {
+      value.reference.atomic.workloadSha256 = "f".repeat(64);
+    },
+    (value) => {
+      value.reference.acceptedAtomicEdits--;
+    },
+  ]) {
+    const stale = structuredClone(evidence);
+    change(stale);
+    await writeFile(evidenceFile, JSON.stringify(stale));
+    await assert.rejects(
+      prepareReleasePolicy(original, current, root),
+      /atomic|Atomic|Unexpected team protocol fields/,
+    );
+  }
+  await writeFile(evidenceFile, JSON.stringify(evidence));
   const failed = structuredClone(evidence);
   failed.reference.acceptedTasks = 70;
   await writeFile(evidenceFile, JSON.stringify(failed));

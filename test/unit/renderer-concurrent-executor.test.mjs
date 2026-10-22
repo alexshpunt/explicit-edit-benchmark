@@ -68,7 +68,7 @@ await test(
         }),
       );
     } finally {
-      for (const worker of workers) worker.close();
+      await Promise.all(workers.map((worker) => worker.close()));
       await rm(root, { recursive: true, force: true });
     }
   },
@@ -179,7 +179,7 @@ await test("global current-owner renames cross real translation units without me
     );
     assert.deepEqual(await readTree(workspace), final);
   } finally {
-    executor?.close();
+    await executor?.close();
     await rm(root, { recursive: true, force: true });
   }
 });

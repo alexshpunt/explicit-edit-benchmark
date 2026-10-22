@@ -77,6 +77,43 @@ test("partial module checkpoints are built from trusted moves, not sequential gu
   assert.equal(initial["main.cpp"].includes("Number Old"), true);
 });
 
+test("later structural checkpoints retain exact metadata for unchanged current files", () => {
+  const schedule = [
+    round("first", "math"),
+    round("second", "color"),
+    round("third", "geometry"),
+    round("fourth", "color-names"),
+  ];
+  const contracts = checkpointContracts(initial, states[0], tasks, transitions, schedule);
+  const unchanged = contracts.get("first").obligations.filter((record) => record.file === "math.h");
+  assert.ok(unchanged.length);
+  for (const { id } of schedule.slice(1))
+    for (const record of unchanged)
+      assert.ok(
+        contracts.get(id).obligations.includes(record),
+        "Unchanged file metadata is reused",
+      );
+  assert.equal(evaluateCoherentContract(final, contracts.get("fourth")).status, "pass");
+});
+
+test("a missing structural cache entry catches up every skipped trusted move in order", () => {
+  const schedule = [
+    round("first", "math"),
+    round("second", "geometry"),
+    round("third", "color", "color-names"),
+  ];
+  const cold = checkpointContracts(initial, states[0], tasks, transitions, schedule);
+  for (const skipped of [[0], [1], [0, 1]]) {
+    const cache = new Map();
+    if (skipped.includes(0)) cache.set(JSON.stringify(["math"]), states[1]);
+    if (skipped.includes(1)) cache.set(JSON.stringify(["math", "geometry"]), states[2]);
+    assert.deepEqual(
+      checkpointContracts(initial, states[0], tasks, transitions, schedule, cache),
+      cold,
+    );
+  }
+});
+
 test("ready sibling headers may publish in either order with identical cumulative requirements", () => {
   const forwards = [
     round("first", "math"),
