@@ -88,7 +88,7 @@ function goal(operations, bindingCount = 1) {
   if (operation.action === "header")
     return `Extract the complete guarded header ${operation.guard} from main.cpp into ${operation.file}, and replace its embedded body with the corresponding include.`;
   if (operation.action === "implementation")
-    return `Move only the selected definition or inseparable dependency group from main.cpp into ${operation.file}. Preserve its body and required context. Remove only the temporary declarations listed in this delivery after moving their definitions.`;
+    return `Move only the selected definition or inseparable dependency group from main.cpp into ${operation.file}. Preserve its body and required context. Keep existing header declarations unchanged; do not add prototypes or additional overloads to headers. Remove only the temporary declarations listed in this delivery after moving their definitions.`;
   if (operation.action === "vendor-header")
     return `Extract the image-resize header into ${operation.file}. Keep guarded declarations copy ${operation.declarationsCopy} and macro-controlled implementation copy ${operation.implementationCopy}; remove the redundant copies and preserve the selected bodies and conditional branches.`;
   if (operation.action === "vendor-implementation")
