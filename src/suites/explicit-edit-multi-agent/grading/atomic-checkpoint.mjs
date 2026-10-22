@@ -337,12 +337,22 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
               })),
           physical,
         );
-      const evaluate = (physical) =>
-        evaluateAtomicBindingGate(
+      const evaluate = (physical) => {
+        const projection = project(physical);
+        const result = evaluateAtomicBindingGate(
           tree,
-          { ...project(physical), familyRecords: contract.obligations },
+          { ...projection, familyRecords: contract.obligations },
           { input, activeWrites, readInventory: readCandidate },
         );
+        const locations = new Map(projection.records.map((record) => [record.id, record]));
+        return {
+          ...result,
+          records: result.records.map((record) => {
+            const { file, scope, selector, kind } = locations.get(record.id);
+            return { ...record, file, scope, selector, kind };
+          }),
+        };
+      };
       const result = evaluate(false);
       // A wildcard type spelling may also match an unrelated overload. A
       // count mismatch is not credit: recheck the same actual bytes with exact
@@ -377,6 +387,27 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
       familyRecords: contract.obligations,
       readInventory: readCandidate,
     });
+  }
+  /** Private declaration responsibility for delivered tasks at a drained barrier.
+   * This is not writer blame. Multiple tasks may own the same declaration; callers
+   * must retain that ambiguity rather than choosing a repair recipient by file.
+   */
+  function diagnosticScopes({ completed, started }) {
+    const selected = new Set([...completed, ...started]);
+    const combined = frontier(selected, started);
+    const result = new Map([...selected].map((id) => [id, []]));
+    const location = ({ file, scope, selector, kind }) => ({ file, scope, selector, kind });
+    for (const owner of [...combined.owners.values()].flat())
+      for (const site of owner.sites)
+        if (selected.has(site.nodeId)) result.get(site.nodeId).push(location(owner));
+    for (const id of selected) {
+      if (naming(byId.get(id))) continue;
+      const template = combined.structural.get(id);
+      if (!template) continue;
+      const gate = projectAtomicGate(combined.tree, template, { readInventory: readTrusted });
+      result.get(id).push(...[...gate.remove, ...gate.add].map(location));
+    }
+    return result;
   }
   /** Observe twice around grading; peer writes or frontier advancement defer the
    * result without spending a correction. Access live context getters after each
@@ -571,5 +602,5 @@ export function createAtomicCheckpoint(initialTree, nodes, batches) {
     readCandidate.clear();
     for (const replay of replays.values()) replay.clear();
   }
-  return { expected, check, observe, observeInputs, revalidate, clearCaches };
+  return { expected, check, observe, observeInputs, revalidate, diagnosticScopes, clearCaches };
 }

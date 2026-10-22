@@ -102,6 +102,20 @@ function owners(file, source, details = true) {
   return visit(source).sort((left, right) => left.start - right.start);
 }
 
+/** Locate candidate declaration boundaries for compiler diagnostics, including
+ * guarded header branches. Returned spans describe this source only; they are not
+ * binding resolution, expected edits or proof of which writer caused an error.
+ */
+export function atomicDiagnosticOwners(file, source) {
+  return owners(file, source).map(({ start, end, scope, selector, kind }) => ({
+    file,
+    start,
+    end,
+    scope,
+    selector,
+    kind,
+  }));
+}
 function texts(tokens) {
   return tokens.map((token) => token.text);
 }

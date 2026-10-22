@@ -50,12 +50,3 @@ export function taskConstraints(operations) {
     : "This request must not create any C++ source files.";
   return `${creation} Do not delete or rename original or already requested .cpp or .h files. Do not create other .cpp or .h files, including forwarding headers, helper sources or backups with those extensions. Other participants may create their own declared files; do not remove them. Use temporary files outside the shared project.\n\n${preservation}`;
 }
-
-/** Render a new repair task without revealing which check failed or how to fix it.
- * The complete source inventory comes only from already delivered public work.
- * Candidate diagnostics and private reference contracts do not enter this prompt.
- */
-export function barrierRepairTask(files) {
-  const required = sourceFilesAfter(files, []);
-  return `Repair the current shared project after the drained barrier failed verification. The requested atomic edits have already been delivered; do not repeat their work or introduce new goals.\n\nThe required .cpp and .h source-file inventory at this barrier is exactly: ${JSON.stringify(required)}. Keep every listed source file; do not rename one. Do not create or retain other .cpp or .h files, including forwarding headers or helper sources. This file set follows the original public tasks, not a diagnosis of this candidate. Use temporary files outside the shared project.\n\n${preservation}`;
-}

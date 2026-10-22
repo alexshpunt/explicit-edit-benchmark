@@ -74,22 +74,9 @@ export function validateAtomicDelivery(atomicId, taskIds, barrierTasks) {
   );
 }
 
-/** Bind either one atomic edit or one retained-state global correction to its barrier. */
-export function validateStreamDelivery(delivery, taskIds, barrierTasks, attempt) {
-  if (!Object.hasOwn(delivery, "deliveryKind")) {
-    validateAtomicParents(delivery, taskIds, barrierTasks);
-    return;
-  }
-  assert.equal(delivery.deliveryKind, "barrier-repair", "Unsupported stream delivery kind");
-  assert.ok(!Object.hasOwn(delivery, "atomicId"), "Global repair cannot name an atomic ID");
-  atomicDeliveryIds(delivery);
-  assert.ok(attempt > 1, "Global repair cannot be an initial delivery");
-  assert.ok(Array.isArray(taskIds));
-  assert.deepEqual(
-    [...taskIds].sort(),
-    [...barrierTasks].sort(),
-    "Global repair needs every barrier parent exactly once",
-  );
+/** Bind one task-scoped atomic delivery to its barrier. */
+export function validateStreamDelivery(delivery, taskIds, barrierTasks) {
+  validateAtomicParents(delivery, taskIds, barrierTasks);
 }
 
 function failedNativeReceipt(delivery) {
@@ -199,7 +186,8 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
       const deliveries = rounds.filter((item) => item.trialId === trial.trialId);
       if (stopped) assert.equal(deliveries.length, 0, "Team continued after an unaccepted barrier");
       const attempts = new Map();
-      for (const [index, delivery] of deliveries.entries()) {
+      const owners = new Map();
+      for (const delivery of deliveries) {
         assert.ok(
           Number.isInteger(delivery.barrierAttempt) &&
             delivery.barrierAttempt >= 0 &&
@@ -210,30 +198,11 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
           "Participant outside team pool",
         );
         if (atomic) {
-          validateStreamDelivery(
-            delivery,
-            delivery.taskIds,
-            trial.taskIds,
-            delivery.barrierAttempt + 1,
-          );
-          if (delivery.deliveryKind) {
-            const previous = attempts.get(delivery.barrierAttempt - 1);
-            const earlier = deliveries
-              .slice(0, index)
-              .filter((item) => Object.hasOwn(item, "atomicId"));
-            const retained = latestStreamDeliveries(earlier);
-            assert.ok(
-              previous?.length && previous[0].difference === "other" && !previous[0].exactPassed,
-              "Global repair lacks a failed barrier",
-            );
-            assert.ok(
-              [...retained.values()].every((item) => !failedNativeReceipt(item)),
-              "Global repair has failed retained atomic receipts",
-            );
-            assert.ok(
-              trial.taskIds.every((task) => earlier.some((item) => item.taskIds.includes(task))),
-              "Global repair lacks retained parent deliveries",
-            );
+          validateStreamDelivery(delivery, delivery.taskIds, trial.taskIds);
+          for (const id of atomicDeliveryIds(delivery)) {
+            if (owners.has(id))
+              assert.equal(owners.get(id), delivery.agent, "Repair changed task executor");
+            else owners.set(id, delivery.agent);
           }
         } else {
           const assigned = barrier.assignments
@@ -244,14 +213,10 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
         }
         assert.notEqual(delivery.difference, "eof", "Team grading has no EOF-only success");
         const group = attempts.get(delivery.barrierAttempt) ?? [];
-        if (atomic && (delivery.deliveryKind || group.some((item) => item.deliveryKind)))
-          assert.equal(group.length, 0, "Mixed or duplicate global repair delivery");
         assert.ok(
           !group.some((item) =>
             atomic
-              ? item.deliveryKind || delivery.deliveryKind
-                ? item.deliveryKind === delivery.deliveryKind
-                : atomicDeliveryIds(item).some((id) => atomicDeliveryIds(delivery).includes(id))
+              ? atomicDeliveryIds(item).some((id) => atomicDeliveryIds(delivery).includes(id))
               : item.agent === delivery.agent,
           ),
           "Duplicate participant delivery",

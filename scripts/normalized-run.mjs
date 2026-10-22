@@ -286,6 +286,7 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
   );
   const checks = new Map();
   for (const check of report.checks) {
+    if (!["pass", "fail"].includes(check.status)) throw Error("Invalid team grade status");
     if (checks.has(check.label)) throw Error("Duplicate team grade label");
     checks.set(check.label, check);
   }
@@ -312,6 +313,7 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
     const trialId = `${barrier.id}__${profile.profileId}`;
     const deliveryKeys = new Set();
     const attemptDeliveries = new Map();
+    const owners = new Map();
     for (const [ordinal, item] of deliveries.entries()) {
       if (
         !Number.isInteger(item.attempt) ||
@@ -323,23 +325,12 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
       )
         throw Error("Invalid participant delivery position");
       if (atomic) {
-        validateStreamDelivery(item, item.tasks, taskIds, item.attempt);
+        validateStreamDelivery(item, item.tasks, taskIds);
         const group = attemptDeliveries.get(item.attempt) ?? [];
-        if ((item.deliveryKind || group.some((prior) => prior.deliveryKind)) && group.length)
-          throw Error("Mixed or duplicate global repair delivery");
-        if (item.deliveryKind) {
-          const priorGrade = checks.get(`${barrier.id}-attempt-${item.attempt - 1}`);
-          const earlier = deliveries
-            .slice(0, ordinal)
-            .filter((prior) => Object.hasOwn(prior, "atomicId"));
-          const retained = latestStreamDeliveries(earlier);
-          if (
-            priorGrade?.status !== "fail" ||
-            !["structure", "build", "behavior"].includes(priorGrade.category) ||
-            [...retained.values()].some((prior) => !settledStreamDelivery(prior)) ||
-            taskIds.some((task) => !earlier.some((prior) => prior.tasks.includes(task)))
-          )
-            throw Error("Global repair lacks retained atomic outputs and failed barrier evidence");
+        for (const id of atomicDeliveryIds(item)) {
+          if (owners.has(id) && owners.get(id) !== item.agent)
+            throw Error("Repair changed task executor");
+          owners.set(id, item.agent);
         }
         group.push(item);
         attemptDeliveries.set(item.attempt, group);

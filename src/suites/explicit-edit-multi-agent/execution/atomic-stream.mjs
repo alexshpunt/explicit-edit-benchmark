@@ -9,7 +9,9 @@ export const ATOMIC_DISPATCH_POLICY = Object.freeze({
   unit: "certified-binding-or-inseparable-overload-group-or-structural-unit",
   dependencyCompletion: "verified-output",
   checkpoints: "drained-parent-barriers",
-  barrierRecovery: "single-global-delivery",
+  correctionAssignment: "original-atomic-executor",
+  feedback: "task-scoped-observed-diagnostics-v1",
+  barrierRecovery: "unique-task-attribution-or-infrastructure",
   taskConstraints: TASK_CONSTRAINTS_VERSION,
   environment: "shared-project-facts-v1",
   maxBatchSize: 50,
@@ -68,7 +70,10 @@ function graphState(nodes, completed) {
  * effects for reconstructing expected context, never for prerequisite credit.
  * started retains dispatched IDs across barrier corrections. It reserves their
  * certified partial-write slots while they await repair, not prerequisite credit.
- * Return started together with completed when continuing the same barrier.
+ * Return started, owners and completed when continuing the same barrier.
+ * owners maps each actually delivered atom to its first participant. Repairs stay
+ * in that participant's retained conversation; a busy owner does not reserve other
+ * free participants or accept atoms owned by another participant.
  * Read context again after asynchronous observations. There are no timer-based
  * retries or extra model calls.
  * Writer startup also advances/wakes the frontier so invalidated input checks
@@ -83,6 +88,7 @@ export async function runAtomicStream(
     agents,
     completed = new Set(),
     started = new Set(completed),
+    owners = new Map(),
     rotation = 0,
     signal,
     execute,
@@ -110,6 +116,14 @@ export async function runAtomicStream(
   const dispatched = new Set([...started, ...completed]);
   const { byId, successors } = graphState(nodes, done);
   for (const id of dispatched) assert.ok(byId.has(id), "Unknown started atomic node");
+  const assigned = new Map(owners);
+  for (const [id, agent] of assigned) {
+    assert.ok(byId.has(id) && dispatched.has(id), "Owner without an actual atomic delivery");
+    assert.ok(Number.isInteger(agent) && agent >= 0 && agent < agents, "Invalid atomic owner");
+  }
+  for (const id of dispatched)
+    if (!done.has(id))
+      assert.ok(assigned.has(id), "Missing original atomic executor for correction");
   const order = new Map(nodes.map((node, index) => [node.id, index]));
   const remaining = new Map(
     nodes.map((node) => [node.id, node.dependencies.filter((id) => !done.has(id)).length]),
@@ -191,7 +205,10 @@ export async function runAtomicStream(
         else results.push({ id, passed: inputs, stage: "input", epoch: inputEpoch });
       }
       if (selected.length) {
-        for (const node of selected) dispatched.add(node.id);
+        for (const node of selected) {
+          dispatched.add(node.id);
+          assigned.set(node.id, agent);
+        }
         writers.set(
           agent,
           selected.map((node) => node.id),
@@ -256,10 +273,18 @@ export async function runAtomicStream(
         !failed.length &&
         !controller.signal.aborted
       ) {
-        let agent = cursor;
-        while (active.has(agent)) agent = (agent + 1) % agents;
+        const first = ready.findIndex((id) => !active.has(assigned.get(id)));
+        if (first < 0) break;
+        let agent = assigned.get(ready[first]);
+        if (agent === undefined) {
+          agent = cursor;
+          while (active.has(agent)) agent = (agent + 1) % agents;
+        }
+        const eligible = ready.filter((id) => !assigned.has(id) || assigned.get(id) === agent);
         const count = Math.min(batchSize, Math.ceil(ready.length / (agents - active.size)));
-        launch(ready.splice(0, count), agent);
+        const ids = eligible.slice(0, count);
+        for (const id of ids) ready.splice(ready.indexOf(id), 1);
+        launch(ids, agent);
       }
       if (!controller.signal.aborted)
         for (const [id, waiting] of pending)
@@ -323,6 +348,7 @@ export async function runAtomicStream(
       status: failed.length ? "blocked" : "pass",
       completed: done,
       started: dispatched,
+      owners: assigned,
       failed,
       rotation: cursor,
     };

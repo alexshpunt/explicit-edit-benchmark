@@ -220,6 +220,10 @@ function evaluate(
   for (const record of binding?.records ?? [])
     add(record.id, record.status, {
       kind: "binding-owner",
+      file: selected.get(record.id).file,
+      scope: selected.get(record.id).scope,
+      selector: selected.get(record.id).selector,
+      ...(record.identifiers ? { identifiers: record.identifiers } : {}),
       ...(record.reason ? { reason: record.reason } : {}),
     });
   if (binding?.reason === "source" && !binding.records.length)
