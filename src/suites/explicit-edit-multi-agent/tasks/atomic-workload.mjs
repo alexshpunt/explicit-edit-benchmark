@@ -82,21 +82,21 @@ function goal(operations, bindingCount = 1) {
   if (operation.phase === "names") {
     const [{ from, to }] = operation.mapping;
     if (bindingCount > 1)
-      return `Rename the ${bindingCount} selected compiler-certified inseparable overload bindings from ${from} to ${to} together. Update their declarations and shared bound uses, and preserve all other bindings.`;
-    return `Rename the selected binding from ${from} to ${to}. Update its declarations and bound uses, and preserve all other bindings.`;
+      return `Rename the ${bindingCount} selected inseparable overload bindings from ${from} to ${to} together, including their declarations and shared bound uses.`;
+    return `Rename the selected binding from ${from} to ${to}, including its declarations and bound uses.`;
   }
   if (operation.action === "header")
     return `Extract the complete guarded header ${operation.guard} from main.cpp into ${operation.file}, and replace its embedded body with the corresponding include.`;
   if (operation.action === "implementation")
-    return `Move only the selected definition or inseparable dependency group from main.cpp into ${operation.file}. Preserve its body and required context. Keep existing header declarations unchanged; do not add prototypes or additional overloads to headers. Remove only the temporary declarations listed in this delivery after moving their definitions.`;
+    return `Move the selected definition or inseparable dependency group from main.cpp into ${operation.file}. Remove the listed temporary declarations after moving their definitions.`;
   if (operation.action === "vendor-header")
-    return `Extract the image-resize header into ${operation.file}. Keep guarded declarations copy ${operation.declarationsCopy} and macro-controlled implementation copy ${operation.implementationCopy}; remove the redundant copies and preserve the selected bodies and conditional branches.`;
+    return `Extract the image-resize header into ${operation.file}. Keep guarded declarations copy ${operation.declarationsCopy} and macro-controlled implementation copy ${operation.implementationCopy}; remove the redundant copies.`;
   if (operation.action === "vendor-implementation")
     return `Move the listed image-resize implementation activation and its paired include from main.cpp into ${operation.file}.`;
   if (operation.action === "remove-generated-declaration")
-    return `Remove only the listed temporary generated declaration from ${operation.file ?? "main.cpp"}. Preserve original declarations and all definition bodies.`;
+    return `Remove the listed temporary generated declaration from ${operation.file ?? "main.cpp"}.`;
   if (operation.action === "cleanup-empty-namespaces")
-    return "Remove the listed empty namespaces and moved include scaffolding from main.cpp. Preserve its required includes, entry point and remaining code.";
+    return "Remove the listed empty namespaces and moved include scaffolding from main.cpp.";
   throw Error(`Unsupported atomic structural action: ${operation.action}`);
 }
 

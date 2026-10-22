@@ -6,8 +6,8 @@ const creationActions = new Set([
 ]);
 const existingFileActions = new Set(["remove-generated-declaration", "cleanup-empty-namespaces"]);
 
-/** Public instruction contract bound into atomic preparation and its proof identity. */
-export const TASK_CONSTRAINTS_VERSION = "renderer-public-task-constraints-v2";
+/** Public task-prompt identity bound into atomic preparation and its proof. */
+export const TASK_CONSTRAINTS_VERSION = "renderer-public-task-constraints-v3";
 
 function sourcePath(file) {
   if (
@@ -37,16 +37,4 @@ function createdFiles(operations) {
  */
 export function sourceFilesAfter(files, operations) {
   return [...new Set([...files.map(sourcePath), ...createdFiles(operations)])].sort();
-}
-
-const preservation =
-  "Preserve every original body, literal, macro and inactive branch, except the explicitly requested scaffolding changes or bound renames. Do not add, duplicate, remove or relocate function, variable, type or member declarations or definitions unless this request explicitly lists that change. Moving a definition does not authorize adding its prototype or exporting an additional overload in a header. Preserve existing header declarations unless this request explicitly changes them. Keep the current neutral namespace, filenames and guards; do not restore upstream project branding. Preserve all earlier accepted edits and unrelated peer edits. Do not fix pre-existing bugs, optimize algorithms, change unrequested types or signatures, or add validation to satisfy your own tests. Do not add comments to C++ source. Do not introduce stub definitions, facades, duplicate bodies or copies hidden behind new conditions. Independent definitions may use any dependency-safe order. Includes and namespace wrappers may differ if the project still builds. This exception does not authorize additional source files or changes to function, variable, type or member declarations, definitions, signatures or bodies. A simple unconditional standard using-declaration need not be repeated when an earlier project header supplies it in the required namespace and condition, or when all remaining uses are qualified. An unconditional std::string_literals namespace directive may move but must remain present, and every literal consumer must keep its context. Harmless unconditional standard using-declarations may be added when they do not supply any new unqualified binding. A using-import must not extend an existing project overload family, even when current calls still select the same functions. Preserve other namespace using-directives, aliases and conditional using-declarations. Keep C++ source valid UTF-8 and do not leave symlinks or other nonregular project entries. Full acceptance also requires a fresh C++17 build and pixel-identical outputs for both scenes rendered twice; a passing individual edit is not full-barrier credit.";
-
-/** Render all common constraints with this request's declared creation permission. */
-export function taskConstraints(operations) {
-  const files = createdFiles(operations);
-  const creation = files.length
-    ? `This request may create C++ source files only at these paths: ${JSON.stringify(files)}. Reuse a listed file if it already exists; do not overwrite its peer edits.`
-    : "This request must not create any C++ source files.";
-  return `${creation} Do not delete or rename original or already requested .cpp or .h files. Do not create other .cpp or .h files, including forwarding headers, helper sources or backups with those extensions. Other participants may create their own declared files; do not remove them. Use temporary files outside the shared project.\n\n${preservation}`;
 }

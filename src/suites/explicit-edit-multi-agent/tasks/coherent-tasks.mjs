@@ -1,5 +1,3 @@
-import { taskConstraints } from "./task-constraints.mjs";
-
 /** Render one current goal with compact public targets. Shared module setup appears
  * once; optional reference-order anchors are not instructions for the live agent.
  * The structured scripted operations retain them as one dependency-safe route.
@@ -32,7 +30,7 @@ export function coherentTaskPrompt(goal, operations) {
   const setup = modules.size
     ? `\n\nModule setup:\n${[...modules.values()].map((item) => JSON.stringify(item)).join("\n")}`
     : "";
-  return `${goal}\n\nAllowed changes: the module moves, scaffolding cleanup or owner-bound mappings in the target table below. Physical selectors identify current declarations, not a required final order. Each mapping applies only to its listed owners, never every occurrence of its spelling.${setup}\n\nTarget table (one JSON row per related target group):\n${targets.map((item) => JSON.stringify(item)).join("\n")}\n\n${taskConstraints(operations)}`;
+  return `Perform only the following mechanical file edits. Leave all text outside the requested edits unchanged.\n\n${goal}${setup}\n\nTarget table (one JSON row per related target group):\n${targets.map((item) => JSON.stringify(item)).join("\n")}`;
 }
 
 function task(tasks, phase, subsystem, goal, operations) {
@@ -65,14 +63,14 @@ export function coherentStructureTasks(requests) {
       tasks,
       "structure",
       request.file,
-      `Restore the public interface module ${request.file}: extract its guarded header from main.cpp and replace that header body with the corresponding include. Preserve the current bound names.`,
+      `Extract the guarded header for ${request.file} from main.cpp into that file and replace its embedded body with the corresponding include.`,
       [request],
     );
   task(
     tasks,
     "structure",
     "image-resize",
-    "Restore the image-resize support module as one merged header. Number the two embedded copies by their order in main.cpp: each has a guarded declaration section followed by a macro-controlled implementation section. Keep only the first copy's guarded declarations and the second copy's macro-controlled implementation in the listed header. Remove the redundant second declarations and first implementation; this removal is an explicit exception to preservation. Move the selected sections intact, retaining their current bound names, bodies, literals and inner conditional structure, including inactive alternatives. Do not keep the redundant copies behind new conditional wrappers. Replace the embedded declarations in main.cpp with the header include, and move implementation activation out of main.cpp into support/stb.cpp only.",
+    "Extract the image-resize module into the listed header. Number its two embedded copies by their order in main.cpp: each has guarded declarations followed by a macro-controlled implementation. Move the first copy's declarations and the second copy's implementation into the header; remove the redundant second declarations and first implementation. Replace the embedded declarations in main.cpp with the header include, and move implementation activation into support/stb.cpp.",
     structure
       .filter((item) => ["vendor-header", "vendor-implementation"].includes(item.action))
       .map((item) =>
@@ -91,14 +89,14 @@ export function coherentStructureTasks(requests) {
       tasks,
       "structure",
       file,
-      `Restore the implementation module ${file}. Move all selected public definitions and their listed private dependency groups from main.cpp into this translation unit. Keep public declarations in their headers. Each selected body must have exactly one physical owner; do not leave facades or bypassed copies in main.cpp. Preserve the listed conditional include preambles and required using context. Remove the listed temporary forward declarations once their definitions have moved; keep the original public header declarations.`,
+      `Move the listed definitions and their selected private dependency groups from main.cpp into ${file}. Remove the listed temporary forward declarations after moving their definitions.`,
       operations,
     );
   task(
     tasks,
     "structure",
     "entry-point",
-    "Finish the module boundaries: remove the listed temporary generated forward declarations from their current files, and empty namespaces and moved conditional include scaffolding from main.cpp. Keep original declarations. Retain its listed required includes (their order is free), entry point and remaining code. All extracted module bodies must stay in their requested files.",
+    "Remove the listed temporary generated forward declarations from their specified files, and the listed empty namespaces and moved conditional include scaffolding from main.cpp.",
     [...declarations, ...structure.filter((item) => item.action === "cleanup-empty-namespaces")],
   );
   const delivered = new Set(
@@ -119,7 +117,7 @@ export function appendCoherentNamingTask(tasks, category, subsystem, operations)
     tasks,
     "names",
     subsystem,
-    `Restore the ${category} naming interface of ${subsystem}. Apply the exact mappings in the owner table to declarations and all bound uses. Same-spelling bindings outside the selected owners must stay unchanged. Retain the module layout established by earlier tasks.`,
+    `Apply the listed ${category} name mappings for ${subsystem} to the selected declarations and all their bound uses.`,
     operations,
   );
 }
