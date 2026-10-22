@@ -5,8 +5,13 @@ import path from "node:path";
 import { test } from "node:test";
 import { runCoherent } from "../../src/suites/explicit-edit-multi-agent/execution/coherent-run.mjs";
 import { runConcurrent } from "../../src/suites/explicit-edit-multi-agent/execution/concurrent-run.mjs";
+import { startBaseline } from "../../src/suites/explicit-edit-multi-agent/execution/pi-baseline.mjs";
+import { providerFixture } from "./provider-fixture.mjs";
 import { prepareConcurrent } from "../../src/suites/explicit-edit-multi-agent/tasks/prepare-concurrent.mjs";
-import { prepareCoherentContract } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
+import {
+  prepareCoherentContract,
+  evaluateCoherentContract,
+} from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
 import { buildCoherentCandidate } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-build.mjs";
 import { applyCoherentStructure } from "../../src/suites/explicit-edit-multi-agent/reference/coherent-edit.mjs";
 import { coherentTaskPrompt } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-tasks.mjs";
@@ -58,9 +63,10 @@ function assertInputTrace(report) {
 async function prepareFixture(root) {
   const names = ["North", "South", "West"];
   const initial = {
-    "main.cpp": `#include <fstream>
+    "main.cpp": `#include <array>
+#include <fstream>
 #include <string>
-${names.map((name, index) => `#ifndef ${name.toUpperCase()}_H\n#define ${name.toUpperCase()}_H\ninline int ${name}(int value) { return value + ${index + 1}; }\n#endif`).join("\n")}
+${names.map((name, index) => `#ifndef ${name.toUpperCase()}_H\n#define ${name.toUpperCase()}_H\ninline int ${name}(int value) { return ${index === 0 ? "std::array<int, 1>{value + 1}[0]" : `value + ${index + 1}`}; }\n#endif`).join("\n")}
 int main(int argc, char** argv) {
   if (argc != 2) return 1;
   for (int scene = 0; scene < 2; scene++) {
@@ -161,6 +167,7 @@ async function waitForPeer(ready, signal) {
 function deterministicDrivers({
   skipFirstNorth = false,
   breakBuild = false,
+  breakOwnBuild = false,
   precompletedSouth = false,
 } = {}) {
   const histories = [],
@@ -191,47 +198,43 @@ function deterministicDrivers({
       async execute(prompt, options) {
         assert.equal(closed, false);
         history.push({ prompt, ...options });
-        if (options.deliveryKind === "barrier-repair") {
-          calls.push({ agent, prompt, ...options });
+        assert.equal(options.deliveryKind, undefined);
+        const operations = currentHeader(prompt);
+        assert.equal(operations.length, options.atomicIds.length);
+        for (const [index, operation] of operations.entries())
+          calls.push({
+            agent,
+            prompt,
+            ...options,
+            atomicId: options.atomicIds[index],
+            operation,
+          });
+        if (++deliveries >= 2) both.resolve();
+        await waitForPeer(both.promise, options.signal);
+        for (const operation of operations) {
+          if (skipFirstNorth && operation.guard === "NORTH_H" && options.attempt === 1) {
+            await waitForPeer(peer.promise, options.signal);
+            continue;
+          }
           writes = writes.then(async () => {
-            const file = path.join(workspace, "main.cpp");
-            const source = await readFile(file, "utf8");
-            assert.ok(!source.includes("#include <fstream>"));
-            await writeFile(file, "#include <fstream>\n" + source);
+            const tree = await readTree(workspace);
+            const edited =
+              (precompletedSouth && operation.guard === "SOUTH_H" && tree["south.h"]) ||
+              (breakOwnBuild && operation.guard === "NORTH_H" && options.attempt > 1)
+                ? tree
+                : applyCoherentStructure(tree, operation);
+            if (breakOwnBuild && operation.guard === "NORTH_H") {
+              if (options.attempt === 1)
+                edited["main.cpp"] = edited["main.cpp"].replace("#include <array>\n", "");
+              else edited["north.h"] = "#include <array>\n" + edited["north.h"];
+            }
+            if (breakBuild && operation.guard === "WEST_H")
+              edited["main.cpp"] = edited["main.cpp"].replace("#include <fstream>\n", "");
+            for (const [file, source] of Object.entries(edited))
+              await writeFile(path.join(workspace, file), source);
           });
           await writes;
-        } else {
-          const operations = currentHeader(prompt);
-          assert.equal(operations.length, options.atomicIds.length);
-          for (const [index, operation] of operations.entries())
-            calls.push({
-              agent,
-              prompt,
-              ...options,
-              atomicId: options.atomicIds[index],
-              operation,
-            });
-          if (++deliveries >= 2) both.resolve();
-          await waitForPeer(both.promise, options.signal);
-          for (const operation of operations) {
-            if (skipFirstNorth && operation.guard === "NORTH_H" && options.attempt === 1) {
-              await waitForPeer(peer.promise, options.signal);
-              continue;
-            }
-            writes = writes.then(async () => {
-              const tree = await readTree(workspace);
-              const edited =
-                precompletedSouth && operation.guard === "SOUTH_H" && tree["south.h"]
-                  ? tree
-                  : applyCoherentStructure(tree, operation);
-              if (breakBuild && operation.guard === "WEST_H")
-                edited["main.cpp"] = edited["main.cpp"].replace("#include <fstream>\n", "");
-              for (const [file, source] of Object.entries(edited))
-                await writeFile(path.join(workspace, file), source);
-            });
-            await writes;
-            if (operation.guard !== "NORTH_H") peer.resolve();
-          }
+          if (operation.guard !== "NORTH_H") peer.resolve();
         }
         return { sessionId: `participant-${agent}`, sequence: history.length, status: "settled" };
       },
@@ -391,6 +394,23 @@ await test(
               checks: report.checks,
             }),
           );
+          const [original, correction] = byGuard("NORTH_H");
+          assert.equal(correction.agent, original.agent);
+          const receipts = atomicRows(report).filter((row) => row.atomicId === original.atomicId);
+          assert.equal(receipts[0].receipt.sessionId, receipts[1].receipt.sessionId);
+          assert.deepEqual(Object.keys(correction.diagnostics), [correction.atomicId]);
+          assert.ok(correction.diagnostics[correction.atomicId].length > 0);
+          assert.ok(
+            correction.diagnostics[correction.atomicId].every(
+              (entry) =>
+                !JSON.stringify(entry).includes("SOUTH") && !JSON.stringify(entry).includes("WEST"),
+            ),
+          );
+          assert.ok(
+            drivers.histories[original.agent].some(
+              (entry) => entry.attempt === 1 && entry.atomicIds.includes(original.atomicId),
+            ),
+          );
           assert.equal(byGuard("SOUTH_H").length, 1);
           assert.equal(byGuard("WEST_H").length, 1);
           assert.equal(atomicRows(report).length, 4);
@@ -438,33 +458,165 @@ await test(
     );
 
     await t.test(
-      "a drained build failure gets one global repair without redispatching completed atoms",
+      "real Pi repairs only its own failed atom in the original native history",
+      async (t) => {
+        const calls = [];
+        const providers = [];
+        const output = path.join(root, "native-repair");
+        const report = await runConcurrent(preparation, output, {
+          log: quiet,
+          createDriver: async (workspace, state, agent) => {
+            const providerRoot = state + "-provider";
+            await mkdir(providerRoot, { recursive: true });
+            const provider = await providerFixture(providerRoot, (body) => {
+              if (body.messages.at(-1).role === "tool") return {};
+              const message = body.messages.findLast((item) => item.role === "user").content;
+              const prompt =
+                typeof message === "string"
+                  ? message
+                  : message
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text)
+                      .join("");
+              const detail = prompt.split("\n").flatMap((line) => {
+                try {
+                  const parsed = JSON.parse(line);
+                  return Array.isArray(parsed) ? parsed : [];
+                } catch {
+                  return [];
+                }
+              });
+              const operations = currentHeader(prompt).filter(
+                (operation) =>
+                  operation.guard !== "NORTH_H" ||
+                  detail.some((entry) => entry.file === operation.file),
+              );
+              const program = [
+                "import fcntl, json, pathlib",
+                "operations = json.loads(" + JSON.stringify(JSON.stringify(operations)) + ")",
+                "with open('main.cpp', 'r+') as source:",
+                " fcntl.flock(source, fcntl.LOCK_EX)",
+                " text = source.read()",
+                " for operation in operations:",
+                "  marker = '#ifndef ' + operation['guard'] + '\\n'",
+                "  if marker not in text: continue",
+                "  start = text.index(marker)",
+                "  end = text.index('#endif', start) + len('#endif')",
+                "  pathlib.Path(operation['file']).write_text(text[start:end] + '\\n')",
+                "  text = text[:start] + '#include ' + chr(34) + operation['file'] + chr(34) + '\\n' + text[end:]",
+                " source.seek(0)",
+                " source.write(text)",
+                " source.truncate()",
+              ].join("\n");
+              return { command: "python3 -c '" + program.replaceAll("'", "'\\''") + "'" };
+            });
+            providers.push(provider);
+            t.after(() => provider.close());
+            const driver = await startBaseline(workspace, state, provider.config, {
+              eventsFile: path.join(state, "events.jsonl"),
+            });
+            return {
+              get closed() {
+                return driver.closed;
+              },
+              async execute(prompt, options) {
+                const receipt = await driver.execute(prompt, options);
+                calls.push({ agent, ...options, receipt });
+                return receipt;
+              },
+              close: () => driver.close(),
+            };
+          },
+        });
+        assert.equal(report.status, "pass", JSON.stringify(report.terminal));
+        const correction = calls.find((call) => call.attempt === 2);
+        assert.ok(correction);
+        const first = calls.find(
+          (call) => call.attempt === 1 && call.atomicIds.includes(correction.atomicId),
+        );
+        assert.equal(correction.agent, first.agent);
+        assert.equal(correction.receipt.sessionId, first.receipt.sessionId);
+        assert.equal(correction.receipt.lifetime, first.receipt.lifetime);
+        assert.ok(correction.receipt.messageCount > first.receipt.messageCount);
+        assert.deepEqual(Object.keys(correction.diagnostics), [correction.atomicId]);
+        assert.ok(correction.diagnostics[correction.atomicId].length);
+        assert.equal(
+          evaluateCoherentContract(
+            await readTree(path.join(output, "workspace")),
+            prepareCoherentContract(expected),
+          ).status,
+          "pass",
+        );
+        assert.equal(calls.filter((call) => call.attempt > 1).length, 1);
+        assert.equal(providers.length, 2);
+      },
+    );
+
+    await t.test(
+      "a uniquely located build error returns only to its task's original executor",
+      async () => {
+        const drivers = deterministicDrivers({ breakOwnBuild: true });
+        const report = await runConcurrent(preparation, path.join(root, "owned-build-repair"), {
+          ...drivers,
+          log: quiet,
+        });
+        assert.equal(report.status, "pass", JSON.stringify(report.terminal));
+        const corrections = drivers.calls.filter((call) => call.attempt > 1);
+        assert.equal(corrections.length, 1);
+        const correction = corrections[0];
+        const original = drivers.calls.find(
+          (call) => call.atomicId === correction.atomicId && call.attempt === 1,
+        );
+        assert.equal(correction.agent, original.agent);
+        assert.equal(correction.operation.guard, "NORTH_H");
+        assert.deepEqual(Object.keys(correction.diagnostics), [correction.atomicId]);
+        assert.ok(
+          correction.diagnostics[correction.atomicId].some(
+            (entry) =>
+              entry.category === "build" &&
+              entry.file === "north.h" &&
+              entry.severity === "error" &&
+              Number.isInteger(entry.line),
+          ),
+        );
+        assert.ok(
+          correction.diagnostics[correction.atomicId].every((entry) => entry.file === "north.h"),
+        );
+        assert.equal(report.acceptedTasks, 2);
+        assert.equal(report.repairs, 1);
+        assert.ok(
+          atomicRows(report)
+            .filter((row) => row.attempt === 1)
+            .every((row) => row.atomicCheck.status === "pass"),
+        );
+      },
+    );
+
+    await t.test(
+      "an unattributed build failure stops without guessing an executor or broadcasting",
       async () => {
         const drivers = deterministicDrivers({ breakBuild: true });
         const report = await runConcurrent(preparation, path.join(root, "barrier-repair"), {
           ...drivers,
           log: quiet,
         });
-        assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        assert.equal(atomicRows(report).length, 4);
-        assert.equal(report.repairs, 1);
-        assert.equal(report.acceptedTasks, 2);
+        assert.equal(report.status, "infrastructure", JSON.stringify(report.terminal));
+        assert.match(report.terminal.message, /cannot be attributed/);
+        assert.equal(atomicRows(report).length, 3);
+        assert.equal(report.repairs, 0);
+        assert.equal(report.acceptedTasks, 0);
         assertInputTrace(report);
-        assert.deepEqual(
-          report.atomicBarriers[1].inputChecks,
-          [],
-          "Global repair must not fabricate atom eligibility checks",
+        assert.ok(
+          atomicRows(report).every((row) => row.attempt === 1 && row.atomicCheck.status === "pass"),
         );
-        const atoms = atomicRows(report).filter((row) => row.atomicId);
-        assert.equal(atoms.length, 3);
-        assert.ok(atoms.every((row) => row.attempt === 1 && row.atomicCheck.status === "pass"));
-        const repairs = atomicRows(report).filter((row) => row.deliveryKind === "barrier-repair");
-        assert.equal(repairs.length, 1);
-        assert.equal(repairs[0].atomicId, undefined);
-        assert.equal(repairs[0].attempt, 2);
-        assert.deepEqual(repairs[0].tasks, ["task-001", "task-002"]);
-        assert.equal(report.checks.find((check) => check.status === "fail").category, "build");
-        assert.deepEqual(await readTree(path.join(root, "barrier-repair/workspace")), expected);
+        assert.ok(drivers.calls.every((row) => row.attempt === 1));
+        const failure = report.checks.find((check) => check.status === "fail");
+        assert.equal(failure.category, "build");
+        assert.ok(
+          failure.diagnostics.some(
+            (entry) => entry.file === "main.cpp" && entry.severity === "error",
+          ),
+        );
       },
     );
 

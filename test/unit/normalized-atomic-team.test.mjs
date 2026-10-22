@@ -70,7 +70,7 @@ function fixture() {
       delivery("task-001", "001", 12, 1),
       delivery("task-001", "002", 12, 1),
       delivery("task-002", "001", 4, 1),
-      delivery("task-002", "001", 14, 2),
+      delivery("task-002", "001", 4, 2),
     ],
   };
 }
@@ -94,7 +94,7 @@ await test("atomic dispatch preserves actual order, repeated participants and re
   validate(report, projected);
   assert.deepEqual(
     projected.rounds.map((item) => item.agent),
-    [12, 12, 4, 14],
+    [12, 12, 4, 4],
   );
   assert.deepEqual(
     projected.rounds.map((item) => item.atomicId),
@@ -122,12 +122,23 @@ await test("atomic dispatch preserves actual order, repeated participants and re
   assert.equal(projected.trials[1].infrastructureFailure, "not-reached");
 });
 
+await test("normalized reports reject a correction moved to a different participant", () => {
+  const report = fixture();
+  const projected = normalizeTeamReport(report, profile, "fixture");
+  report.executions[3].agent = 14;
+  assert.throws(
+    () => normalizeTeamReport(report, profile, "fixture"),
+    /Repair changed task executor/,
+  );
+  projected.rounds[3].agent = 14;
+  assert.throws(() => validate(fixture(), projected), /Repair changed task executor/);
+});
 await test("a cross-parent batch keeps one native receipt and independent retained atom identities", () => {
   const report = fixture();
   const first = report.executions[0];
   first.tasks = ["task-001", "task-002"];
   first.atomicIds = report.executions.slice(0, 3).map((item) => item.atomicId);
-  report.executions = [first, report.executions[3]];
+  report.executions = [first, { ...report.executions[3], agent: first.agent }];
   const projected = normalizeTeamReport(report, profile, "fixture");
   validate(report, projected);
   assert.equal(projected.rounds.length, 2);
@@ -291,7 +302,7 @@ await test("atomic correction exhaustion stays at six joint attempts without per
       round: "round-001",
       tasks: ["task-001"],
       atomicId: "task-001-atom-001",
-      agent: attempt,
+      agent: 1,
       attempt,
       status: "settled",
       receipt,
@@ -320,7 +331,7 @@ for (const batched of [false, true])
       const first = report.executions[0];
       first.atomicIds = report.executions.slice(0, 3).map((item) => item.atomicId);
       first.tasks = ["task-001", "task-002"];
-      report.executions = [first, report.executions[3]];
+      report.executions = [first, { ...report.executions[3], agent: first.agent }];
     }
     report.totalTasks = 71;
     report.totalRounds = 28;

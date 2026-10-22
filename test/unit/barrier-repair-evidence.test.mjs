@@ -101,9 +101,10 @@ function fixture() {
       {
         round: "round-001",
         attempt: 2,
-        agent: 14,
-        tasks: ["task-002", "task-001"],
-        deliveryKind: "barrier-repair",
+        agent: 12,
+        tasks: ["task-002"],
+        atomicId: "task-002-atom-001",
+        diagnostics: { "task-002-atom-001": [{ file: "task.cpp", message: "PRIVATE_DIAGNOSTIC" }] },
         status: "settled",
         receipt: { ...receipt },
       },
@@ -145,15 +146,13 @@ async function jsonLines(file) {
     .map((line) => JSON.parse(line));
 }
 
-await test("one global repair accepts retained atomic outputs with joint credit and once-only metrics", () => {
+await test("a task-owned barrier repair retains joint credit and once-only metrics", () => {
   const raw = fixture();
   const projected = normalizeTeamReport(raw, profile, raw.initial);
   validate(raw, projected);
-  assert.deepEqual(
-    projected.rounds.map((item) => item.deliveryKind),
-    [undefined, undefined, "barrier-repair"],
-  );
-  assert.ok(!Object.hasOwn(projected.rounds[2], "atomicId"));
+  assert.ok(projected.rounds.every((item) => !Object.hasOwn(item, "deliveryKind")));
+  assert.equal(projected.rounds[2].atomicId, "task-002-atom-001");
+  assert.doesNotMatch(JSON.stringify(projected), /PRIVATE_DIAGNOSTIC|task\.cpp/);
   assert.equal(projected.trials[0].firstExactPassed, false);
   assert.equal(projected.trials[0].finalExactPassed, true);
   assert.equal(
@@ -192,7 +191,15 @@ await test("one global repair accepts retained atomic outputs with joint credit 
   assert.equal(aggregate.recoveryRounds, 1);
 });
 
-await test("global repairs reject invalid kinds, atom IDs, budgets, parents, duplicate or mixed attempts", () => {
+await test("an unscoped global repair cannot enter either result format", () => {
+  const raw = fixture();
+  delete raw.executions[2].atomicId;
+  raw.executions[2].deliveryKind = "barrier-repair";
+  raw.executions[2].tasks = ["task-001", "task-002"];
+  assert.throws(() => normalizeTeamReport(raw, profile, raw.initial), /Unscoped global repair/);
+  assert.throws(() => multiAgentResult(raw), /Unscoped global repair/);
+});
+await test("task-owned repairs reject invalid kinds, atom IDs, budgets, parents, duplicate or mixed attempts", () => {
   for (const mutate of [
     (raw) => {
       raw.executions[2].deliveryKind = "atomic";
@@ -227,13 +234,12 @@ await test("global repairs reject invalid kinds, atom IDs, budgets, parents, dup
       raw.repairs++;
     },
     (raw) => {
-      raw.executions.push({ ...raw.executions[0], attempt: 2 });
+      raw.executions.push({ ...raw.executions[0], attempt: 2, agent: 13 });
       raw.deliveries++;
       raw.repairs++;
     },
     (raw) => {
-      raw.executions.splice(1, 1);
-      raw.deliveries--;
+      raw.executions[2].agent = 14;
     },
     (raw) => {
       raw.executions[0].status = "error";
@@ -266,13 +272,7 @@ await test("global repairs reject invalid kinds, atom IDs, budgets, parents, dup
       rows.push({ ...rows[2], roundId: "duplicate" });
     },
     (rows) => {
-      rows.push({
-        ...rows[0],
-        barrierAttempt: 1,
-        roundId: "mixed",
-        exactPassed: true,
-        difference: "pass",
-      });
+      rows[2].agent = 14;
     },
   ]) {
     const copy = structuredClone(projected);
@@ -281,7 +281,7 @@ await test("global repairs reject invalid kinds, atom IDs, budgets, parents, dup
   }
 });
 
-await test("global repair cannot earn credit with native errors or continue after acceptance or a stopped barrier", () => {
+await test("task-owned repair cannot earn credit with native errors or continue after acceptance or a stopped barrier", () => {
   for (const mutate of [
     (raw) => {
       raw.executions[2].status = "error";
@@ -320,7 +320,7 @@ await test("global repair cannot earn credit with native errors or continue afte
   }
 });
 
-await test("global repair exhaustion consumes the existing correction budget and native stops keep evidence", () => {
+await test("task-owned repair exhaustion consumes the existing correction budget and native stops keep evidence", () => {
   const raw = fixture();
   raw.status = "blocked";
   raw.acceptedTasks = 0;
@@ -426,7 +426,9 @@ await test("common export validates repair rows and reads immutable atomic and r
     await writeFile(file, content);
     originals.set(file, hash(content));
   }
-  assert.ok([...originals.keys()].some((file) => file.includes("round-001-attempt-2")));
+  assert.ok(
+    [...originals.keys()].some((file) => file.includes("round-001-task-002-atom-001-attempt-2")),
+  );
   assert.ok(
     [...originals.keys()].some((file) => file.includes("round-001-task-001-atom-001-attempt-1")),
   );
@@ -435,8 +437,9 @@ await test("common export validates repair rows and reads immutable atomic and r
   await validateNormalizedRun(output);
   const rows = await jsonLines(path.join(output, "rounds.jsonl"));
   const calls = await jsonLines(path.join(output, "tool-calls.jsonl"));
-  assert.equal(rows[2].deliveryKind, "barrier-repair");
-  assert.ok(!Object.hasOwn(rows[2], "atomicId"));
+  assert.equal(rows[2].deliveryKind, undefined);
+  assert.equal(rows[2].atomicId, "task-002-atom-001");
+  assert.doesNotMatch(JSON.stringify(rows), /PRIVATE_DIAGNOSTIC/);
   assert.equal(calls.length, 3);
   assert.equal(new Set(calls.map((item) => item.roundId)).size, 3);
   for (const [file, digest] of originals) assert.equal(hash(await readFile(file)), digest);

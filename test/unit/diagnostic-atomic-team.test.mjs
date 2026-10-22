@@ -67,7 +67,7 @@ function fixture() {
       delivery("task-001", "001", 12, 1),
       delivery("task-001", "002", 12, 1),
       delivery("task-002", "001", 4, 1),
-      delivery("task-002", "001", 14, 2),
+      delivery("task-002", "001", 4, 2),
     ],
     elapsedMs: 100,
     policy: { ...MULTI_AGENT_POLICY },

@@ -200,6 +200,7 @@ await test("compiler-certified inseparable overloads remain one checkpoint and r
           agents: 2,
           completed: retained.completed,
           started: first.started,
+          owners: first.owners,
           rotation: first.rotation,
           ...gates,
           execute: async (node) => {

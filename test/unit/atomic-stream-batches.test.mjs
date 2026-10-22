@@ -112,6 +112,7 @@ test("a failed batch member retains verified peers and correction delivers only 
     batchSize: 50,
     completed: first.completed,
     started: first.started,
+    owners: first.owners,
     executeBatch: async (items) => batches.push(items.map((item) => item.id)),
     verify: async () => true,
   });

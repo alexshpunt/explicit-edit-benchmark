@@ -229,6 +229,7 @@ await test("a new correction stream retains a move while its partial naming desc
     agents: 15,
     completed: first.completed,
     started: first.started,
+    owners: first.owners,
     ...gates(checkpoint, read),
     execute: async (node) => {
       calls.push(node.id);
@@ -277,6 +278,7 @@ await test("a failed binding drains peers, retains verified work and receives ex
     agents: 15,
     completed: first.completed,
     started: first.started,
+    owners: first.owners,
     rotation: first.rotation,
     ...gates(checkpoint, read),
     execute: async (node) => {

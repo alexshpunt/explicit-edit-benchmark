@@ -155,6 +155,7 @@ await test(
       agents: 2,
       completed: retained.completed,
       started: first.started,
+      owners: first.owners,
       rotation: first.rotation,
       ...gates(checkpoint, read),
       execute: async (node) => {
@@ -199,6 +200,7 @@ await test("the combined stream and retained checkpoint reject corrupted inactiv
   const blocked = await runAtomicStream(nodes, {
     agents: 2,
     started: result.started,
+    owners: result.owners,
     ...gates(checkpoint, read),
     execute: async () => assert.fail("Corrupted protected inputs must block before dispatch"),
   });
