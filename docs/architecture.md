@@ -29,10 +29,12 @@ release policy; adding a name to documentation is not enough.
 
 - **Explicit Edit** generates its initial and expected files in code. Independent
   trials receive a task, edit their own workspace and pass byte-exact verification.
-- **Multi-Agent** uses a pinned C++ fixture. Preparation proves the restoration
-  workload and dependency graph. A fixed team shares one writable project, with
-  separate participant histories and rotating assignments. Each barrier checks
-  cumulative obligations, a fresh build and repeated rendered images.
+- **Multi-Agent** uses a pinned C++ fixture. Preparation certifies binding and
+  structural units and seals their dependency graph. Exactly 15 persistent
+  participants share one writable project. A free participant receives one ready
+  atomic request, with rotating ownership. Lightweight output gates unlock
+  successors; 28 drained full barriers check cumulative obligations, fresh builds
+  and repeated pixels before granting credit to the original 71 groups.
 
 The [Multi-Agent source map](multi-agent.md#source-layout) separates generation,
 tasks, execution, grading, reference editors and C++ analysis. Full and coherent
@@ -42,13 +44,21 @@ developer tools, not another publication protocol.
 Harness identity and task delivery are separate. `scripts/adapter-registry.mjs`
 owns registered presets; `benchmark-config.mjs` expands matrices and pairs.
 Adapters own calling the CLI, parsing its native events and continuing a session.
-Suite code owns task scheduling and grading. Selecting a harness must not replace
-it with Baseline Agent or infer tool usage from whether a task passed.
+Suite code owns task scheduling and grading. The atomic controller keeps verified
+completion separate from a settled response or pending peer observation. It
+rechecks prerequisites and retains only still-valid completions through barrier
+corrections. A global barrier repair is a separate delivery within the same
+six-attempt budget, not a new scoring task. The [run policy](multi-agent.md#run-policy-and-score)
+owns the detailed scheduling and correction contract. Selecting a harness must
+not replace it with Baseline Agent or infer tool usage from whether a task passed.
 
 Each participant sees the current assignment and live source, not future tasks,
-reference source, private contracts or expected pixels. Reference workers receive
-an explicit source allowlist; mounting the whole trusted checkout would break
-that boundary.
+reference source, private binding batches, contracts or expected pixels. Private
+expected-state replay and structural checkpoint decisions stay on the controller.
+Reference workers receive an explicit editing-code allowlist; their shared isolated
+analysis service accepts already-dispatched current requests only. One planning
+slot does not reduce participant concurrency. Mounting the whole trusted checkout
+or prepared answers would break that boundary.
 
 ## Shared result protocol
 
@@ -72,11 +82,15 @@ stay null rather than becoming zero.
 The original suite retains historical schemas 1 and 2. Schema 2 adds safe
 provider-failure attribution. Multi-Agent uses schema 3 in the same tables:
 trial rows link barriers to canonical tasks; round/call rows link native deliveries
-to participants. The manifest binds the workload, graph, schedule, fixed team and
-wall-clock observations. See the [team result contract](multi-agent-results.md).
+to participants. The manifest binds the workload, graph, schedule, fixed team
+and wall-clock observations. `suite.atomic` adds atomic workload and private-batch
+hashes, dispatch-policy hash and inventory count without exposing private contents.
+See the [team result contract](multi-agent-results.md).
 
-A barrier can contain several tasks and deliveries. Native events are counted
-once, not once per task. Joint acceptance is all-or-nothing at a barrier. Failed
+A barrier can contain several scoring groups and many atomic deliveries from the
+same participant. Global barrier repair has its own delivery kind. Retained
+completion does not create a new delivery. Native events are counted once, not
+once per parent group. Joint acceptance is all-or-nothing at a barrier. Failed
 corrections retain state; unreached tasks do not become infrastructure failures.
 Provider, driver and cancellation stops retain the accepted prefix but are not
 editing failures. Team duration is wall-clock time, not summed participant time.
@@ -93,10 +107,14 @@ signed archive, attestation and exact execution identity; they become `verified`
 only after trusted proof validation.
 
 `scripts/official-policy.mjs` and `policies/official-runs/` bind approved workflow,
-runner and suite identities. Multi-Agent has its own approved workload, fixture,
-graph, schedule and verifier record. Its fixed team and lack of task deadlines
-do not relax original-suite policies. Maintainer reference evidence is not a model
-observation and is not taken from a contributor's submitted approval hashes.
+runner and suite identities. Multi-Agent requires a maintainer-owned reviewed
+record binding the workload, fixture, graph, schedule, verifier, atomic hashes,
+dispatch policy and complete inventory. Approval requires a fresh model-free
+71-group/28-barrier atomic proof; partial certification and experimental coarse
+records do not authorize the stream. The official gate remains closed without
+that proof and explicit release activation. Its fixed team and lack of task
+deadlines do not relax original-suite policies. Maintainer reference evidence is
+not a model observation and is not taken from contributor-supplied approval hashes.
 
 Release preparation pins both the producer and submit-only recovery callers.
 The [release guide](official-run-release.md) describes that transaction.
@@ -131,11 +149,14 @@ backup. See [official operations and recovery](official-community-runs.md#operat
 `scripts/result-aggregation.mjs` owns both calculations:
 
 - Original Explicit Edit: coverage × (0.75 × first exact rate + 0.25 × final exact rate).
-- Multi-Agent: jointly accepted canonical tasks / 71.
+- Multi-Agent: 0.75 × first-pass success + 0.25 × eventual success, task-weighted
+  over the same 71 canonical groups. Only a passing full barrier grants either
+  kind of credit; atomic completion counts do not enlarge the denominator.
 
-Rankings stay separate by suite and comparable policy. Duration, cost, tokens,
-corrections and tool usage remain shared statistical facts; they do not weight
-the Multi-Agent Score. Historical calibration runs are labelled separately,
+Rankings stay separate by suite and comparable policy. Duration, cost, tokens
+and tool usage remain shared statistical facts, not Multi-Agent Score weights.
+Corrections affect first-pass versus eventual outcomes but do not create extra
+scoring groups. Historical calibration runs are labelled separately,
 not relabelled as common-protocol observations.
 
 Provider quarantine uses confirmed attribution and observed execution counts,

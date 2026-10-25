@@ -2,7 +2,7 @@
 
 This guide covers harness configuration behind the common
 `npm run benchmark -- run` command: models, reasoning, account routes, credential
-files and custom adapters. Select the suite first in the [README](../README.md#choose-a-suite).
+files and custom adapters. Select the suite first in the [README](../README.md#run-and-publish).
 Account configuration is shared; task scheduling and run policy belong to the suite.
 The original suite remains the default. Read the [Multi-Agent guide](multi-agent.md)
 for its fixed team, compiler and preparation requirements.

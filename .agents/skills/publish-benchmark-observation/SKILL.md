@@ -27,9 +27,11 @@ The CLI currently supports Explicit Edit and Multi-Agent. A future suite must
 be registered and documented before it can run; an arbitrary name is not an
 extension mechanism. Do not copy task counts or policies from another suite.
 
-Resolve the suite's task scope, concurrency/team size, correction/retry policy,
-deadlines, preparation, smoke gate, Score and official release availability.
-The selected guide owns those rules. If a guide conflicts with the implementation,
+Resolve the suite's task scope, delivery units, scoring tasks, full verification
+barriers, concurrency/team size, correction/retry policy, deadlines, preparation,
+smoke gate, Score and official release availability. Do not treat a native
+response or an atomic delivery count as accepted task credit. The selected guide
+owns those rules. If a guide conflicts with the implementation,
 stop and investigate rather than bypassing a rejected option.
 
 ## Resolve the configuration
@@ -109,7 +111,10 @@ and opens the Dataset contribution. Do not add a second paid smoke or set
 If the user requested execution without publication, use the documented
 `raw-run`, `export` and `inspect` path in `docs/running.md#development-commands`
 instead of a command that submits automatically. Carry the same suite and
-readiness requirements; a preparation proof is not a model/auth smoke.
+readiness requirements. If the suite requires a reference proof, require its
+current certified preparation and matching full proof before measured execution.
+Do not substitute an auth smoke, graph audit or partial certification for that
+proof. Do not substitute a reference proof for model/auth smoke.
 
 ## Inspect, recover and report
 
@@ -130,5 +135,7 @@ original producer run ID, attempt and actual signer revision. Do not rerun the
 model to repair delivery. Do not claim acceptance until its receipt is observed.
 
 Report the suite and policy, exact model/harness/reasoning, run ID, accepted
-progress and Score, wall-clock duration, available usage/cost, and workflow or
-Dataset contribution URL. Distinguish submitted, accepted and deferred results.
+scoring-task progress and Score, wall-clock duration, available usage/cost, and
+workflow or Dataset contribution URL. Report atomic/native delivery counts
+separately when the suite uses them. Distinguish submitted, accepted and deferred
+results.
