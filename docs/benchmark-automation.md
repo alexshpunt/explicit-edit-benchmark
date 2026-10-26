@@ -44,6 +44,8 @@ const myHarness = defineHarness({
 
 `inspectOutput` is optional for an exact one-turn run. Adapters own calling the CLI, parsing native events and continuing their own sessions. The suite owns task delivery, grading and run policy. For shared-project teams, verify continuation across assignments and corrections, independent participant state, cancellation and cleanup; a one-turn smoke does not prove these behaviors.
 
+Pi adapter metrics retain every native assistant error in `errors`. `terminalEventErrors` counts only errors not covered by an explicitly successful native retry and a completed final assistant settlement. Recovered transport errors remain observable but do not consume a benchmark correction or abort the team. Exhausted, interrupted and unmatched retries still fail; compiler, file and pixel acceptance are unchanged.
+
 ### A harness that orchestrates another agent
 
 Some harnesses are not one CLI call. [bb](https://getbb.app/) is an agent IDE: it starts a server, enrolls the local machine as a daemon, runs Claude Code, Codex, Pi, or OpenCode in threads, and keeps a timeline per thread. `examples/bb/` shows that shape end to end, and it works: against bb 0.43.1 one smoke task passed in about 40 seconds with two tool calls, one round, and reported tokens.

@@ -82,7 +82,7 @@ export function harnessParticipant(adapter, { workspace, state, artifacts }) {
       if (
         metrics.providerFailure ||
         execution.exitCode !== 0 ||
-        (Array.isArray(errors) && errors.length > 0)
+        (metrics.terminalEventErrors ?? (Array.isArray(errors) ? errors.length : 0)) !== 0
       ) {
         const error = Error("Harness delivery did not settle successfully");
         error.category = metrics.providerFailure ? "provider_failure" : "driver_exit";

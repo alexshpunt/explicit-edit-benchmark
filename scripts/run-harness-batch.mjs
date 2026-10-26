@@ -292,6 +292,7 @@ async function lane() {
               toolCalls: metrics.toolCalls,
               modelRounds: metrics.modelRounds,
               errors: metrics.errors,
+              terminalEventErrors: metrics.terminalEventErrors ?? metrics.errors.length,
               costUsd: metrics.costUsd ?? null,
               inputTokens: metrics.inputTokens ?? null,
               outputTokens: metrics.outputTokens ?? null,
@@ -337,7 +338,7 @@ async function lane() {
         const passed =
           processResult.exitCode === 0 &&
           !processResult.timedOut &&
-          metrics.errors.length === 0 &&
+          (metrics.terminalEventErrors ?? metrics.errors.length) === 0 &&
           comparison.exactMatch;
         result = {
           ...result,
@@ -357,6 +358,7 @@ async function lane() {
           invalidToolCalls: metrics.invalidToolCalls ?? null,
           providerFailure: metrics.providerFailure ?? null,
           errors: metrics.errors,
+          terminalEventErrors: metrics.terminalEventErrors ?? metrics.errors.length,
         };
       }
     } catch (error) {

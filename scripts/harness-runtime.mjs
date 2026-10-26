@@ -365,6 +365,41 @@ function sumUsage(records, fields) {
   );
 }
 
+// Preserve every native error; only an explicitly recovered retry may cease
+// being terminal. A toolUse response alone does not settle the delivery.
+function piTerminalEventErrors(events, errors) {
+  const recovered = new Set();
+  const candidates = new Set();
+  const hasSettledEvent = events.some((event) => event.type === "agent_settled");
+  let retryErrors, lastAssistant;
+  for (const event of events) {
+    if (event.type === "message_end" && event.message?.role === "assistant") {
+      lastAssistant = event;
+      if (event.message.stopReason === "error") retryErrors?.add(event);
+    } else if (event.type === "auto_retry_start") {
+      retryErrors ??= new Set();
+      if (lastAssistant?.message.stopReason === "error") retryErrors.add(lastAssistant);
+    } else if (event.type === "auto_retry_end") {
+      if (
+        event.success === true &&
+        ["stop", "length", "toolUse"].includes(lastAssistant?.message.stopReason)
+      ) {
+        for (const error of retryErrors ?? []) candidates.add(error);
+      }
+      retryErrors = undefined;
+    } else if (
+      (event.type === "agent_settled" && event.aborted !== true) ||
+      (!hasSettledEvent && event.type === "agent_end" && event.willRetry !== true)
+    ) {
+      if (["stop", "length"].includes(lastAssistant?.message.stopReason)) {
+        for (const error of candidates) recovered.add(error);
+        candidates.clear();
+      }
+    }
+  }
+  return errors.filter((error) => !recovered.has(error)).length;
+}
+
 /** Normalize only observable events; absent metrics stay null rather than zero. */
 export async function inspectHarnessOutput(kind, file) {
   if (typeof kind === "object" && typeof kind.inspectOutput === "function")
@@ -377,7 +412,8 @@ export async function inspectHarnessOutput(kind, file) {
     } catch {}
   }
   let calls = null,
-    rounds = null;
+    rounds = null,
+    terminalEventErrors;
   const errors = [];
   if (kind === "codex-cli-default") {
     calls = events.filter(
@@ -399,6 +435,7 @@ export async function inspectHarnessOutput(kind, file) {
     errors.push(
       ...events.filter((e) => e.type === "message_end" && e.message?.stopReason === "error"),
     );
+    terminalEventErrors = piTerminalEventErrors(events, errors);
   } else if (["dsh-standard", "dsh-code"].includes(kind)) {
     calls = events.filter((e) => e.type === "tool/call");
     rounds = events.filter((e) => e.type === "assistant/message").length;
@@ -469,6 +506,7 @@ export async function inspectHarnessOutput(kind, file) {
     toolCalls: calls?.length ?? null,
     modelRounds: rounds,
     errors,
+    ...(terminalEventErrors === undefined ? {} : { terminalEventErrors }),
     calls,
     eventCount: events.length,
     costUsd,

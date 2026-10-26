@@ -27,7 +27,7 @@ export async function recoverWithOracle({ recoveries, run, verify, record }) {
     const passed =
       execution.exitCode === 0 &&
       !execution.timedOut &&
-      !execution.errors?.length &&
+      !(execution.terminalEventErrors ?? execution.errors?.length) &&
       comparison.exactMatch === true;
     const result = { attempt, execution, comparison, passed };
     await record(result);
