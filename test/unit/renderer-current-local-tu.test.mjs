@@ -113,7 +113,9 @@ await test("current local ownership and unexplained input changes still require 
   const planner = await fixture(t);
   const wrong = request("first", "left");
   wrong.operations[0].selectors[0].owner.signature = "long (int, int)";
-  await assert.rejects(planner.plan(input, wrong), /Missing current owner\/signature binding/);
+  // Isolate owner selection from the deliberately broken unrelated translation unit.
+  const valid = { ...input, "main.cpp": input["main.cpp"].replace("moved_helper()", "0") };
+  await assert.rejects(planner.plan(valid, wrong), /Missing current owner\/signature binding/);
   const first = await planner.plan(input, request("first", "left"));
   planner.acknowledge(input, first.after);
   const changed = {

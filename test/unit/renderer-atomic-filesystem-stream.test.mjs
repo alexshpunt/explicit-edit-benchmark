@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import {
+  prepareCoherentContract,
+  evaluateCoherentContract,
+} from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import { runAtomicStream } from "../../src/suites/explicit-edit-multi-agent/execution/atomic-stream.mjs";
-import { createAtomicCheckpoint } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-checkpoint.mjs";
+import { runRetainedAtomicStream } from "../helpers/retained-atomic-stream.mjs";
 import { atomicWorkload } from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-workload.mjs";
 import { applyCoherentStructure } from "../../src/suites/explicit-edit-multi-agent/reference/coherent-edit.mjs";
 import { readSharedSource } from "../../src/suites/explicit-edit-multi-agent/reference/concurrent-commit.mjs";
@@ -15,9 +18,6 @@ import {
   readTree,
   writeTree,
 } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
-
-const decision = (result) =>
-  result.status === "pass" ? true : result.status === "pending" ? "pending" : false;
 
 async function untilReleased(promise, signal) {
   signal.throwIfAborted();
@@ -45,10 +45,10 @@ function headerTarget(prompt) {
 }
 
 // A tiny filesystem/namespace integration, not a benchmark preparation or proof.
-// Structural workers plan from actual shared source and commit through their CAS;
-// expected trees and gates stay in this controller, outside their editing mount.
+// Structural workers use actual shared source and ordinary uncoordinated writes;
+// expected barrier trees stay in this controller, outside their editing mount.
 await test(
-  "fifteen isolated persistent participants stream thirty tiny header edits exactly once",
+  "fifteen isolated persistent participants retain thirty header edits across ordinary write races",
   { timeout: 60_000 },
   async (t) => {
     await mkdir(".tmp", { recursive: true });
@@ -93,7 +93,7 @@ await test(
       const expected = tasks
         .flatMap((task) => task.operations)
         .reduce(applyCoherentStructure, initial);
-      const checkpoint = createAtomicCheckpoint(initial, nodes, []);
+      const contract = prepareCoherentContract(expected);
       await writeTree(workspace, initial);
       await prepareConcurrentExecutor(tools);
       for (let agent = 0; agent < 15; agent++)
@@ -104,18 +104,47 @@ await test(
       const occupied = new Set();
       let maximumOverlap = 0;
       const read = () => readSharedSource(workspace);
-      const result = await runAtomicStream(nodes, {
+      const result = await runRetainedAtomicStream(nodes, {
+        evaluate: (tree) => evaluateCoherentContract(tree, contract),
+        batchSize: 1,
+        readSource: read,
         agents: 15,
         signal: t.signal,
-        checkInputs: async (node, signal, context) =>
-          decision(await checkpoint.observe(read, node.id, context, { input: true, signal })),
         execute: async (node, agent, signal) => {
           assert.ok(!occupied.has(agent), "A busy participant cannot receive another edit");
           occupied.add(agent);
           maximumOverlap = Math.max(maximumOverlap, occupied.size);
-          calls.push({ id: node.id, agent });
-          const [{ file, guard, includes }] = node.operations;
-          assert.deepEqual(headerTarget(node.prompt), { file, guard, includes });
+          const repair = node.operations.every((operation) => operation.phase === "repair");
+          calls.push({ id: node.id, agent, repair });
+          if (repair) {
+            assert.ok(node.id.startsWith("repair-retained-attempt-"));
+            assert.ok(!nodes.some((original) => original.id === node.id));
+            for (const operation of node.operations) {
+              assert.ok(
+                [
+                  "create-module",
+                  "remove-source-module",
+                  "repair-module-includes",
+                  "inspect",
+                ].includes(operation.action),
+              );
+              if (operation.action !== "inspect") {
+                assert.equal(operation.required.kind, "header");
+                assert.ok(
+                  tasks.some((task) =>
+                    task.operations.some(
+                      (original) =>
+                        original.file === operation.required.file &&
+                        original.guard === operation.required.guard,
+                    ),
+                  ),
+                );
+              }
+            }
+          } else {
+            const [{ file, guard, includes }] = node.operations;
+            assert.deepEqual(headerTarget(node.prompt), { file, guard, includes });
+          }
           if (calls.length === 15) firstWave.resolve();
           try {
             // Start the first fifteen callbacks together without sleeps. No
@@ -128,19 +157,16 @@ await test(
             occupied.delete(agent);
           }
         },
-        verify: async (node, signal, _receipt, context) =>
-          decision(await checkpoint.observe(read, node.id, context, { signal })),
       });
-      assert.equal(
-        result.status,
-        "pass",
-        JSON.stringify({ failed: result.failed, completed: [...result.completed], calls }),
-      );
+      assert.equal(result.status, "pass", JSON.stringify({ failed: result.failed, calls }));
       assert.equal(maximumOverlap, 15);
-      assert.equal(calls.length, 30);
-      assert.equal(new Set(calls.map((call) => call.id)).size, 30);
+      assert.ok(calls.length >= 30);
+      assert.deepEqual(
+        new Set(calls.filter((call) => !call.repair).map((call) => call.id)),
+        new Set(nodes.map((node) => node.id)),
+      );
       assert.deepEqual(new Set(calls.map((call) => call.agent)), new Set(workers.keys()));
-      assert.equal(result.completed.size, 30);
+      assert.ok(result.attempts >= 1);
       assert.equal(new Set(receipts.map((receipt) => receipt.lifetime)).size, 15);
       for (const agent of workers.keys()) {
         const history = receipts.filter((receipt) => receipt.agent === agent);
@@ -152,13 +178,7 @@ await test(
       }
       const actual = await readTree(workspace);
       assert.deepEqual(actual, expected);
-      assert.equal(
-        checkpoint.revalidate(actual, {
-          completed: result.completed,
-          started: result.started,
-        }).completed.size,
-        30,
-      );
+      assert.equal(evaluateCoherentContract(actual, contract).status, "pass");
       assert.ok(
         !(await readdir(workspace)).some((name) => /^\.renderer-(?:planner-|edit-lock)/.test(name)),
         "All reference transactions release their workspace controls before settlement",

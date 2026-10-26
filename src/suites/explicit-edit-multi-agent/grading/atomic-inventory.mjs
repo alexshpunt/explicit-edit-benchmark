@@ -1,15 +1,6 @@
 import { treeIdentity } from "../generation/generator.mjs";
 import { prepareCoherentContract } from "./coherent-grade.mjs";
 
-const immutableRecords = new WeakSet();
-
-/** Identify immutable lexical metadata produced by this reader, not gate credit.
- * Frozen caller objects alone are insufficient: getters may still change values.
- */
-export function isAtomicInventoryRecord(record) {
-  return immutableRecords.has(record);
-}
-
 function freeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) freeze(child);
@@ -21,8 +12,8 @@ function freeze(value) {
 /** Reuse immutable lexical records for unchanged current file bytes and paths.
  * Recompute identity on every call, including mutations of the same tree object.
  * Retain one version per current file, never history, parse failures or decisions.
- * A changed or relocated file is fully parsed; deleted files are released. Every
- * gate still checks the complete current inventory and stabilizes live source.
+ * Changed or relocated files are parsed again; deleted files are released.
+ * Trusted checkpoint preparation always reads the complete supplied tree.
  * clear() drops all retained records; the reader can safely be used afterward.
  */
 export function createAtomicInventory() {
@@ -40,7 +31,6 @@ export function createAtomicInventory() {
         let entry = files.get(file);
         if (entry?.source !== source) {
           const contract = freeze(prepareCoherentContract({ [file]: source }));
-          for (const record of contract.obligations) immutableRecords.add(record);
           entry = { source, contract };
         }
         next.set(file, entry);

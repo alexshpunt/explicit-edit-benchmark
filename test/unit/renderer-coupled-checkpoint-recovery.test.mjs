@@ -6,9 +6,10 @@ import {
   applyScopedNamePlan,
   scopedNamingSession,
 } from "../../src/suites/explicit-edit-multi-agent/cpp/scoped-names.mjs";
-import { runAtomicStream } from "../../src/suites/explicit-edit-multi-agent/execution/atomic-stream.mjs";
-import { createAtomicCheckpoint } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-checkpoint.mjs";
-import { prepareCoherentContract } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
+import {
+  prepareCoherentContract,
+  evaluateCoherentContract,
+} from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
 import { assembleAtomicBundle } from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-bundle.mjs";
 import { coherentNamingPlans } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-naming-plans.mjs";
 import { appendCoherentNamingTask } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-tasks.mjs";
@@ -25,9 +26,6 @@ void follow() {}
 }
 int main() { frond::shared(frond::Box<frond::Float>{}); frond::shared(frond::Box<frond::Byte>{}); frond::direct(); }
 `;
-const decision = (result) =>
-  result.status === "pass" ? true : result.status === "pending" ? "pending" : false;
-
 async function fixture(directory) {
   const initial = { "main.cpp": source };
   const session = await scopedNamingSession(initial, directory);
@@ -72,8 +70,7 @@ async function fixture(directory) {
     assert.equal(bundle.workload.nodes.length, 3);
     assert.deepEqual(coupled.dependencies, []);
     assert.deepEqual(independent.dependencies, []);
-    // A controlled successor exercises verified-only readiness, independently of
-    // the compiler's selector-dependency inference.
+    // Keep a controlled dependency edge without introducing intermediate checks.
     const nodes = [independent, coupled, { ...dependent, dependencies: [coupled.id] }];
     const byId = new Map(
       nodes.map((node) => [
@@ -95,139 +92,35 @@ async function fixture(directory) {
       nodes,
       coupled,
       independent,
-      dependent,
+      dependent: nodes.find((node) => node.id === dependent.id),
       byId,
       missing,
-      checkpoint: createAtomicCheckpoint(initial, nodes, bundle.batches),
     };
   } finally {
     session.close();
   }
 }
 
-await test("compiler-certified inseparable overloads remain one checkpoint and repair unit", async (t) => {
+await test("compiler-certified inseparable overloads preserve every site at the full barrier", async () => {
   await mkdir(".tmp", { recursive: true });
-  const directory = await mkdtemp(path.resolve(".tmp/coupled-checkpoint-recovery-"));
+  const directory = await mkdtemp(path.resolve(".tmp/coupled-barrier-"));
   try {
-    const value = await fixture(directory);
-    const { initial, final, nodes, coupled, independent, dependent, byId, missing, checkpoint } =
-      value;
-    const coupledPlan = byId.get(coupled.id);
-    const independentPlan = byId.get(independent.id);
-
-    await t.test("each declaration and the shared callee are mandatory output sites", () => {
-      const context = {
-        completed: new Set([independent.id]),
-        started: new Set([independent.id, coupled.id]),
-        settled: new Set([independent.id, coupled.id]),
-      };
-      const complete = applyScopedNamePlan(initial, {
-        id: "complete-pair",
-        edits: [...independentPlan.edits, ...coupledPlan.edits],
+    const { initial, final, nodes, coupled, independent, dependent, byId } =
+      await fixture(directory);
+    const contract = prepareCoherentContract(final);
+    const all = nodes.flatMap((node) => byId.get(node.id).edits);
+    const complete = applyScopedNamePlan(initial, { id: "complete", edits: all });
+    assert.deepEqual(complete, final);
+    assert.equal(evaluateCoherentContract(complete, contract).status, "pass");
+    assert.deepEqual(dependent.dependencies, [coupled.id]);
+    assert.deepEqual(independent.dependencies, []);
+    for (const omitted of byId.get(coupled.id).edits) {
+      const partial = applyScopedNamePlan(initial, {
+        id: "incomplete",
+        edits: all.filter((edit) => edit !== omitted),
       });
-      assert.equal(checkpoint.check(complete, coupled.id, context).status, "pass");
-      for (const omitted of coupledPlan.edits) {
-        const partial = applyScopedNamePlan(initial, {
-          id: "incomplete-pair",
-          edits: [
-            ...independentPlan.edits,
-            ...coupledPlan.edits.filter((edit) => edit !== omitted),
-          ],
-        });
-        assert.equal(checkpoint.check(partial, coupled.id, context).status, "fail");
-        assert.equal(checkpoint.check(partial, independent.id, context).status, "pass");
-      }
-    });
-
-    await t.test(
-      "partial coupled output blocks its successor and repairs once without repeating its peer",
-      async () => {
-        let tree = initial;
-        const applied = [];
-        const deliveries = [];
-        const outputs = [];
-        const read = async () => ({ ...tree });
-        const gates = {
-          checkInputs: async (node, signal, context) => {
-            for (const predecessor of node.dependencies) {
-              const checked = await checkpoint.observe(read, predecessor, context, { signal });
-              if (checked.status !== "pass") return decision(checked);
-            }
-            return decision(
-              await checkpoint.observe(read, node.id, context, { input: true, signal }),
-            );
-          },
-          verify: async (node, signal, _receipt, context) => {
-            const checked = await checkpoint.observe(read, node.id, context, { signal });
-            outputs.push({ id: node.id, status: checked.status });
-            return decision(checked);
-          },
-        };
-        const write = (plan) => {
-          tree = applyScopedNamePlan(tree, plan, applied);
-          applied.push(plan);
-        };
-        const first = await runAtomicStream(nodes, {
-          agents: 2,
-          ...gates,
-          execute: async (node) => {
-            deliveries.push(node.id);
-            assert.notEqual(node.id, dependent.id);
-            write(
-              node.id === coupled.id
-                ? { ...coupledPlan, edits: coupledPlan.edits.filter((edit) => edit !== missing) }
-                : byId.get(node.id),
-            );
-          },
-        });
-        assert.equal(first.status, "blocked");
-        assert.deepEqual([...first.completed], [independent.id]);
-        assert.deepEqual(first.failed, [coupled.id]);
-        assert.ok(!first.started.has(dependent.id));
-        assert.ok(outputs.some((entry) => entry.id === coupled.id && entry.status === "fail"));
-        assert.ok(tree["main.cpp"].includes("void old(const Box<Byte>&)"));
-        assert.ok(tree["main.cpp"].includes("void restored(const Box<Float>&)"));
-        assert.ok(tree["main.cpp"].includes("restored(value)"));
-
-        const retained = checkpoint.revalidate(tree, {
-          completed: first.completed,
-          started: first.started,
-          settled: first.started,
-        });
-        assert.deepEqual([...retained.completed], [independent.id]);
-        assert.deepEqual(retained.invalidated, []);
-        const repaired = await runAtomicStream(nodes, {
-          agents: 2,
-          completed: retained.completed,
-          started: first.started,
-          owners: first.owners,
-          rotation: first.rotation,
-          ...gates,
-          execute: async (node) => {
-            deliveries.push(node.id);
-            assert.notEqual(node.id, independent.id);
-            if (node.id === dependent.id) {
-              assert.ok(
-                outputs.some((entry) => entry.id === coupled.id && entry.status === "pass"),
-              );
-              write(byId.get(node.id));
-            } else {
-              assert.equal(node.id, coupled.id);
-              write({ ...coupledPlan, edits: [missing] });
-            }
-          },
-        });
-        assert.equal(repaired.status, "pass");
-        assert.equal(repaired.completed.size, 3);
-        assert.deepEqual(deliveries, [independent.id, coupled.id, coupled.id, dependent.id]);
-        assert.deepEqual(tree, final);
-        for (const node of nodes)
-          assert.equal(
-            checkpoint.check(tree, node.id, { completed: repaired.completed }).status,
-            "pass",
-          );
-      },
-    );
+      assert.equal(evaluateCoherentContract(partial, contract).status, "fail");
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -3,10 +3,10 @@ import { atomicWorkload } from "./atomic-workload.mjs";
 import { atomicOrder } from "./atomic-effects.mjs";
 import { sealAtomicEffects } from "./atomic-preparation.mjs";
 import { coherentNamingPlans } from "./coherent-naming-plans.mjs";
-import { prepareAtomicNamingBatch, applyAtomicNamingBatch } from "../grading/atomic-frontier.mjs";
-import { evaluateCoherentContract } from "../grading/coherent-grade.mjs";
+import { prepareAtomicNamingBatch, applyAtomicNamingBatch } from "./atomic-naming-replay.mjs";
+import { prepareCoherentContract, evaluateCoherentContract } from "../grading/coherent-grade.mjs";
 import { treeIdentity } from "../generation/generator.mjs";
-import { createAtomicCheckpoint } from "../grading/atomic-checkpoint.mjs";
+import { applyCoherentStructure } from "../reference/coherent-edit.mjs";
 
 function originalOperation(operation) {
   const { bindingGroups: _groups, bindingCertification: _certification, ...original } = operation;
@@ -145,10 +145,49 @@ export function assembleAtomicBundle(initialTree, tasks, { namingPlans, contract
   return { workload, batches, tree };
 }
 
-/** Prove and partition the atomic graph at the original full-barrier boundaries.
- * All frontiers use trusted effects. This is preparation, not a substitute for
- * isolated reference execution. The measured runner must accept the preceding
- * full barrier before using the next entry; no future atoms enter its ready pool.
+function structuralRepairScopes(before, after, operation) {
+  const files = [...new Set([operation.file, "main.cpp"].filter(Boolean))];
+  const selectors = [
+    ...(operation.targets ?? []).map((target) => target.selector),
+    ...(operation.selector ? [operation.selector] : []),
+  ];
+  const descriptors = selectors.flatMap((selector) =>
+    files.map((file) => ({
+      file,
+      scope: selector.scope === "::" ? "" : selector.scope,
+      selector: selector.declarator,
+    })),
+  );
+  if (operation.guard) {
+    const guards = [
+      operation.guard,
+      ...(operation.action === "vendor-header" ? [operation.macro] : []),
+    ];
+    for (const tree of [before, after])
+      for (const file of files) {
+        if (tree[file] === undefined) continue;
+        const records = prepareCoherentContract({ [file]: tree[file] }).obligations;
+        for (const record of records)
+          if (
+            record.selector !== undefined &&
+            record.conditions.some((condition) => guards.some((guard) => condition.includes(guard)))
+          )
+            for (const owner of files)
+              descriptors.push({ file: owner, scope: record.scope, selector: record.selector });
+      }
+  }
+  return [
+    ...new Map(
+      (descriptors.length ? descriptors : files.map((file) => ({ file }))).map((descriptor) => [
+        JSON.stringify(descriptor),
+        descriptor,
+      ]),
+    ).values(),
+  ];
+}
+
+/** Replay trusted effects only at the original barrier boundaries. No candidate
+ * source enters this calculation; it creates no intermediate acceptance gates.
  */
 export function atomicCheckpoints(initialTree, workload, batches, schedule, contracts) {
   assert.equal(workload.version, "renderer-atomic-workload-v1");
@@ -168,6 +207,7 @@ export function atomicCheckpoints(initialTree, workload, batches, schedule, cont
   assert.deepEqual([...assigned].sort(), [...parents].sort(), "Atomic barrier coverage differs");
   const rounds = new Map();
   const previous = new Set();
+  const scopes = new Map();
   let tree = initialTree;
   for (const round of schedule) {
     const selected = new Set(round.assignments.map((assignment) => assignment.task));
@@ -177,21 +217,35 @@ export function atomicCheckpoints(initialTree, workload, batches, schedule, cont
         ...node,
         dependencies: node.dependencies.filter((id) => !previous.has(id)),
       }));
+    const ordered = atomicOrder(nodes);
+    for (const node of ordered.filter((item) =>
+      item.operations.every((operation) => operation.phase === "structure"),
+    )) {
+      const before = tree;
+      tree = node.operations.reduce(applyCoherentStructure, tree);
+      scopes.set(
+        node.id,
+        node.operations.flatMap((operation) => structuralRepairScopes(before, tree, operation)),
+      );
+    }
+    for (const entry of batches.filter((item) => selected.has(item.taskId))) {
+      const result = applyAtomicNamingBatch(tree, entry.batch, entry.batch.ids);
+      tree = result.tree;
+      for (const [id, descriptors] of result.repairScopes) {
+        if (!scopes.has(id)) scopes.set(id, []);
+        for (const descriptor of descriptors)
+          if (!scopes.get(id).some((item) => JSON.stringify(item) === JSON.stringify(descriptor)))
+            scopes.get(id).push(descriptor);
+      }
+    }
     const contract = contracts.get(round.id);
     assert.ok(contract, "Missing atomic barrier contract");
-    const checkpoint = createAtomicCheckpoint(
-      tree,
-      nodes,
-      batches.filter((entry) => selected.has(entry.taskId)),
-    );
-    tree = checkpoint.expected(new Set(nodes.map((node) => node.id))).tree;
     assert.equal(
       evaluateCoherentContract(tree, contract).status,
       "pass",
-      "Atomic frontier differs from its full barrier contract",
+      "Trusted replay differs from its full barrier contract",
     );
-    checkpoint.clearCaches();
-    rounds.set(round.id, { nodes, checkpoint });
+    rounds.set(round.id, { nodes, expectedTree: tree, repairScopes: new Map(scopes) });
     for (const node of nodes) previous.add(node.id);
   }
   return { rounds, tree };

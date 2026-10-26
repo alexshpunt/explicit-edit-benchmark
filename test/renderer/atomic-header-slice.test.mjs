@@ -16,17 +16,16 @@ import {
   neutralSourcePath,
 } from "../../src/suites/explicit-edit-multi-agent/generation/origin-markers.mjs";
 import { atomicWorkload } from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-workload.mjs";
-import { createAtomicCheckpoint } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-checkpoint.mjs";
+import {
+  prepareCoherentContract,
+  evaluateCoherentContract,
+} from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
 import { runAtomicStream } from "../../src/suites/explicit-edit-multi-agent/execution/atomic-stream.mjs";
 import { applyCoherentStructure } from "../../src/suites/explicit-edit-multi-agent/reference/coherent-edit.mjs";
-import { readSharedSource } from "../../src/suites/explicit-edit-multi-agent/reference/concurrent-commit.mjs";
 import {
   concurrentExecutor,
   prepareConcurrentExecutor,
 } from "../../src/suites/explicit-edit-multi-agent/reference/concurrent-executor.mjs";
-
-const decision = (result) =>
-  result.status === "pass" ? true : result.status === "pending" ? "pending" : false;
 
 function publicHeader(prompt) {
   const targets = prompt.split("\n").flatMap((line) => {
@@ -104,59 +103,45 @@ await test(
           stage(reverse ? "sampling-first begin" : "noise-first begin");
           const workspace = path.join(root, reverse ? "sampling-first" : "noise-first");
           await writeTree(workspace, initial);
-          const checkpoint = createAtomicCheckpoint(initial, workload.nodes, []);
+          const contract = prepareCoherentContract(expected);
+          const firstTurn = Promise.withResolvers();
           const workers = Array.from({ length: 2 }, () =>
             concurrentExecutor(workspace, tools, { signal: subtest.signal }),
           );
           const receipts = [];
           try {
-            const read = () => readSharedSource(workspace);
             const result = await runAtomicStream(order, {
               agents: 2,
+              batchSize: 1,
               signal: subtest.signal,
-              checkInputs: async (node, signal, context) => {
-                // Force each legal order at the test boundary, not through a
-                // semantic dependency. This is not a simultaneous-write proof.
-                if (node.id !== order[0].id && !context.completed.has(order[0].id))
-                  return "pending";
-                const observed = await checkpoint.observe(read, node.id, context, {
-                  input: true,
-                  signal,
-                });
-                stage(`input ${node.id}: ${observed.status}`);
-                return decision(observed);
-              },
-              execute: async (node, agent) => {
+              execute: async (node, agent, signal) => {
+                if (node.id !== order[0].id) {
+                  signal.throwIfAborted();
+                  const aborted = Promise.withResolvers();
+                  const abort = () => aborted.reject(signal.reason);
+                  signal.addEventListener("abort", abort, { once: true });
+                  try {
+                    await Promise.race([firstTurn.promise, aborted.promise]);
+                  } finally {
+                    signal.removeEventListener("abort", abort);
+                  }
+                }
                 stage(`executing ${node.id}`);
                 const [{ file, guard, includes }] = node.operations;
                 assert.deepEqual(publicHeader(node.prompt), { file, guard, includes });
                 const receipt = await workers[agent].execute(node);
                 receipts.push({ id: node.id, ...receipt });
+                if (node.id === order[0].id) firstTurn.resolve();
                 stage(`delivered ${node.id}`);
                 return receipt;
-              },
-              verify: async (node, signal, _receipt, context) => {
-                const observed = await checkpoint.observe(read, node.id, context, { signal });
-                stage(`output ${node.id}: ${observed.status}`);
-                if (observed.status !== "pass")
-                  subtest.diagnostic(
-                    JSON.stringify({
-                      status: observed.status,
-                      reason: observed.reason,
-                      failures: observed.obligations
-                        ?.filter((item) => item.status !== "pass")
-                        .slice(0, 8),
-                    }),
-                  );
-                return decision(observed);
               },
             });
             assert.equal(
               result.status,
-              "pass",
-              JSON.stringify({ failed: result.failed, completed: [...result.completed] }),
+              "drained",
+              JSON.stringify({ delivered: [...result.delivered] }),
             );
-            assert.equal(result.completed.size, 2);
+            assert.equal(result.delivered.size, 2);
             assert.deepEqual(
               receipts.map((receipt) => receipt.id),
               order.map((node) => node.id),
@@ -173,22 +158,11 @@ await test(
                 "main.cpp": actual["main.cpp"] + "\n" + actual[file],
               };
               assert.ok(
-                !checkpoint
-                  .revalidate(duplicate, {
-                    completed: result.completed,
-                    started: result.started,
-                  })
-                  .completed.has(node.id),
+                evaluateCoherentContract(duplicate, contract).status !== "pass",
                 "A retained guarded definition copy cannot satisfy the move",
               );
             }
-            assert.equal(
-              checkpoint.revalidate(actual, {
-                completed: result.completed,
-                started: result.started,
-              }).completed.size,
-              2,
-            );
+            assert.equal(evaluateCoherentContract(actual, contract).status, "pass");
             assert.equal(
               new Set(receipts.map((receipt) => receipt.lifetime)).size,
               2,

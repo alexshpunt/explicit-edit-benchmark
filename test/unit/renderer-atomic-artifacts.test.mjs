@@ -100,7 +100,7 @@ await test("concurrent preparation binds separate public atomic requests, privat
       manifest.atomic.dispatchPolicySha256,
       digest(JSON.stringify(ATOMIC_DISPATCH_POLICY)),
     );
-    assert.equal(manifest.atomic.version, "renderer-atomic-stream-v1");
+    assert.equal(manifest.atomic.version, "renderer-atomic-stream-v2");
     assert.equal(manifest.atomic.edits, JSON.parse(atomic).nodes.length);
     assert.deepEqual(JSON.parse(batches), []);
     assert.ok(JSON.parse(atomic).nodes.every((node) => !Object.hasOwn(node, "plan")));

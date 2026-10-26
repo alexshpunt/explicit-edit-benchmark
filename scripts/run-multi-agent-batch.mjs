@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { validateCurrentReferenceExecution } from "../src/suites/explicit-edit-multi-agent/reference/execution-proof.mjs";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { prepareMultiAgent } from "../src/suites/explicit-edit-multi-agent/prepare.mjs";
 import { runConcurrent } from "../src/suites/explicit-edit-multi-agent/execution/concurrent-run.mjs";
@@ -10,30 +11,11 @@ import {
   MULTI_AGENT_PROTOCOL,
   MULTI_AGENT_POLICY,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
-import { verifierSha256 } from "./verifier-identity.mjs";
+import { suiteVerifier } from "../src/suites/explicit-edit-multi-agent/source-identity.mjs";
 import { validateAtomicIdentity } from "./normalized-team-protocol.mjs";
+import { ATOMIC_DISPATCH_POLICY } from "../src/suites/explicit-edit-multi-agent/execution/atomic-stream.mjs";
 
-/** Identify the trusted suite implementation using portable source-relative names.
- * No private configuration or generated run output is part of the verifier identity.
- */
-export async function suiteVerifier(
-  root = new URL("../src/suites/explicit-edit-multi-agent/", import.meta.url),
-) {
-  const sources = [];
-  async function visit(directory, relative = "") {
-    for (const item of (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
-      const name = relative + item.name;
-      const file = new URL(item.name + (item.isDirectory() ? "/" : ""), directory);
-      if (item.isDirectory()) await visit(file, name + "/");
-      else if (item.isFile() && name.endsWith(".mjs"))
-        sources.push([name, verifierSha256(await readFile(file))]);
-    }
-  }
-  await visit(root);
-  return createHash("sha256").update(JSON.stringify(sources)).digest("hex");
-}
+export { suiteVerifier } from "../src/suites/explicit-edit-multi-agent/source-identity.mjs";
 
 /** Run each selected model-harness configuration as a full, isolated 15-member team.
  * Teams run sequentially; participant state is private and only the project is shared.
@@ -45,16 +27,19 @@ export async function runMultiAgentBatch({
   profiles,
   safeAdapters,
   configSha256,
+  batchSize = ATOMIC_DISPATCH_POLICY.defaultBatchSize,
   signal,
   log = console.log,
 }) {
   signal?.throwIfAborted();
+  assert.ok(Number.isSafeInteger(batchSize) && batchSize > 0, "Invalid delivery size");
   if (!preparation) {
     const input = path.join(root, "input");
     await prepareMultiAgent(input, { signal });
     preparation = path.join(input, "preparation");
     const proof = await runConcurrent(preparation, path.join(root, "reference-proof"), {
       agents: 15,
+      batchSize,
       signal,
       log,
     });
@@ -73,6 +58,7 @@ export async function runMultiAgentBatch({
   assert.equal(proof.status, "pass");
   assert.equal(proof.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent proof protocol");
   assert.deepEqual(proof.policy, MULTI_AGENT_POLICY, "Unsupported Multi-Agent proof policy");
+  await validateCurrentReferenceExecution(proof, 15);
   validateAtomicIdentity(manifest.atomic);
   assert.deepEqual(
     proof.atomic,
@@ -80,6 +66,7 @@ export async function runMultiAgentBatch({
     "Concurrent live runs need a matched atomic stream proof",
   );
   assert.equal(proof.agents, 15, "Atomic proof participant count differs");
+  assert.equal(proof.batchSize, batchSize, "Reference proof delivery size differs");
   assert.equal(
     proof.acceptedAtomicEdits,
     manifest.atomic.edits,
@@ -124,6 +111,7 @@ export async function runMultiAgentBatch({
       graphSha256: manifest.graphSha256,
       scheduleSha256: proof.scheduleSha256,
       atomic: manifest.atomic,
+      batchSize,
     },
   });
   const summary = { suite: MULTI_AGENT_BENCHMARK, profiles: {}, results: [] };
@@ -134,6 +122,7 @@ export async function runMultiAgentBatch({
     log(`TEAM ${profile}: 15 agents, 71 tasks, no delivery deadline`);
     const report = await runConcurrent(preparation, directory, {
       agents: 15,
+      batchSize,
       signal,
       log,
       createDriver: (workspace, state, agent) =>

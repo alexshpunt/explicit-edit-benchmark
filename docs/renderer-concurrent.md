@@ -23,10 +23,12 @@ from the untouched input and the selected public module moves, then composed
 with the audited naming deltas. They never use candidate source as the answer.
 All bodies, literals, inactive branches and macro contexts are still checked.
 
-The default team size is the maximum antichain of the derived DAG, not a hardcoded
-model setting. Its width is a potential concurrency limit, not a claim that every
-checkpoint fills the team. A team of one keeps the original task order. Private
-contracts and the graph never enter an agent's mount.
+The experimental command's default team size is the maximum antichain of the
+derived DAG. The scored protocol fixes 15 agents, all 71 tasks and 28 barriers.
+Each barrier's atoms are split evenly across the team, keeping each dependency
+chain whole and in order with one agent. Small barriers use fewer agents;
+barriers are not merged to occupy the team. A team of one keeps the original
+task order. Private contracts and the graph never enter an agent's mount.
 
 Preparation compares cumulative obligations in forward and reverse publication
 order within every ready wave, for every supported team size. Every route must
@@ -37,46 +39,87 @@ extraction from the initial monolith, with fresh builds and repeated renders.
 ## One shared project, separate persistent histories
 
 Each agent has its own persistent process and conversation. Every process binds
-the same writable workspace. Agents receive only their current public task, not
-future tasks, trusted contracts or expected source. Ownership rotates between
-agents at checkpoints. There are no separate worktrees whose answers are merged
-later.
+the same writable workspace. Agents receive only current public edits, not future
+tasks, trusted contracts or expected source. Each agent's share is a queue of
+messages, with a configurable limit of 50 atoms per message by default. The value
+is experimental and can be lowered without changing task content. Only a returned
+harness turn advances the queue; the controller does not interpret reply text.
+There are no separate worktrees whose answers are merged later.
 
 Every multi-agent assignment and correction states the total team size, how many
 other agents share the project, and how many agents have assignments in the current
 round. Waiting agents are not counted as current editors. A single-agent run omits
 this notice.
 
-After all assigned agents settle, the verifier checks the combined cumulative
-obligations, builds a fresh project and renders two scenes twice. Exact pixels
-must still match. It also checks that source did not change after the barrier.
-Earlier accepted work is part of every later check.
+Only after all queues and harness turns have drained does the verifier check the
+combined source. Intermediate states and individual atoms are not graded. A
+per-file symbol map from Clang 18's libclang compares declaration USRs, declaration
+and body tokens, and referenced USRs against the expected snapshot. Declaration
+order within a file and reopened namespaces do not matter. Macros, inactive
+branches and locals remain lexically protected. Earlier accepted work is part of
+every later check.
 
-A failed checkpoint allows three corrections with coarse feedback: requirements
-not met, build failed, or rendered images differ. Failed source and conversations
-are retained; nothing resets to an answer. Exhaustion stops the jointly verified
-prefix. The runner does not invent individual scores for a failed team checkpoint.
-Provider, driver and infrastructure failures are separate from editing failures.
-There is no overall or per-attempt deadline by default; cancellation remains active.
+A fresh build and two scenes rendered twice must pass with exact pinned pixels.
+The verifier also checks that source did not change after the barrier. A returned
+turn grants no task credit.
+
+A failed checkpoint allows five corrections, for six attempts in total, without
+resetting source or conversations. File-grouped repairs are split evenly across
+the whole team without original-executor attribution. The
+[run policy](multi-agent.md#run-policy-and-score) defines the priority and exact
+feedback: fresh current source/binding problems first, then compiler errors when
+the map is clean, then one coarse pixel mismatch item. Current compiler facts
+and already-public requirements identify unsatisfied names, ownership and module
+setup. Completed work is not resent. Repairs have new IDs, empty original-atom
+coverage and no historical-task payload. Private map tokens, USRs, reference
+source and preparation plans never enter feedback.
+
+Exhaustion stops the jointly verified prefix. The runner does not invent
+individual scores for a failed team checkpoint. Provider, driver and
+infrastructure failures are separate from editing failures. There is no overall
+or per-attempt deadline by default; cancellation remains active.
 
 ## Scripted reference and resource use
 
-The reference editor plans against the current shared source, then uses a short
-compare-and-commit lock. A stale snapshot writes nothing; the editor rereads and
-replans. Multi-file publication and consistent reads use this same lock. Planning
-happens outside it. Live agents are not required to use this editing technique.
+Each reference participant owns a private planner, compiler view and retained
+edit history. Planning remains independent and concurrent. Each requested file
+patch protects its latest read, merge and atomic replacement with an ordinary
+inherited-descriptor `flock`, available to a Bash participant. An inode check
+makes a waiting writer reopen a file replaced by a peer before reading it.
+Creating a file briefly protects its parent directory and rechecks absence.
+There are no lock files, shared planner or mandatory editing service. Other
+files remain writable, and multi-file intermediate states remain visible.
+This participant-owned protocol does not protect arbitrary writes that bypass it.
 
-Reference receipts are emitted only after owned compiler-slot cleanup finishes.
-Empty reference control directories are not source, and their removal may overlap
-with another worker's read. Nonempty control directories are rejected rather than
-allowing candidate code to hide inside them.
+The scripted reference must pass every drained barrier on its first check.
+It cannot dispatch barrier repairs or authorize measured runs with a recovered
+proof. Measured participants retain the separate six-attempt policy described
+above. Private planning and resolving an obsolete edit are editor work, not
+barrier acceptance. Actual working, planning and publication overlaps are
+recorded as evidence.
 
-Full-project compiler ASTs are memory-heavy. The reference has two overlapping
-compiler slots, shared by the persistent agents, and a disposable compiler child
-for each planning attempt. This bounds reference memory without reducing the
-benchmark team or restricting live tools. Reference planning, source publication
-and agent concurrency are different things; the report records the reference
-slot count separately. Safe reference conflicts are counted, not graded as failures.
+A restored project header can remain inside other header guards in the shared
+monolith. Fresh module repairs locate its unique current guard, including nested
+guards, and preserve an existing destination header. Ambiguous or incomplete
+blocks remain explicit inspection work; an editing receipt still grants no credit.
+
+Current compiler errors prioritize existing naming goals at their locations or
+with matching required names. Other goals and errors remain in the repair queues.
+
+A repair can reach an editor that never handled the original request. For a
+rename already present in current source, it resolves every destination selector
+through the compiler before choosing a no-op. A fresh field, namespace-variable
+or function repair can use a complete recovery AST from actual translation units when current
+source errors prevent strict analysis. It must still match the physical declaration,
+role and scope; a namespace-variable repair cannot select a function-local binding.
+Recovered function repairs also require the current owner signature and declaration/definition role.
+Recovery views are disposable and cannot certify ordinary naming work. Infrastructure
+failures and incomplete ASTs remain conflicts. All source errors still fail barrier
+grading, including unrelated errors left after a repair. No editor query grants credit.
+
+Full-project compiler ASTs are memory-heavy. Persistent participants own and
+clean up their compiler views independently. Reference resource use does not add
+a shared editing service or serialize the team.
 
 The compiler's combined project view is only a fast path. If it cannot compile,
 reference analysis falls back to the actual separate translation units and merges
@@ -109,7 +152,7 @@ for that exact team schedule. A live run refuses missing or mismatched proof.
 
 The native Pi regression scenario uses a local deterministic provider, no paid
 model calls. It exercises overlapping delivery, separate persistent sessions,
-rotating ownership, retained peer edits, correction exhaustion and cancellation:
+independent edits, retained peer edits, correction exhaustion and cancellation:
 
 ```sh
 RENDERER_PI_RUNTIME=PATH_TO_PINNED_PI_RUNTIME \

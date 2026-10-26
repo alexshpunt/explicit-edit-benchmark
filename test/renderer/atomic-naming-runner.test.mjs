@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { cppTokens } from "../../src/suites/explicit-edit-multi-agent/cpp/cpp-tokens.mjs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -155,7 +156,6 @@ function atomicRows(report) {
     row.atomicIds.map((atomicId, index) => ({
       ...row,
       atomicId,
-      atomicCheck: row.atomicChecks[atomicId],
       receipts: row.receipts ? [row.receipts[index]] : undefined,
     })),
   );
@@ -169,7 +169,7 @@ function deliveredBinding(prompt) {
       return [];
     }
   });
-  assert.ok(targets.length > 0 && targets.length <= 50);
+  assert.ok(targets.length > 0);
   return targets.map((target) => {
     assert.equal(target.mapping.length, 1);
     assert.ok(target.selectors.length > 0);
@@ -187,6 +187,30 @@ function deliveredBinding(prompt) {
     assert.match(owners[0], /^frond::(?:North|South)$/);
     return { mapping: target.mapping[0], owner: owners[0] };
   });
+}
+
+function deliveredRepairBindings(options, source) {
+  assert.deepEqual(options.atomicIds, []);
+  assert.ok(options.repairTasks?.length > 0);
+  const identifiers = cppTokens(source).filter((token) => /^[A-Za-z_]\w*$/.test(token.text));
+  return options.repairTasks.flatMap((task) =>
+    task.operations.map((operation) => {
+      assert.equal(operation.phase, "repair");
+      assert.ok(["rename-binding", "replace-identifier"].includes(operation.action));
+      const token = identifiers[operation.target.identifier];
+      assert.ok(token);
+      assert.ok(token.text === operation.target.name || token.text === operation.required.name);
+      const owner = [...source.matchAll(/int (North|South)\([^)]*\) \{[^}]*\}/g)].filter(
+        (match) => match.index <= token.start && token.start < match.index + match[0].length,
+      );
+      assert.equal(owner.length, 1);
+      return {
+        mapping: { from: operation.target.name, to: operation.required.name },
+        owner: `frond::${owner[0][1]}`,
+        repairAction: operation.action,
+      };
+    }),
+  );
 }
 
 async function waitForPeer(ready, signal) {
@@ -226,13 +250,22 @@ function bindingDrivers({ partialFirst = false } = {}) {
       },
       async execute(prompt, options) {
         assert.equal(closed, false);
-        assert.equal(options.deliveryKind, undefined);
-        const bindings = deliveredBinding(prompt);
-        assert.equal(bindings.length, options.atomicIds.length);
+        const repair = options.deliveryKind === "barrier-repair";
+        const bindings = repair
+          ? deliveredRepairBindings(
+              options,
+              await readFile(path.join(workspace, "main.cpp"), "utf8"),
+            )
+          : deliveredBinding(prompt);
+        assert.equal(
+          bindings.length,
+          repair ? options.repairTasks.length : options.atomicIds.length,
+        );
         const selected = bindings.map((binding, index) => ({
           ...binding,
           ...options,
-          atomicId: options.atomicIds[index],
+          atomicId: repair ? undefined : options.atomicIds[index],
+          problemId: repair ? options.repairTasks[index].id : undefined,
           agent,
           sequence: history.length + 1,
         }));
@@ -293,21 +326,18 @@ await test(
       log: quiet,
     });
     assert.equal(reference.status, "pass", JSON.stringify(reference.terminal));
-    assert.equal(atomicRows(reference).length, 4);
-    assert.equal(reference.repairs, 0);
+    assert.equal(new Set(atomicRows(reference).map((row) => row.atomicId)).size, 4);
     assert.equal(reference.acceptedTasks, 2);
     assert.equal(reference.acceptedRounds, 1);
-    assert.equal(reference.referencePlannerSlots, 1);
+    assert.equal(reference.referencePlannerSlots, 2);
     assert.deepEqual(
-      atomicRows(reference)
-        .map((row) => row.atomicId)
-        .sort(),
+      [...new Set(atomicRows(reference).map((row) => row.atomicId))].sort(),
       fixture.workload.nodes.map((node) => node.id).sort(),
     );
     const receipts = atomicRows(reference).map((row) => row.receipts[0]);
     assert.equal(new Set(receipts.map((receipt) => receipt.lifetime)).size, 2);
-    assert.equal(Math.max(...receipts.map((receipt) => receipt.planner.snapshotAttempts)), 1);
-    assert.equal(Math.max(...receipts.map((receipt) => receipt.planner.cacheHits)), 3);
+    assert.ok(receipts.every((receipt) => receipt.planner.snapshotAttempts >= 1));
+    assert.ok(reference.referenceConcurrency.maxPlanning > 0);
     const proof = JSON.parse(
       await readFile(path.join(fixture.preparation, "verification-2.json"), "utf8"),
     );
@@ -327,16 +357,12 @@ await test(
         assert.equal(report.status, "pass", JSON.stringify(report.terminal));
         assert.equal(atomicRows(report).length, 4);
         assert.equal(report.repairs, 0);
-        const readiness = report.atomicBarriers.flatMap((barrier) => barrier.inputChecks);
         assert.ok(
-          readiness.some((check) => check.observations.some((row) => row.mode === "current-input")),
-        );
-        assert.ok(
-          readiness.every((check) =>
-            check.observations.every((row) => row.mode !== "current-output"),
+          report.executions.every(
+            (row) => !Object.hasOwn(row, "atomicCheck") && !Object.hasOwn(row, "atomicChecks"),
           ),
-          "Naming input masks already admit completed output; do not grade the full output first",
         );
+        assert.ok(report.atomicBarriers.every((barrier) => !Object.hasOwn(barrier, "inputChecks")));
         assert.equal(report.acceptedTasks, 2);
         const northCalls = drivers.calls.filter((call) => call.owner === "frond::North");
         assert.deepEqual(northCalls.map((call) => call.mapping.from).sort(), ["a", "b"]);
@@ -358,7 +384,7 @@ await test(
     );
 
     await t.test(
-      "an incomplete binding is repaired once while completed peer bindings retain credit",
+      "an incomplete binding is repaired by the next file queue after the full barrier",
       async () => {
         const drivers = bindingDrivers({ partialFirst: true });
         const report = await runConcurrent(fixture.preparation, path.join(root, "corrected"), {
@@ -367,25 +393,40 @@ await test(
           log: quiet,
         });
         assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        assert.equal(atomicRows(report).length, 5);
         assert.equal(report.acceptedTasks, 2);
-        for (const name of ["b", "c", "d"])
-          assert.equal(
-            drivers.calls.filter((call) => call.mapping.from === name).length,
-            1,
-            `Completed binding ${name} must not be repeated`,
-          );
+        const first = drivers.calls.filter((call) => call.attempt === 1);
+        assert.equal(first.length, 4);
         const failed = drivers.calls.filter((call) => call.mapping.from === "a");
         assert.equal(failed.length, 2);
         assert.ok(failed[0].partial);
-        assert.equal(failed[0].attempt, 1);
-        assert.equal(failed[1].attempt, 2);
+        assert.deepEqual(
+          failed.map((call) => call.attempt),
+          [1, 2],
+        );
+        assert.notEqual(failed[1].agent, failed[0].agent);
+        assert.equal(failed[1].repairAction, "replace-identifier");
+        assert.deepEqual(failed[1].atomicIds, []);
+        assert.ok(failed[1].problemId.startsWith("repair-round-001-attempt-2-"));
+        assert.ok(
+          report.executions
+            .filter((row) => row.attempt > 1)
+            .every(
+              (row) =>
+                row.tasks.length === 0 && row.atomicIds.length === 0 && row.repairIds.length > 0,
+            ),
+        );
         assert.match(failed[1].before, /int north_left, int north_right/);
         assert.match(failed[1].before, /return a \+ north_right/);
-        const retained = drivers.calls.find((call) => call.mapping.from === "b").atomicId;
-        assert.ok(report.atomicBarriers[1].retained.includes(retained));
-        assert.equal(report.checks.find((check) => check.status === "fail").category, "structure");
+        const rejected = report.checks.find((check) => check.status === "fail");
+        assert.equal(rejected.category, "structure");
         assert.equal(report.repairs, report.executions.filter((row) => row.attempt > 1).length);
+        assert.ok(
+          report.atomicBarriers.every(
+            (barrier) =>
+              !Object.hasOwn(barrier, "inputChecks") && !Object.hasOwn(barrier, "retained"),
+          ),
+        );
+        assert.ok(report.executions.every((row) => !Object.hasOwn(row, "atomicChecks")));
         assert.deepEqual(report.checks.at(-1).pixels, fixture.pixels);
         assert.deepEqual(await readTree(path.join(root, "corrected/workspace")), fixture.final);
       },

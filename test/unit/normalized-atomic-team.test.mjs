@@ -79,6 +79,7 @@ function validate(report, projected) {
     {
       protocol: MULTI_AGENT_PROTOCOL,
       agents: report.agents,
+      ...(report.batchSize === undefined ? {} : { batchSize: report.batchSize }),
       schedule: report.schedule,
       observations: [{ profileId: profile.profileId, status: report.status }],
     },
@@ -122,17 +123,151 @@ await test("atomic dispatch preserves actual order, repeated participants and re
   assert.equal(projected.trials[1].infrastructureFailure, "not-reached");
 });
 
-await test("normalized reports reject a correction moved to a different participant", () => {
+await test("normalized reports accept a correction moved to a different participant", () => {
   const report = fixture();
-  const projected = normalizeTeamReport(report, profile, "fixture");
   report.executions[3].agent = 14;
-  assert.throws(
-    () => normalizeTeamReport(report, profile, "fixture"),
-    /Repair changed task executor/,
-  );
-  projected.rounds[3].agent = 14;
-  assert.throws(() => validate(fixture(), projected), /Repair changed task executor/);
+  const projected = normalizeTeamReport(report, profile, "fixture");
+  validate(report, projected);
+  assert.equal(projected.rounds[3].agent, 14);
+  assert.equal(projected.trials[0].finalExactPassed, true);
 });
+
+await test("generic barrier repairs retain their own artifact and one receipt without invented atoms", () => {
+  const report = fixture();
+  report.executions[3] = {
+    ...report.executions[3],
+    agent: 14,
+    tasks: ["task-001", "task-002"],
+    deliveryKind: "barrier-repair",
+    atomicId: "repair-round-001-repair-0-0",
+    atomicIds: [],
+  };
+  const projected = normalizeTeamReport(report, profile, "fixture");
+  validate(report, projected);
+  assert.equal(projected.rounds[3].atomicId, "repair-round-001-repair-0-0");
+  assert.deepEqual(projected.rounds[3].atomicIds, []);
+  assert.equal(projected.rounds[3].deliveryKind, "barrier-repair");
+  assert.equal(projected.rounds[3].totalTokens, 14);
+  assert.equal(projected.trials[0].finalExactPassed, true);
+  const failed = structuredClone(report);
+  failed.executions[3].receipt.exitCode = 1;
+  assert.throws(() => normalizeTeamReport(failed, profile, "fixture"));
+  const invalid = structuredClone(report);
+  invalid.executions[0].deliveryKind = "barrier-repair";
+  invalid.executions[0].atomicIds = [];
+  invalid.executions[0].atomicId = "repair-round-001-repair-0-0";
+  assert.throws(() => normalizeTeamReport(invalid, profile, "fixture"));
+});
+
+await test("fresh directed repairs preserve bounded problem IDs without parent or atom attribution", () => {
+  const report = fixture();
+  report.executions[3] = {
+    ...report.executions[3],
+    tasks: [],
+    atomicIds: [],
+    deliveryKind: "barrier-repair",
+    atomicId: "repair-round-001-attempt-2-problem-0",
+    repairIds: ["repair-round-001-attempt-2-problem-0", "repair-round-001-attempt-2-problem-1"],
+  };
+  const projected = normalizeTeamReport(report, profile, "fixture");
+  validate(report, projected);
+  const repair = projected.rounds[3];
+  assert.deepEqual(repair.atomicIds, []);
+  assert.deepEqual(repair.taskIds, []);
+  assert.deepEqual(repair.repairIds, report.executions[3].repairIds);
+  assert.equal(projected.trials[0].finalExactPassed, true);
+  for (const mutate of [
+    (copy) => {
+      copy.executions[3].tasks = ["task-001"];
+    },
+    (copy) => {
+      copy.executions[3].atomicIds = ["task-001-atom-001"];
+    },
+    (copy) => {
+      copy.executions[3].repairIds.push(copy.executions[3].repairIds[0]);
+    },
+    (copy) => {
+      copy.batchSize = 1;
+    },
+  ]) {
+    const copy = structuredClone(report);
+    mutate(copy);
+    assert.throws(() => normalizeTeamReport(copy, profile, "fixture"));
+  }
+});
+
+await test("different generic file repairs in one attempt keep separate native receipts", () => {
+  const report = fixture();
+  report.executions.splice(
+    3,
+    1,
+    {
+      ...report.executions[3],
+      deliveryKind: "barrier-repair",
+      atomicId: "repair-round-001-repair-0-0",
+      atomicIds: [],
+      tasks: ["task-001"],
+    },
+    {
+      ...report.executions[3],
+      deliveryKind: "barrier-repair",
+      atomicId: "repair-round-001-repair-1-0",
+      atomicIds: [],
+      tasks: ["task-002"],
+      agent: 14,
+    },
+  );
+  const projected = normalizeTeamReport(report, profile, "fixture");
+  validate(report, projected);
+  assert.equal(projected.rounds.length, 5);
+  assert.equal(
+    projected.rounds.reduce((sum, item) => sum + item.totalTokens, 0),
+    70,
+  );
+  const duplicate = structuredClone(report);
+  duplicate.executions[4].atomicId = duplicate.executions[3].atomicId;
+  assert.throws(() => normalizeTeamReport(duplicate, profile, "fixture"));
+});
+
+await test("a later barrier can repair public requests from an accepted earlier barrier", () => {
+  const report = fixture();
+  report.status = "pass";
+  report.acceptedTasks = 3;
+  report.acceptedRounds = 2;
+  report.checks.push(
+    { label: "round-002-attempt-1", status: "fail", category: "structure" },
+    { label: "round-002-attempt-2", status: "pass" },
+  );
+  report.executions.push(
+    {
+      ...report.executions[2],
+      round: "round-002",
+      tasks: ["task-003"],
+      atomicId: "task-003-atom-001",
+      attempt: 1,
+    },
+    {
+      ...report.executions[3],
+      round: "round-002",
+      tasks: ["task-001"],
+      atomicIds: ["task-001-atom-001"],
+      atomicId: "repair-round-002-repair-0-0",
+      deliveryKind: "barrier-repair",
+      agent: 14,
+    },
+  );
+  const projected = normalizeTeamReport(report, profile, "fixture");
+  validate(report, projected);
+  assert.equal(projected.trials[1].finalExactPassed, true);
+  assert.deepEqual(projected.rounds.at(-1).taskIds, ["task-001"]);
+  const future = structuredClone(report);
+  future.executions[3].tasks = ["task-003"];
+  future.executions[3].atomicIds = ["task-003-atom-001"];
+  future.executions[3].atomicId = "repair-round-001-repair-0-0";
+  future.executions[3].deliveryKind = "barrier-repair";
+  assert.throws(() => normalizeTeamReport(future, profile, "fixture"));
+});
+
 await test("a cross-parent batch keeps one native receipt and independent retained atom identities", () => {
   const report = fixture();
   const first = report.executions[0];
@@ -158,11 +293,12 @@ await test("a cross-parent batch keeps one native receipt and independent retain
   assert.throws(() => normalizeTeamReport(duplicate, profile, "fixture"));
 });
 
-await test("fifty atomic members retain one native usage receipt and unchanged group credit", () => {
+await test("a configured larger delivery retains one native usage receipt and unchanged group credit", () => {
   const report = fixture();
+  report.batchSize = 75;
   const first = report.executions[0];
   first.atomicIds = Array.from(
-    { length: 50 },
+    { length: 75 },
     (_, i) => `task-001-atom-${String(i + 1).padStart(3, "0")}`,
   );
   report.executions = [first, ...report.executions.slice(2)];
@@ -316,8 +452,8 @@ await test("atomic correction exhaustion stays at six joint attempts without per
   assert.throws(() => validate(report, projected));
 });
 
-for (const batched of [false, true])
-  await test(`the common exporter reads each ${batched ? "batch" : "atom"} native file exactly once`, async (t) => {
+for (const mode of ["atom", "batch", "generic-repair"])
+  await test(`the common exporter reads each ${mode} native file exactly once`, async (t) => {
     const root = await tempDirectory("normalized-atomic-export-");
     t.after(() => rm(root, { recursive: true, force: true }));
     const seed = path.join(root, "seed");
@@ -327,11 +463,22 @@ for (const batched of [false, true])
     const raw = path.join(root, "raw");
     await mkdir(raw);
     const report = fixture();
-    if (batched) {
+    if (mode === "batch") {
       const first = report.executions[0];
       first.atomicIds = report.executions.slice(0, 3).map((item) => item.atomicId);
       first.tasks = ["task-001", "task-002"];
       report.executions = [first, { ...report.executions[3], agent: first.agent }];
+    }
+    if (mode === "generic-repair") {
+      report.executions[3] = {
+        ...report.executions[3],
+        agent: 14,
+        tasks: [],
+        deliveryKind: "barrier-repair",
+        atomicId: "repair-round-001-repair-0-0",
+        atomicIds: [],
+        repairIds: ["repair-round-001-repair-0-0"],
+      };
     }
     report.totalTasks = 71;
     report.totalRounds = 28;
@@ -419,6 +566,12 @@ for (const batched of [false, true])
       report.executions.map((item) => item.atomicId),
     );
     assert.ok(rounds.every((item) => item.toolCallsObserved));
+    if (mode === "generic-repair") {
+      const directed = rounds.find((item) => item.deliveryKind === "barrier-repair");
+      assert.deepEqual(directed.taskIds, []);
+      assert.deepEqual(directed.atomicIds, []);
+      assert.deepEqual(directed.repairIds, ["repair-round-001-repair-0-0"]);
+    }
     assert.equal(calls.length, report.executions.length);
     assert.equal(new Set(calls.map((item) => item.roundId)).size, report.executions.length);
     assert.equal(

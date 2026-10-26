@@ -3,14 +3,52 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { scopedNamingSession, applyScopedNamePlan } from "../cpp/scoped-names.mjs";
+import {
+  scopedNamingSession,
+  applyScopedNamePlan,
+  hasCurrentNamingBinding,
+} from "../cpp/scoped-names.mjs";
 import { treeIdentity } from "../generation/generator.mjs";
 import { cppTokens, includeDirectives } from "../cpp/cpp-tokens.mjs";
 import { joinedProject } from "../cpp/joined-project.mjs";
-import { cppStructure } from "../cpp/cpp-structure.mjs";
+import { cppStructure, unitDeclarator } from "../cpp/cpp-structure.mjs";
+import { implementationResolutionNeeded, locateImplementation } from "./implementation-edit.mjs";
 
 const execFile = promisify(execFileCallback);
 
+// A correction can reach an executor that never saw the original turn. Select
+// the public destination spelling through the compiler before choosing a no-op.
+function destinationRequest(operation) {
+  const names = new Map(operation.mapping.map(({ from, to }) => [from, to]));
+  const spelling = (value) => {
+    let result = value;
+    for (const token of cppTokens(value).reverse())
+      if (names.has(token.text))
+        result = result.slice(0, token.start) + names.get(token.text) + result.slice(token.end);
+    return result;
+  };
+  const selector = (value) => ({
+    ...value,
+    ...(value.scope ? { scope: spelling(value.scope) } : {}),
+    ...(value.signature ? { signature: spelling(value.signature) } : {}),
+    ...(value.owner ? { owner: selector(value.owner) } : {}),
+  });
+  return {
+    ...operation,
+    mapping: operation.mapping.map(({ from, to }) => ({ from: to, to: from })),
+    ...(operation.selectors ? { selectors: operation.selectors.map(selector) } : {}),
+  };
+}
+function bindingProbes(operation) {
+  const selectors = operation.selectors?.length
+    ? operation.selectors.map((selector) => [selector])
+    : [undefined];
+  return operation.mapping.map((mapping) =>
+    selectors.map((selected) => ({ ...operation, mapping: [mapping], selectors: selected })),
+  );
+}
+const missingBinding = (error) =>
+  error.message.startsWith("Missing current owner/signature binding:");
 const headerBindings = Symbol("current header local bindings");
 const headerRoot = "__reference_header_bindings.cpp";
 const headerPath = /^(?:[\w.-]+\/)*[\w.-]+\.h$/;
@@ -331,10 +369,10 @@ async function headerRequest(tree, task, readActiveMacros) {
  * An unexplained whole-source change drops implementation/full-project sessions.
  * Header-only reuse retains the existing closed-header input/context checks.
  * A snapshot is reusable only while committed reference plans exactly explain the
- * current source. Pending plans are cached for a rejected CAS, not acknowledged.
+ * current source. Pending plans remain local until the caller records its edit.
  * Structural/unknown mutations, changed helper inputs and affected type selectors
  * invalidate reuse. Separate-TU fallback is deliberately disposable. No candidate mount may
- * contain this cache: run it inside the isolated reference service namespace.
+ * contain this cache: it belongs to this executor's private namespace.
  * Fully definition-owned locals with one physical implementation owner candidate
  * may compile that actual translation unit and its includes. Token pasting in
  * that view, project trigraph ambiguity, a repeated implementation owner or an
@@ -382,9 +420,9 @@ async function headerRequest(tree, task, readActiveMacros) {
  * header compiler errors remain errors. Header views exclude implementation
  * files and are reusable only for identical non-implementation input bytes;
  * including an implementation file is unsupported rather than hidden from that
- * identity. A rejected header-view CAS may reuse the same current plan when
- * those inputs are unchanged, merging it onto fresh implementation bytes; the
- * next commit and acknowledgement still require a matching whole-source snapshot.
+ * identity. A retried header plan can be reused when those inputs are unchanged,
+ * keeping fresh implementation bytes. Recording a planned edit advances only
+ * this private cache; it never guards or accepts a filesystem publication.
  * Full-project views keep their original complete-source identity. Type
  * declarations with plain scope selectors, or local types with complete function
  * owners unaffected by earlier type spellings, can retain compiler binding IDs
@@ -399,7 +437,11 @@ async function headerRequest(tree, task, readActiveMacros) {
  * a caller-owned retry of the same delivery, never acceptance; unchanged compiler
  * failures and all other errors still propagate. It grants no deadline reset.
  */
-export function currentNamingPlanner(directory, { signal } = {}) {
+export function currentNamingPlanner(directory, { signal, maxViews = 3 } = {}) {
+  assert.ok(
+    Number.isSafeInteger(maxViews) && maxViews > 0 && maxViews <= 3,
+    "Invalid private compiler-view budget",
+  );
   let state,
     pending,
     stopped = false;
@@ -411,6 +453,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     views.delete(view.file);
     discarded.add(view.analysis);
     if (state === view) state = undefined;
+    globalThis.gc?.();
   };
   const invalidate = () => {
     if (state) retire(state);
@@ -446,6 +489,9 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     return active;
   };
   const externalViews = new Map();
+  // Plain declaration summaries retain no ASTs and are reusable only for the
+  // identical actual translation unit, including its current includes/origins.
+  const bindingViews = new Map();
   const preprocessedTU = async (tree, file) => {
     check();
     const source = joinedProject(tree, [file]).source;
@@ -516,7 +562,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     }
     return matches.length === 1 ? matches[0] : undefined;
   };
-  const open = async (tree, file, allowAbsentOwners = false) => {
+  const open = async (tree, file, allowAbsentOwners = false, repairOnly = false) => {
     check();
     for (const analysis of discarded) {
       await rm(analysis, { recursive: true, force: true });
@@ -541,6 +587,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
       const session = await scopedNamingSession(current, analysis, {
         file,
         allowAbsentOwners,
+        repairOnly,
         onSelection: (origins) => {
           if (state) state.types ||= origins.some((origin) => origin.role === "type");
         },
@@ -556,6 +603,9 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     if (previous) retire(previous);
     state = undefined;
     pending = undefined;
+    // Retire before opening, not afterwards: a replacement AST/server must not
+    // temporarily exceed this actor's retained-view budget.
+    while (views.size >= maxViews) retire(views.values().next().value);
     const opened = await open(before, file);
     state = {
       ...opened,
@@ -569,7 +619,6 @@ export function currentNamingPlanner(directory, { signal } = {}) {
       typeSpellings: new Set(),
     };
     views.set(file, state);
-    if (views.size > 3) retire(views.values().next().value);
   };
   const reusable = (cached, before, task) => {
     const retainedTypes =
@@ -595,15 +644,102 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     await fresh(before, file);
     return false;
   };
+  const implementationBindings = async (tree, file) => {
+    const identity = viewIdentity(tree, file);
+    const cached = bindingViews.get(file);
+    if (cached?.identity === identity) {
+      statistics.cacheHits++;
+      return cached.bindings;
+    }
+    // Summaries contain no compiler objects. Release retained ASTs before a
+    // disposable structural lookup so this actor's view budget stays bounded.
+    for (const view of views.values()) retire(view);
+    pending = undefined;
+    bindingViews.delete(file);
+    const { session, analysis } = await open(tree, file, true);
+    try {
+      const bindings = session.bindings();
+      bindingViews.set(file, { identity, bindings });
+      return bindings;
+    } finally {
+      session.close();
+      discarded.add(analysis);
+    }
+  };
+  const actualFiles = (tree) =>
+    Object.keys(tree)
+      .filter((name) => name.endsWith(".cpp"))
+      .sort();
+  const cachedDestinations = (before, task) => {
+    const files = actualFiles(before);
+    if (!files.length) return false;
+    const bindings = [];
+    for (const file of files) {
+      const view = bindingViews.get(file);
+      if (!view || view.identity !== viewIdentity(before, file)) return false;
+      bindings.push(view.bindings);
+    }
+    return task.operations.every(
+      (operation) =>
+        !bindings.some((entries) =>
+          hasCurrentNamingBinding(entries, operation, { complete: false }),
+        ) &&
+        bindingProbes(destinationRequest(operation))
+          .flat()
+          .every((probe) => bindings.some((entries) => hasCurrentNamingBinding(entries, probe))),
+    );
+  };
   const separate = async (before, task) => {
     const merged = task.operations.map(() => new Map());
-    for (const file of Object.keys(before)
-      .filter((name) => name.endsWith(".cpp"))
-      .sort()) {
-      const { session, analysis } = await open(before, file, true);
+    const originals = task.operations.map((operation) => operation.mapping.map(() => false));
+    const probes = task.operations.map((operation) => bindingProbes(destinationRequest(operation)));
+    const covered = probes.map((mappings) =>
+      mappings.map((selectors) => selectors.map(() => false)),
+    );
+    const recordDestinations = (query) => {
+      for (const [index, mappings] of probes.entries())
+        for (const [mapping, selectors] of mappings.entries())
+          for (const [selector, probe] of selectors.entries())
+            covered[index][mapping][selector] ||= query(probe);
+    };
+    for (const file of actualFiles(before)) {
+      const identity = viewIdentity(before, file);
+      let view = bindingViews.get(file);
+      let opened;
       try {
+        if (!view || view.identity !== identity) {
+          bindingViews.delete(file);
+          opened = await open(before, file, true);
+          view = { identity, bindings: opened.session.bindings() };
+          bindingViews.set(file, view);
+        }
+        recordDestinations((probe) => hasCurrentNamingBinding(view.bindings, probe));
+        let hasOriginal = false;
+        for (const [index, operation] of task.operations.entries())
+          for (const [mapping, entry] of operation.mapping.entries()) {
+            const present = hasCurrentNamingBinding(
+              view.bindings,
+              { ...operation, mapping: [entry] },
+              { complete: false },
+            );
+            originals[index][mapping] ||= present;
+            hasOriginal ||= present;
+          }
+        if (!hasOriginal) continue;
+        opened ??= await open(before, file, true);
         for (const [index, operation] of task.operations.entries()) {
-          const plan = await session.plan(operation);
+          if (operation.category === "helpers" && operation.file !== file) continue;
+          // Earlier requests can advance owner scopes in this private session.
+          // Query its current compiler ledger before planning the next operation.
+          for (const [mapping, selectors] of probes[index].entries())
+            for (const [selector, probe] of selectors.entries())
+              covered[index][mapping][selector] ||= opened.session.hasBinding(probe);
+          for (const [mapping, entry] of operation.mapping.entries())
+            originals[index][mapping] ||= opened.session.hasBinding(
+              { ...operation, mapping: [entry] },
+              { complete: false },
+            );
+          const plan = await opened.session.plan(operation);
           for (const edit of plan.edits) {
             const key = JSON.stringify([edit.file, edit.start]);
             const previous = merged[index].get(key);
@@ -613,14 +749,19 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           }
         }
       } finally {
-        session.close();
-        discarded.add(analysis);
+        if (opened) {
+          opened.session.close();
+          discarded.add(opened.analysis);
+        }
       }
     }
     const plans = task.operations.map((operation, index) => {
       const edits = [...merged[index].values()];
-      for (const mapping of operation.mapping)
-        if (!edits.some((edit) => edit.old === mapping.from && edit.new === mapping.to))
+      for (const [mappingIndex, mapping] of operation.mapping.entries())
+        if (
+          !edits.some((edit) => edit.old === mapping.from && edit.new === mapping.to) &&
+          (originals[index][mappingIndex] || !covered[index][mappingIndex].every(Boolean))
+        )
           throw Error(`Missing current owner/signature binding: ${mapping.from}`);
       return { id: operation.id ?? operation.target, edits };
     });
@@ -633,6 +774,265 @@ export function currentNamingPlanner(directory, { signal } = {}) {
     return after;
   };
   return {
+    async currentBindings(tree, file) {
+      check();
+      if (typeof file !== "string" || !file.endsWith(".cpp") || !Object.hasOwn(tree, file))
+        throw Object.assign(Error("Current compiler context is absent"), { repairConflict: true });
+      return implementationBindings(tree, file);
+    },
+    /** Resolve a stale physical declarator through this actor's current compiler.
+     * Public function identity excludes parameter names; no old body is replayed.
+     */
+    async implementation(before, request) {
+      check();
+      if (!implementationResolutionNeeded(before, request)) return undefined;
+      const targets = request.targets.map(() => ({}));
+      for (const [file, slot] of [
+        ["main.cpp", "source"],
+        [request.file, "destination"],
+      ]) {
+        const source = before[file];
+        if (typeof source !== "string") continue;
+        const structure = cppStructure(source);
+        let bindings;
+        for (const [index, target] of request.targets.entries()) {
+          const { occurrence: _occurrence, ...moved } = target.selector;
+          const selector = slot === "source" ? target.selector : moved;
+          const exact = locateImplementation(source, selector, structure, { allowMissing: true });
+          if (exact) {
+            targets[index][slot] = exact;
+            continue;
+          }
+          if (selector.kind !== "function" || !selector.name || !selector.signature) continue;
+          const possible = structure.units.filter(
+            (unit) =>
+              (unit.scope || "::") === selector.scope &&
+              unit.definition === selector.definition &&
+              unitDeclarator(source, unit).includes(selector.name),
+          );
+          if (!possible.length) continue;
+          bindings ??= await implementationBindings(before, file);
+          const qualified = [selector.scope === "::" ? "" : selector.scope, selector.name]
+            .filter(Boolean)
+            .join("::");
+          const owners = new Map(
+            bindings
+              .filter(
+                (entry) =>
+                  entry.file === file &&
+                  entry.role === "function" &&
+                  entry.scope === qualified &&
+                  entry.owner?.scope === qualified &&
+                  entry.owner.signature === selector.signature &&
+                  entry.owner.definition === selector.definition,
+              )
+              .map((entry) => [entry.start, entry]),
+          );
+          if (owners.size > 1) throw Error("Ambiguous current compiler implementation owner");
+          const matches = possible.filter((unit) =>
+            [...owners.keys()].some((start) => unit.start <= start && start < unit.end),
+          );
+          if (matches.length > 1 || (owners.size && matches.length !== 1))
+            throw Error("Missing or ambiguous physical compiler implementation owner");
+          if (matches.length) targets[index][slot] = matches[0];
+        }
+      }
+      return {
+        before: treeIdentity(before),
+        request: JSON.stringify(request),
+        targets,
+        statistics: { ...statistics },
+      };
+    },
+    /** Plan a fresh problem at a current declaration, not an old task selector. */
+    async repair(before, operation) {
+      check();
+      const { target, required } = operation;
+      const conflict = () =>
+        Object.assign(Error("Current repair declaration changed"), { repairConflict: true });
+      const selectionFailure = (error) => {
+        if (
+          /^(?:Missing current owner\/signature binding:|Binding already changed by an earlier request|Unsupported local reference:|Empty current naming request|No semantic edits for |Rename crosses fixed source boundary:)/.test(
+            error.message,
+          )
+        )
+          error.repairConflict = true;
+        return error;
+      };
+      if (
+        operation.phase !== "repair" ||
+        operation.action !== "rename-binding" ||
+        !target ||
+        !Object.hasOwn(before, target.file) ||
+        !/^[A-Za-z_]\w*$/.test(required?.name ?? "") ||
+        !Number.isSafeInteger(target.identifier) ||
+        target.identifier < 0
+      )
+        throw conflict();
+      const token = cppTokens(before[target.file])
+        .filter((item) => /^[A-Za-z_]\w*$/.test(item.text))
+        .at(target.identifier);
+      if (!token || ![target.name, required.name].includes(token.text)) throw conflict();
+      const files = actualFiles(before);
+      const context = files.includes(target.translationUnit)
+        ? target.translationUnit
+        : files.includes(target.file)
+          ? target.file
+          : files[0];
+      if (!context) throw conflict();
+      const local =
+        target.role === "variable" &&
+        (files.length === 1 ||
+          (target.owner?.scope && target.scope?.startsWith(target.owner.scope + "::")));
+      const file = local || operation.category === "helpers" ? context : undefined;
+      const key = JSON.stringify(operation);
+      const identity = treeIdentity(before);
+      try {
+        if (pending) invalidate();
+        const cached = [...views.values()].find(
+          (view) =>
+            !view.types &&
+            (view.file === file || (view.file === undefined && files.length === 1)) &&
+            view.expected === viewIdentity(before, view.file),
+        );
+        if (cached) {
+          state = cached;
+          views.delete(cached.file);
+          views.set(cached.file, cached);
+          statistics.cacheHits++;
+        } else await fresh(before, file);
+        const plan = await state.session.planRepair(operation, before);
+        const after = plan.edits.length ? applyScopedNamePlan(before, plan, state.applied) : before;
+        pending = {
+          key,
+          before: identity,
+          after,
+          plans: plan.edits.length ? [plan] : [],
+          ...(target.role === "type" ? { types: true } : {}),
+        };
+        return { after, statistics: { ...statistics } };
+      } catch (error) {
+        invalidate();
+        if (
+          error.compilerSourceFailure &&
+          (["field", "function"].includes(target.role) ||
+            (target.role === "variable" && !target.owner))
+        ) {
+          // A partially renamed declaration can make its users ill-formed.
+          // Inspect each actual TU independently, never a synthetic merged
+          // error tree, and merge only this physical declaration's uses.
+          const contexts =
+            file === undefined
+              ? [context, ...files.filter((candidate) => candidate !== context)]
+              : [file];
+          const edits = new Map();
+          let found = false;
+          for (const currentFile of contexts) {
+            if (
+              !joinedProject(before, [currentFile]).spans.some((span) => span.file === target.file)
+            )
+              continue;
+            const { session, analysis } = await open(before, currentFile, false, true);
+            try {
+              let plan;
+              try {
+                plan = await session.planRepair(operation, before);
+              } catch (failure) {
+                // An enabled declaration in the primary actual TU is required.
+                // Other TUs may not enable the same macro-controlled declaration.
+                if (found && failure.repairAbsent) continue;
+                throw selectionFailure(failure);
+              }
+              found = true;
+              for (const edit of plan.edits) {
+                const site = JSON.stringify([edit.file, edit.start]);
+                const previous = edits.get(site);
+                if (previous && (previous.old !== edit.old || previous.new !== edit.new))
+                  throw conflict();
+                edits.set(site, edit);
+              }
+            } finally {
+              session.close();
+              discarded.add(analysis);
+            }
+          }
+          if (!found) throw conflict();
+          const plan = { id: operation.id, edits: [...edits.values()] };
+          const after = plan.edits.length ? applyScopedNamePlan(before, plan) : before;
+          pending = { key, before: identity, after, disposable: true };
+          return { after, statistics: { ...statistics } };
+        }
+        if (
+          (!error.compilerSourceFailure && !error.repairConflict) ||
+          file !== undefined ||
+          files.length < 2
+        )
+          throw selectionFailure(error);
+        // Some independent implementation files cannot share one compiler TU.
+        // Resolve this current point in its real context, then use the existing
+        // separate-TU merger for the same compiler-proven semantic binding.
+        const bindings = await implementationBindings(before, context);
+        const matches = bindings.filter(
+          (entry) =>
+            entry.file === target.file && entry.start === token.start && entry.role === target.role,
+        );
+        const unique = [...new Map(matches.map((entry) => [entry.start, entry])).values()];
+        if (unique.length !== 1) throw conflict();
+        const entry = unique[0];
+        if (token.text === required.name) {
+          pending = { key, before: identity, after: before, disposable: true };
+          return { after: before, statistics: { ...statistics } };
+        }
+        if (
+          entry.owner?.scope &&
+          entry.scope.startsWith(entry.owner.scope + "::") &&
+          entry.role === "variable"
+        ) {
+          await fresh(before, context);
+          const plan = await state.session.planRepair(operation, before);
+          const after = applyScopedNamePlan(before, plan);
+          pending = { key, before: identity, after, plans: [plan] };
+          return { after, statistics: { ...statistics } };
+        }
+        const category =
+          operation.category ??
+          (entry.role === "variable"
+            ? "locals-parameters"
+            : entry.role === "field"
+              ? "fields"
+              : "functions-types");
+        const selector =
+          entry.role === "field"
+            ? { kind: "record", scope: entry.declaringScope }
+            : {
+                kind: entry.role,
+                scope: entry.scope,
+                ...(entry.owner
+                  ? {
+                      owner:
+                        entry.role === "function"
+                          ? { scope: entry.owner.scope, signature: entry.owner.signature }
+                          : entry.owner,
+                    }
+                  : {}),
+              };
+        return this.plan(before, {
+          id: operation.id,
+          operations: [
+            {
+              id: operation.id,
+              phase: "names",
+              category,
+              ...(category === "helpers" ? { file: target.file } : {}),
+              mapping: [{ from: entry.name, to: required.name }],
+              selectors: [selector],
+            },
+          ],
+        }).catch((error) => {
+          throw selectionFailure(error);
+        });
+      }
+    },
     async plan(before, task, readCurrent) {
       try {
         check();
@@ -654,7 +1054,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
             (await headerRequest(before, task, readActiveMacros)) &&
             pending.headerBefore === viewIdentity(before, headerBindings)
           ) {
-            // The failed whole-source CAS changed only files this compiler view
+            // The intervening source change affected only files this compiler view
             // cannot read. Keep its one consumed plan, not the stale peer bytes.
             pending.before = identity;
             pending.after = { ...before, ...headerTree(pending.after) };
@@ -673,6 +1073,12 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           pending = { key, before: identity, after, disposable: true };
           return { after, statistics: { ...statistics } };
         };
+        if (cachedDestinations(before, task)) {
+          invalidate();
+          statistics.cacheHits++;
+          pending = { key, before: identity, after: before, disposable: true };
+          return { after: before, statistics: { ...statistics } };
+        }
         // An explained full view already covers semantic requests. Choose it
         // before probing a narrower view: that probe may itself run Clang's
         // preprocessor. Unknown source still takes the complete selection path,
@@ -717,6 +1123,20 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           plans = await selectPlans();
         } catch (error) {
           if (
+            missingBinding(error) &&
+            (actualFiles(before).length === 0 ||
+              (actualFiles(before).length === 1 &&
+                (file === undefined || file === actualFiles(before)[0]))) &&
+            task.operations.every(
+              (operation) =>
+                !state.session.hasBinding(operation, { complete: false }) &&
+                state.session.hasBinding(destinationRequest(operation)),
+            )
+          ) {
+            pending = { key, before: identity, after: before, plans: [] };
+            return { after: before, statistics: { ...statistics } };
+          }
+          if (
             localDefinitionOnly &&
             (error.message.startsWith("Missing current owner/signature binding:") ||
               error.message.startsWith("Unsupported local reference")) &&
@@ -735,8 +1155,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
               plans = await selectPlans();
             } catch (headerError) {
               invalidate();
-              if (headerError.message.startsWith("Missing current owner/signature binding:"))
-                throw error;
+              if (missingBinding(headerError)) return await separateCurrent();
               throw headerError;
             }
           }
@@ -745,6 +1164,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
             // Never translate selectors or fall back to saved reference answers.
             if (!reused && file !== headerBindings) {
               invalidate();
+              if (missingBinding(error)) return await separateCurrent();
               throw error;
             }
             invalidate();
@@ -761,6 +1181,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
               plans = await selectPlans();
             } catch (freshError) {
               invalidate();
+              if (missingBinding(freshError)) return await separateCurrent();
               throw freshError;
             }
           }
@@ -800,7 +1221,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
           treeIdentity(await readCurrent()) === treeIdentity(before)
         )
           throw error;
-        // Like a rejected CAS, failure on an obsolete snapshot cannot decide
+        // A compiler failure on an obsolete snapshot cannot decide
         // the current delivery. Replan actual bytes; unchanged errors still fail.
         return undefined;
       }
@@ -811,7 +1232,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
         pending &&
           pending.before === treeIdentity(before) &&
           treeIdentity(pending.after) === treeIdentity(after),
-        "CAS acknowledgement differs from pending naming transaction",
+        "Recorded edit differs from pending naming plan",
       );
       const accepted = pending;
       pending = undefined;
@@ -844,6 +1265,7 @@ export function currentNamingPlanner(directory, { signal } = {}) {
       for (const view of views.values()) retire(view);
       macroState = undefined;
       externalViews.clear();
+      bindingViews.clear();
     },
   };
 }

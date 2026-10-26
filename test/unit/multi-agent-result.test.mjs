@@ -101,6 +101,33 @@ await test("jointly accepted progress stays distinct from a failed barrier and f
   assert.equal(multiAgentResult(partial).progress.acceptedTasks, 1);
 });
 
+await test("barrier corrections can move between participants and generic turns earn only joint task credit", () => {
+  const raw = report();
+  raw.batchSize = 75;
+  for (const execution of raw.executions) {
+    execution.atomicId = `${execution.tasks[0]}-atom-001`;
+    execution.atomicIds = [execution.atomicId];
+    if (execution.attempt > 1) {
+      execution.deliveryKind = "barrier-repair";
+      execution.atomicId = `repair-${execution.round}-repair-0-0`;
+      execution.atomicIds = [];
+      execution.agent = execution.attempt % 2;
+    }
+  }
+  const result = multiAgentResult(raw);
+  assert.equal(result.configuration.batchSize, 75);
+  assert.equal(result.progress.acceptedTasks, 1);
+  assert.equal(result.execution.repairs, 5);
+  assert.equal(result.execution.deliveries, raw.executions.length);
+  const otherSize = multiAgentResult({ ...raw, batchSize: 25 });
+  assert.notEqual(result.comparisonKey, otherSize.comparisonKey);
+  const invalid = structuredClone(raw);
+  invalid.executions[0].deliveryKind = "barrier-repair";
+  invalid.executions[0].atomicId = "repair-round-001-repair-0-0";
+  invalid.executions[0].atomicIds = [];
+  assert.throws(() => multiAgentResult(invalid));
+});
+
 await test("safe projection drops private source, prompts, receipts and terminal prose instead of copying raw reports", async () => {
   const raw = report();
   raw.workspace = "/private/machine/workspace";

@@ -277,10 +277,15 @@ int main(int argc, char** argv) {
     assert.equal(report.acceptedTasks, 4);
     assert.equal(report.acceptedRounds, 3);
     assert.ok(
-      report.executions.every((row) => row.attempt === 1 && row.atomicCheck.status === "pass"),
+      report.executions.every(
+        (row) =>
+          row.attempt === 1 &&
+          !Object.hasOwn(row, "atomicCheck") &&
+          !Object.hasOwn(row, "atomicChecks"),
+      ),
     );
     assert.deepEqual(
-      report.executions.map((row) => row.atomicId).sort(),
+      report.executions.flatMap((row) => row.atomicIds).sort(),
       workload.nodes.map((node) => node.id).sort(),
     );
     const receipts = report.executions.map((row) => row.receipts[0]);

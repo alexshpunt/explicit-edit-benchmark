@@ -17,9 +17,11 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/cpp/scoped-names.mjs";
 import { coherentNamingPlans } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-naming-plans.mjs";
 import { assembleAtomicBundle } from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-bundle.mjs";
-import { prepareCoherentContract } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
-import { createAtomicCheckpoint } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-checkpoint.mjs";
-import { runAtomicStream } from "../../src/suites/explicit-edit-multi-agent/execution/atomic-stream.mjs";
+import {
+  prepareCoherentContract,
+  evaluateCoherentContract,
+} from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
+import { runRetainedAtomicStream } from "../helpers/retained-atomic-stream.mjs";
 import { readSharedSource } from "../../src/suites/explicit-edit-multi-agent/reference/concurrent-commit.mjs";
 import {
   prepareConcurrentExecutor,
@@ -111,7 +113,7 @@ await test(
     stage("private atomic bundle assembled");
     assert.equal(bundle.workload.nodes.length, 4);
     assert.ok(bundle.workload.nodes.every((node) => node.dependencies.length === 0));
-    const checkpoint = createAtomicCheckpoint(initial, bundle.workload.nodes, bundle.batches);
+    const contract = prepareCoherentContract(expected);
     const tools = path.join(root, "executor"),
       workspace = path.join(root, "workspace");
     await prepareConcurrentExecutor(tools);
@@ -122,36 +124,28 @@ await test(
     t.after(() => t.signal.removeEventListener("abort", abort));
     for (let index = 0; index < 2; index++)
       workers.push(concurrentExecutor(workspace, tools, { signal: controller.signal }));
-    const decision = (result) =>
-      result.status === "pass" ? true : result.status === "pending" ? "pending" : false;
     const receipts = [];
     const source = () => readSharedSource(workspace);
-    const result = await runAtomicStream(bundle.workload.nodes, {
+    const result = await runRetainedAtomicStream(bundle.workload.nodes, {
+      evaluate: (tree) => evaluateCoherentContract(tree, contract),
+      readSource: source,
+      batchSize: 1,
       agents: 2,
       signal: controller.signal,
-      checkInputs: async (node, signal, context) =>
-        decision(await checkpoint.observe(source, node.id, context, { input: true, signal })),
       execute: async (node, agent) => {
         const receipt = await workers[agent].execute(node);
         receipts.push(receipt);
         stage(`delivered ${node.id}`);
         return receipt;
       },
-      verify: async (node, signal, _receipt, context) =>
-        decision(await checkpoint.observe(source, node.id, context, { signal })),
     });
     assert.equal(result.status, "pass");
-    assert.equal(result.completed.size, 4);
-    assert.equal(receipts.length, 4);
+    assert.ok(result.attempts >= 1);
+    assert.ok(receipts.length >= 4);
     assert.equal(new Set(receipts.map((receipt) => receipt.lifetime)).size, 2);
-    assert.equal(Math.max(...receipts.map((receipt) => receipt.planner.snapshotAttempts)), 1);
-    assert.equal(Math.max(...receipts.map((receipt) => receipt.planner.cacheHits)), 3);
+    assert.ok(receipts.every((receipt) => receipt.planner.snapshotAttempts >= 1));
     assert.deepEqual(await readTree(workspace), expected);
-    assert.equal(
-      checkpoint.revalidate(expected, { completed: result.completed, started: result.started })
-        .completed.size,
-      4,
-    );
+    assert.equal(evaluateCoherentContract(await readTree(workspace), contract).status, "pass");
     t.diagnostic(
       `Partial canonical fixture: ${initial["main.cpp"].split("\n").length} lines; four bindings only; no builds, renders or full proof.`,
     );

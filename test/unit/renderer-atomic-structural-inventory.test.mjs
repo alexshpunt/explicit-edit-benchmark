@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { prepareAtomicGate } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-gate.mjs";
+import { prepareAtomicEffect } from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-structural-effects.mjs";
 import { createAtomicInventory } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-inventory.mjs";
 
 const first = "int first() { return 1; }\n";
 const second = "int second() { return 2; }\n";
 const unchanged = "int untouched() { return 3; }\n";
 
-test("successive structural gates reuse complete current inventories without changing their effects", () => {
+test("successive structural effects reuse complete current inventories without changing their effects", () => {
   const trees = [
     { "packed.cpp": first + second, "peer.cpp": unchanged },
     { "packed.cpp": second, "first.cpp": first, "peer.cpp": unchanged },
@@ -24,8 +24,8 @@ test("successive structural gates reuse complete current inventories without cha
     const before = trees[index - 1];
     const after = trees[index];
     assert.deepEqual(
-      prepareAtomicGate(before, after, { writesOnly: true, readInventory }),
-      prepareAtomicGate(before, after, { writesOnly: true }),
+      prepareAtomicEffect(before, after, { readInventory }),
+      prepareAtomicEffect(before, after, {}),
     );
   }
   assert.equal(observations.length, 4, "Both trusted snapshots use the supplied inventory reader");
@@ -39,17 +39,17 @@ test("reused structural inventories still expose in-place changes, relocation an
   const readInventory = createAtomicInventory();
   const before = { "packed.cpp": first + second, "peer.cpp": unchanged };
   const after = { "packed.cpp": second, "first.cpp": first, "peer.cpp": unchanged };
-  prepareAtomicGate(before, after, { readInventory });
+  prepareAtomicEffect(before, after, { readInventory });
   before["peer.cpp"] = "int untouched() { return 99; }\n";
   after["relocated.cpp"] = after["peer.cpp"];
   delete after["peer.cpp"];
   assert.deepEqual(
-    prepareAtomicGate(before, after, { readInventory }),
-    prepareAtomicGate(before, after),
+    prepareAtomicEffect(before, after, { readInventory }),
+    prepareAtomicEffect(before, after),
   );
   readInventory.clear();
   assert.deepEqual(
-    prepareAtomicGate(before, after, { writesOnly: true, readInventory }),
-    prepareAtomicGate(before, after, { writesOnly: true }),
+    prepareAtomicEffect(before, after, { readInventory }),
+    prepareAtomicEffect(before, after, {}),
   );
 });

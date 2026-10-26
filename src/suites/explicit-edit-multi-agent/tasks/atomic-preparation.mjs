@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { atomicOrder, atomicEffectGraph } from "./atomic-effects.mjs";
 import { applyScopedNamePlan } from "../cpp/scoped-names.mjs";
 import { applyCoherentStructure } from "../reference/coherent-edit.mjs";
-import { prepareAtomicGate } from "../grading/atomic-gate.mjs";
+import { prepareAtomicEffect } from "./atomic-structural-effects.mjs";
 import { evaluateCoherentContract } from "../grading/coherent-grade.mjs";
 
 function bindingPlan(node, plan) {
@@ -23,14 +23,13 @@ function bindingPlan(node, plan) {
  * edits are rebased during application. Structural atoms use only their public
  * operations. No gates, physical origins or expected source enter worker mounts.
  * An optional coarse endpoint proves this split preserves the original goal.
- * Returned gates describe this trusted order; callers must reconstruct structural
- * context for a different concurrent frontier before using them as live gates.
+ * Returned effects describe trusted dependency preparation only. Candidate source
+ * is checked exclusively by the cumulative barrier verifier.
  */
 export function sealAtomicEffects(before, nodes, { plans = new Map(), expected } = {}) {
   let current = before;
   const applied = [];
   const effects = [];
-  const gates = new Map();
   for (const node of atomicOrder(nodes)) {
     assert.ok(node.operations.length, "Empty atomic operations");
     const phase = node.operations[0].phase;
@@ -47,9 +46,8 @@ export function sealAtomicEffects(before, nodes, { plans = new Map(), expected }
       assert.equal(phase, "structure", "Unsupported atomic phase");
       after = node.operations.reduce(applyCoherentStructure, current);
     }
-    const gate = prepareAtomicGate(current, after);
-    effects.push({ id: node.id, gate, ...(plan ? { plan } : {}) });
-    gates.set(node.id, gate);
+    const effect = prepareAtomicEffect(current, after);
+    effects.push({ id: node.id, effect, ...(plan ? { plan } : {}) });
     current = after;
   }
   if (expected)
@@ -58,5 +56,5 @@ export function sealAtomicEffects(before, nodes, { plans = new Map(), expected }
       "pass",
       "Atomic split changed the coarse endpoint",
     );
-  return { tree: current, graph: atomicEffectGraph(nodes, effects), gates };
+  return { tree: current, graph: atomicEffectGraph(nodes, effects), effects };
 }

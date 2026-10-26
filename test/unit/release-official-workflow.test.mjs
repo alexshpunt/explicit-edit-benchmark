@@ -181,6 +181,14 @@ test("controlled release evidence authorizes only matching source and leaves ori
     );
   }
   await writeFile(evidenceFile, JSON.stringify(evidence));
+  const missingFirstPass = structuredClone(evidence);
+  delete missingFirstPass.reference.referenceFirstPass;
+  await writeFile(evidenceFile, JSON.stringify(missingFirstPass));
+  await assert.rejects(
+    prepareReleasePolicy(original, current, root),
+    /Missing first-pass reference evidence/,
+  );
+  await writeFile(evidenceFile, JSON.stringify(evidence));
   const failed = structuredClone(evidence);
   failed.reference.acceptedTasks = 70;
   await writeFile(evidenceFile, JSON.stringify(failed));

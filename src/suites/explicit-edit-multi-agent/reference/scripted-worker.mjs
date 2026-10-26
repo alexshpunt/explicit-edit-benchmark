@@ -1,7 +1,7 @@
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cppTokens, includeDirectives } from "../cpp/cpp-tokens.mjs";
+import { cppTokens, headerSpan, includeDirectives } from "../cpp/cpp-tokens.mjs";
 
 function syntax(source) {
   const result = [];
@@ -62,39 +62,6 @@ function rename(source, mapping) {
       .filter((token) => mapping.has(token.text))
       .map((token) => ({ ...token, text: mapping.get(token.text) })),
   );
-}
-
-function headerSpan(source, guard) {
-  let masked = source;
-  const protectedTokens = cppTokens(source).filter((token) => !/^[A-Za-z_]\w*$/.test(token.text));
-  masked = edit(
-    masked,
-    protectedTokens.map((token) => ({ ...token, text: token.text.replace(/[^\n]/g, " ") })),
-  );
-  const directives = [];
-  // Consume complete logical directives, so continued macro bodies are not directives.
-  for (const line of masked.matchAll(/^[ \t]*#[^\n]*(?:\n|$)/gm)) {
-    if (directives.length && line.index < directives.at(-1).end) continue;
-    let end = line.index + line[0].length;
-    while (/\\\r?\n$/.test(masked.slice(line.index, end))) {
-      const newline = masked.indexOf("\n", end);
-      end = newline < 0 ? masked.length : newline + 1;
-      if (newline < 0) break;
-    }
-    const kind = /^\s*#\s*(\w+)\b/.exec(line[0])?.[1];
-    directives.push({ kind, start: line.index, end, text: masked.slice(line.index, end) });
-  }
-  const starts = directives.filter((item) =>
-    new RegExp(`^\\s*#\\s*ifndef\\s+${guard}\\s*$`).test(item.text),
-  );
-  if (starts.length !== 1) throw new Error("Missing or ambiguous header guard");
-  const start = starts[0];
-  let depth = 0;
-  for (const item of directives.filter((item) => item.start >= start.start)) {
-    if (["if", "ifdef", "ifndef"].includes(item.kind)) depth++;
-    if (item.kind === "endif" && --depth === 0) return { start: start.start, end: item.end };
-  }
-  throw new Error("Incomplete header guard");
 }
 
 function restoreProjectIncludes(source, required) {

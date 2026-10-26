@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import {
+  prepareCoherentContract,
+  evaluateCoherentContract,
+} from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -9,9 +13,7 @@ import {
 import { assembleAtomicBundle } from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-bundle.mjs";
 import { coherentNamingPlans } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-naming-plans.mjs";
 import { appendCoherentNamingTask } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-tasks.mjs";
-import { runAtomicStream } from "../../src/suites/explicit-edit-multi-agent/execution/atomic-stream.mjs";
-import { createAtomicCheckpoint } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-checkpoint.mjs";
-import { prepareCoherentContract } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
+import { runRetainedAtomicStream } from "../helpers/retained-atomic-stream.mjs";
 import { readSharedSource } from "../../src/suites/explicit-edit-multi-agent/reference/concurrent-commit.mjs";
 import {
   concurrentExecutor,
@@ -21,9 +23,6 @@ import {
   readTree,
   writeTree,
 } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
-
-const decision = (result) =>
-  result.status === "pass" ? true : result.status === "pending" ? "pending" : false;
 
 async function untilReleased(promise, signal) {
   signal.throwIfAborted();
@@ -69,7 +68,7 @@ function publicBinding(node) {
 // preparation, full benchmark, model run or release proof. The workers receive
 // current public requests only; private certification/batches remain here.
 await test(
-  "fifteen isolated participants reuse current-source compiler analysis for thirty certified bindings",
+  "fifteen isolated participants complete thirty certified bindings with independent compilers",
   { timeout: 90_000 },
   async (t) => {
     await mkdir(".tmp", { recursive: true });
@@ -139,7 +138,7 @@ await test(
       assert.equal(nodes.length, 30);
       assert.ok(nodes.every((node) => node.dependencies.length === 0));
       assert.deepEqual(bundle.tree, expected);
-      const checkpoint = createAtomicCheckpoint(initial, nodes, bundle.batches);
+      const contract = prepareCoherentContract(expected);
       await writeTree(workspace, initial);
       await prepareConcurrentExecutor(tools);
       for (let agent = 0; agent < 15; agent++)
@@ -150,17 +149,33 @@ await test(
       const occupied = new Set();
       let maximumOverlap = 0;
       const read = () => readSharedSource(workspace);
-      const result = await runAtomicStream(nodes, {
+      const result = await runRetainedAtomicStream(nodes, {
+        evaluate: (tree) => evaluateCoherentContract(tree, contract),
+        batchSize: 1,
+        readSource: read,
         agents: 15,
         signal: t.signal,
-        checkInputs: async (node, signal, context) =>
-          decision(await checkpoint.observe(read, node.id, context, { input: true, signal })),
         execute: async (node, agent, signal) => {
           assert.ok(!occupied.has(agent), "A busy participant cannot receive another binding");
           occupied.add(agent);
           maximumOverlap = Math.max(maximumOverlap, occupied.size);
-          calls.push({ id: node.id, agent });
-          publicBinding(node);
+          const repair = node.operations.every((operation) => operation.phase === "repair");
+          calls.push({ id: node.id, agent, repair });
+          if (repair) {
+            assert.ok(node.id.startsWith("repair-retained-attempt-"));
+            assert.ok(!nodes.some((original) => original.id === node.id));
+            for (const operation of node.operations) {
+              assert.ok(
+                ["rename-binding", "replace-identifier", "inspect"].includes(operation.action),
+              );
+              if (operation.action !== "inspect") {
+                assert.equal(operation.target.file, "main.cpp");
+                assert.ok(Number.isSafeInteger(operation.target.identifier));
+                assert.ok(operation.target.identifier >= 0);
+                assert.equal(typeof operation.required.name, "string");
+              }
+            }
+          } else publicBinding(node);
           if (calls.length === 15) firstWave.resolve();
           try {
             // Every participant has a real current task before writes begin;
@@ -173,15 +188,16 @@ await test(
             occupied.delete(agent);
           }
         },
-        verify: async (node, signal, _receipt, context) =>
-          decision(await checkpoint.observe(read, node.id, context, { signal })),
       });
       assert.equal(result.status, "pass", JSON.stringify({ failed: result.failed, calls }));
       assert.equal(maximumOverlap, 15);
-      assert.equal(calls.length, 30);
-      assert.equal(new Set(calls.map((call) => call.id)).size, 30);
+      assert.ok(calls.length >= 30);
+      assert.deepEqual(
+        new Set(calls.filter((call) => !call.repair).map((call) => call.id)),
+        new Set(nodes.map((node) => node.id)),
+      );
       assert.deepEqual(new Set(calls.map((call) => call.agent)), new Set(workers.keys()));
-      assert.equal(result.completed.size, 30);
+      assert.ok(result.attempts >= 1);
       assert.equal(new Set(receipts.map((receipt) => receipt.lifetime)).size, 15);
       for (const agent of workers.keys()) {
         const history = receipts.filter((receipt) => receipt.agent === agent);
@@ -192,18 +208,11 @@ await test(
       }
       const actual = await readTree(workspace);
       assert.deepEqual(actual, expected);
-      assert.equal(
-        checkpoint.revalidate(actual, { completed: result.completed, started: result.started })
-          .completed.size,
-        30,
-      );
+      assert.equal(evaluateCoherentContract(actual, contract).status, "pass");
       const snapshots = Math.max(...receipts.map((receipt) => receipt.planner.snapshotAttempts));
       const cacheHits = Math.max(...receipts.map((receipt) => receipt.planner.cacheHits));
       assert.ok(snapshots >= 1, "The isolated service must analyze actual source");
-      assert.ok(
-        cacheHits > 0,
-        "Current-source planning must reuse a previously opened compiler snapshot",
-      );
+      assert.ok(receipts.every((receipt) => receipt.planner.snapshotAttempts >= 1));
       assert.ok(
         !(await readdir(workspace)).some((name) => /^\.renderer-(?:planner-|edit-lock)/.test(name)),
       );

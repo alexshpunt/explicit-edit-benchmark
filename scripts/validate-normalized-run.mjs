@@ -194,7 +194,7 @@ function parseJsonLines(content, name, schemaVersion) {
                   "agent",
                   "barrierAttempt",
                   "taskIds",
-                  ...["atomicId", "atomicIds", "deliveryKind"].filter((field) =>
+                  ...["atomicId", "atomicIds", "deliveryKind", "repairIds"].filter((field) =>
                     Object.hasOwn(row, field),
                   ),
                 ]
@@ -204,7 +204,8 @@ function parseJsonLines(content, name, schemaVersion) {
       if (teamFields.length) {
         if (
           !Array.isArray(row.taskIds) ||
-          !row.taskIds.length ||
+          (!row.taskIds.length &&
+            !(name === "rounds.jsonl" && row.deliveryKind === "barrier-repair")) ||
           row.taskIds.some((task) => typeof task !== "string")
         )
           throw Error(`${label}: invalid taskIds`);

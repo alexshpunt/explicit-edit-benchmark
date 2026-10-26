@@ -5,10 +5,6 @@ import {
   prepareCoherentContract,
   evaluateCoherentContract,
 } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
-import {
-  prepareAtomicGate,
-  evaluateAtomicGate,
-} from "../../src/suites/explicit-edit-multi-agent/grading/atomic-gate.mjs";
 
 const before = {
   "shape.h": "#pragma once\nnamespace sample {\nint public_api(int value);\n}\n",
@@ -35,7 +31,6 @@ const operation = {
   ],
 };
 const after = applyCoherentStructure(before, operation);
-const gate = prepareAtomicGate(before, after, { writesOnly: true });
 const contract = prepareCoherentContract(after);
 
 function inHeader(source) {
@@ -46,7 +41,7 @@ test("a selected definition move leaves existing header declarations and the unl
   assert.equal(after["shape.h"], before["shape.h"]);
   assert.ok(after["main.cpp"].includes("int internal(int value);"));
   assert.ok(after["shape.cpp"].includes("int internal(int value) { return value + 1; }"));
-  assert.equal(evaluateAtomicGate(after, gate).status, "pass");
+  assert.equal(evaluateCoherentContract(after, contract).status, "pass");
   assert.equal(evaluateCoherentContract(after, contract).status, "pass");
 });
 
@@ -54,10 +49,10 @@ test("adding a matching header prototype is an extra declaration, not include sc
   const tree = inHeader(
     before["shape.h"].replace("int public_api", "int internal(int value);\nint public_api"),
   );
-  const atomic = evaluateAtomicGate(tree, gate);
-  assert.equal(atomic.status, "fail");
+  const barrier = evaluateCoherentContract(tree, contract);
+  assert.equal(barrier.status, "fail");
   assert.ok(
-    atomic.obligations.some((entry) => entry.kind === "unexpected" && entry.file === "shape.h"),
+    barrier.obligations.some((entry) => entry.kind === "unexpected" && entry.file === "shape.h"),
   );
   assert.equal(evaluateCoherentContract(tree, contract).status, "fail");
 });
@@ -76,7 +71,7 @@ test("include and namespace-wrapper variation does not require a canonical byte 
   const equivalent = inHeader(
     "#pragma once\n#include <cstddef>\nnamespace sample { int public_api(int value); }\n",
   );
-  assert.equal(evaluateAtomicGate(equivalent, gate).status, "pass");
+  assert.equal(evaluateCoherentContract(equivalent, contract).status, "pass");
   assert.equal(evaluateCoherentContract(equivalent, contract).status, "pass");
 });
 
@@ -91,7 +86,13 @@ test("only an explicitly selected temporary declaration may be removed", () => {
   assert.ok(!cleaned["main.cpp"].includes("int internal(int value);"));
   assert.equal(cleaned["shape.h"], before["shape.h"]);
   assert.equal(
-    evaluateAtomicGate(cleaned, prepareAtomicGate(after, cleaned, { writesOnly: true })).status,
+    evaluateCoherentContract(
+      cleaned,
+      prepareCoherentContract({
+        ...after,
+        "main.cpp": after["main.cpp"].replace("int internal(int value);", ""),
+      }),
+    ).status,
     "pass",
   );
 });

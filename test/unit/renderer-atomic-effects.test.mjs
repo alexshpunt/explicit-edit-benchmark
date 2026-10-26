@@ -4,10 +4,11 @@ import {
   atomicEffectGraph,
   atomicOrder,
 } from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-effects.mjs";
-import { prepareAtomicGate } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-gate.mjs";
+import { prepareAtomicEffect } from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-structural-effects.mjs";
 
 const node = (id, dependencies = []) => ({ id, taskId: "task-001", dependencies });
-const gate = (before, after) => prepareAtomicGate({ "main.cpp": before }, { "main.cpp": after });
+const describe = (before, after) =>
+  prepareAtomicEffect({ "main.cpp": before }, { "main.cpp": after });
 const bindingNode = (id) => ({ ...node(id), operations: [{ phase: "names" }] });
 const bindingPlan = (source, from, to) => ({
   edits: [...source.matchAll(new RegExp(`\\b${from}\\b`, "g"))].map((match) => ({
@@ -25,8 +26,8 @@ test("disjoint compiler bindings in the same owner do not gain artificial depend
   const nodes = [bindingNode("a"), bindingNode("b")];
   const original = structuredClone(nodes);
   const graph = atomicEffectGraph(nodes, [
-    { id: "a", gate: gate(first, second), plan: bindingPlan(first, "a", "left") },
-    { id: "b", gate: gate(second, final), plan: bindingPlan(first, "b", "right") },
+    { id: "a", effect: describe(first, second), plan: bindingPlan(first, "a", "left") },
+    { id: "b", effect: describe(second, final), plan: bindingPlan(first, "b", "right") },
   ]);
   assert.deepEqual(graph.nodes[1].dependencies, []);
   assert.deepEqual(nodes, original);
@@ -39,8 +40,8 @@ test("different owner effects in one file remain concurrently ready", () => {
   const graph = atomicEffectGraph(
     [node("a"), node("b")],
     [
-      { id: "a", gate: gate(first, second) },
-      { id: "b", gate: gate(second, final) },
+      { id: "a", effect: describe(first, second) },
+      { id: "b", effect: describe(second, final) },
     ],
   );
   assert.deepEqual(
@@ -56,8 +57,12 @@ test("a cross-owner binding and a disjoint parameter remain independent", () => 
   const graph = atomicEffectGraph(
     [bindingNode("rename"), bindingNode("parameter")],
     [
-      { id: "rename", gate: gate(first, second), plan: bindingPlan(first, "helper", "identity") },
-      { id: "parameter", gate: gate(second, final), plan: bindingPlan(first, "x", "value") },
+      {
+        id: "rename",
+        effect: describe(first, second),
+        plan: bindingPlan(first, "helper", "identity"),
+      },
+      { id: "parameter", effect: describe(second, final), plan: bindingPlan(first, "x", "value") },
     ],
   );
   assert.deepEqual(graph.nodes[1].dependencies, []);
@@ -65,20 +70,20 @@ test("a cross-owner binding and a disjoint parameter remain independent", () => 
 
 test("overlapping physical binding plans cannot masquerade as separate atoms", () => {
   const source = "int a;\n";
-  const effect = gate(source, "int value;\n");
+  const effect = describe(source, "int value;\n");
   const plan = bindingPlan(source, "a", "value");
   assert.throws(
     () =>
       atomicEffectGraph(
         [bindingNode("a"), bindingNode("b")],
         [
-          { id: "a", gate: effect, plan },
-          { id: "b", gate: effect, plan },
+          { id: "a", effect, plan },
+          { id: "b", effect, plan },
         ],
       ),
     /overlap|same binding/i,
   );
-  assert.throws(() => atomicEffectGraph([bindingNode("a")], [{ id: "a", gate: effect }]), /plan/i);
+  assert.throws(() => atomicEffectGraph([bindingNode("a")], [{ id: "a", effect }]), /plan/i);
 });
 test("context-only guard changes do not turn unrelated header moves into a chain", () => {
   const main =
@@ -96,8 +101,8 @@ test("context-only guard changes do not turn unrelated header moves into a chain
   const graph = atomicEffectGraph(
     [node("a"), node("b")],
     [
-      { id: "a", gate: prepareAtomicGate(initial, afterFirst) },
-      { id: "b", gate: prepareAtomicGate(afterFirst, afterSecond) },
+      { id: "a", effect: prepareAtomicEffect(initial, afterFirst) },
+      { id: "b", effect: prepareAtomicEffect(afterFirst, afterSecond) },
     ],
   );
   assert.deepEqual(
@@ -117,15 +122,15 @@ test("preparation follows selector dependencies before sealing owner effects", (
 });
 
 test("missing, repeated and out-of-order private effects fail closed", () => {
-  const a = gate("int a;\n", "int b;\n");
+  const a = describe("int a;\n", "int b;\n");
   assert.throws(() => atomicEffectGraph([node("a")], []), /effect/i);
   assert.throws(
     () =>
       atomicEffectGraph(
         [node("a")],
         [
-          { id: "a", gate: a },
-          { id: "a", gate: a },
+          { id: "a", effect: a },
+          { id: "a", effect: a },
         ],
       ),
     /effect/i,
@@ -135,8 +140,8 @@ test("missing, repeated and out-of-order private effects fail closed", () => {
       atomicEffectGraph(
         [node("a"), node("b", ["a"])],
         [
-          { id: "b", gate: a },
-          { id: "a", gate: a },
+          { id: "b", effect: a },
+          { id: "a", effect: a },
         ],
       ),
     /order|prerequisite/i,

@@ -9,13 +9,16 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/cpp/scoped-names.mjs";
 import {
   prepareAtomicNamingBatch,
-  createAtomicNamingReplay,
-} from "../../src/suites/explicit-edit-multi-agent/grading/atomic-frontier.mjs";
-import { createAtomicCheckpoint } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-checkpoint.mjs";
+  applyAtomicNamingBatch,
+} from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-naming-replay.mjs";
+import {
+  prepareCoherentContract,
+  evaluateCoherentContract,
+} from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
 import { atomicWorkload } from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-workload.mjs";
 import { cppTokens } from "../../src/suites/explicit-edit-multi-agent/cpp/cpp-tokens.mjs";
 
-await test("a certified type rename preserves every identical prototype and its full checkpoint count", async () => {
+await test("a certified type rename preserves every identical prototype and its full barrier count", async () => {
   await mkdir(".tmp", { recursive: true });
   const root = await mkdtemp(path.resolve(".tmp/duplicate-naming-owners-"));
   const prototype = "int evaluate(const Old& shape, int element);";
@@ -45,7 +48,7 @@ int main() { return frond::evaluate({1}, 2); }
     assert.equal(nodes.length, 1);
     const id = nodes[0].id;
     const batch = prepareAtomicNamingBatch(tree, [{ id, plan: certification.plan }]);
-    const replay = createAtomicNamingReplay(batch);
+    const replay = (tree, ids) => applyAtomicNamingBatch(tree, batch, ids);
     const expected = applyScopedNamePlan(tree, certification.plan);
     const result = replay(tree, [id]);
     assert.deepEqual(result.tree, expected);
@@ -57,20 +60,18 @@ int main() { return frond::evaluate({1}, 2); }
     execFileSync("clang++", ["-std=c++17", "-x", "c++", "-fsyntax-only", "-"], {
       input: result.tree["main.cpp"],
     });
-    const checkpoint = createAtomicCheckpoint(tree, nodes, [{ taskId: "task-001", batch }]);
-    assert.equal(checkpoint.check(tree, id, { input: true }).status, "pass");
-    assert.equal(checkpoint.check(expected, id).status, "pass");
+    const contract = prepareCoherentContract(expected);
+    assert.equal(evaluateCoherentContract(expected, contract).status, "pass");
     const restoredPrototype = prototype.replace("Old", "Restored");
     for (const source of [
       expected["main.cpp"].replace(restoredPrototype, ""),
       expected["main.cpp"].replace(restoredPrototype, `${restoredPrototype}\n${restoredPrototype}`),
       expected["main.cpp"].replace(restoredPrototype, prototype),
     ]) {
-      assert.notEqual(checkpoint.check({ "main.cpp": source }, id).status, "pass");
+      assert.notEqual(evaluateCoherentContract({ "main.cpp": source }, contract).status, "pass");
     }
     const extra = { "main.cpp": tree["main.cpp"].replace(prototype, `${prototype}\n${prototype}`) };
     assert.throws(() => replay(extra, [id]), /ambiguous|repeated.*owner/i);
-    replay.clear();
     assert.deepEqual(replay(tree, [id]).tree, expected);
     const missing = { "main.cpp": tree["main.cpp"].replace(prototype, "") };
     assert.throws(() => replay(missing, [id]), /ambiguous|repeated.*owner/i);
@@ -94,62 +95,9 @@ await test("identical copies with distinct binding slots remain ambiguous", () =
       plan: { edits: [{ file: "main.cpp", start: token.start, old: "value", new: "restored" }] },
     })),
   );
-  const replay = createAtomicNamingReplay(batch);
+  const replay = (tree, ids) => applyAtomicNamingBatch(tree, batch, ids);
   assert.throws(() => replay(tree, ["parameter-0"]), /ambiguous.*owner/i);
   assert.throws(() => replay(tree, ["parameter-0", "parameter-1"]), /ambiguous.*owner/i);
-});
-
-await test("uniform copies preserve a correct binding while a peer changes only one copy", () => {
-  // Controlled uniform type slots isolate checkpoint aggregation; the preceding
-  // test exercises the same duplicate-owner path with real compiler evidence.
-  const source = `namespace frond {
-struct LeftType { int left; };
-struct RightType { double right; };
-int evaluate(const LeftType& first, const RightType& second);
-int evaluate(const LeftType& first, const RightType& second);
-}
-`;
-  const tree = { "main.cpp": source };
-  const bindings = [
-    ["A", "LeftType", "RestoredLeft"],
-    ["B", "RightType", "RestoredRight"],
-  ].map(([id, from, to]) => ({
-    id,
-    plan: {
-      edits: cppTokens(source)
-        .filter((token) => token.text === from)
-        .map((token) => ({ file: "main.cpp", start: token.start, old: from, new: to })),
-    },
-  }));
-  const batch = prepareAtomicNamingBatch(tree, bindings);
-  const replay = createAtomicNamingReplay(batch);
-  const nodes = bindings.map(({ id }) => ({
-    id,
-    taskId: "types",
-    dependencies: [],
-    operations: [{ phase: "names" }],
-  }));
-  const checkpoint = createAtomicCheckpoint(tree, nodes, [{ taskId: "types", batch }]);
-  for (const selected of [["A"], ["B"], ["A", "B"]]) {
-    const expected = replay(tree, selected).tree;
-    for (const id of selected)
-      assert.equal(checkpoint.check(expected, id, { settled: new Set(selected) }).status, "pass");
-  }
-  const partial = {
-    "main.cpp": replay(tree, ["A"]).tree["main.cpp"].replace(
-      "const RightType& second",
-      "const RestoredRight& second",
-    ),
-  };
-  const state = { settled: new Set(["A", "B"]), completed: new Set(), writers: new Set() };
-  assert.equal(checkpoint.check(partial, "A", state).status, "pass");
-  assert.equal(checkpoint.check(partial, "B", state).status, "fail");
-  const retained = checkpoint.revalidate(partial, { completed: new Set(["A", "B"]) });
-  assert.deepEqual([...retained.completed], ["A"]);
-  const badCurrent = {
-    "main.cpp": partial["main.cpp"].replace("const RestoredLeft& first", "const LeftType& first"),
-  };
-  assert.notEqual(checkpoint.check(badCurrent, "A", state).status, "pass");
 });
 
 await test("overlapping hinted copy families cannot reuse a physical owner", () => {
@@ -161,10 +109,10 @@ await test("overlapping hinted copy families cannot reuse a physical owner", () 
       .map((token) => ({ file, start: token.start, old: "value", new: "restored" })),
   );
   const batch = prepareAtomicNamingBatch(tree, [{ id: "all", plan: { edits } }]);
-  assert.doesNotThrow(() => createAtomicNamingReplay(batch)(tree, ["all"]));
+  assert.doesNotThrow(() => applyAtomicNamingBatch(tree, batch, ["all"]));
   batch.owners[0].fileHint = "a.cpp";
   batch.owners[1].fileHint = "a.cpp";
   batch.owners[2].conditionsHint = batch.owners[0].originConditions;
   batch.owners[3].conditionsHint = batch.owners[0].originConditions;
-  assert.throws(() => createAtomicNamingReplay(batch)(tree, ["all"]), /repeated.*owner/i);
+  assert.throws(() => applyAtomicNamingBatch(tree, batch, ["all"]), /repeated.*owner/i);
 });

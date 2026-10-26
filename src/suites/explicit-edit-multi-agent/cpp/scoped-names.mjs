@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { joinedProject } from "./joined-project.mjs";
+import { cppTokens } from "./cpp-tokens.mjs";
 import {
   projectAst,
   anonymousRecordAliases,
@@ -46,6 +47,23 @@ function matchesPublicSelector(entry, category, selector) {
     );
   return selector.kind === entry.role && entry.scope === selector.scope;
 }
+/** Query immutable declarations read from an actual current compiler snapshot. */
+export function hasCurrentNamingBinding(bindings, request, { complete = true } = {}) {
+  const selectors = request.selectors?.length ? request.selectors : [undefined];
+  const found = request.mapping.flatMap((mapping) =>
+    selectors.map((selector) =>
+      bindings.some(
+        (entry) =>
+          entry.name === mapping.from &&
+          (request.category !== "helpers" || entry.file === request.file) &&
+          (selector
+            ? matchesPublicSelector(entry, request.category, selector)
+            : request.category === "helpers" && entry.fileHelper),
+      ),
+    ),
+  );
+  return found.length > 0 && (complete ? found.every(Boolean) : found.some(Boolean));
+}
 function publicNamingSelector(entry, category) {
   if (entry.owner?.signature && /\bat\s+[^()]+:\d+:\d+/.test(entry.owner.signature))
     throw Error("Atomic binding owner has a private compiler-location signature");
@@ -86,6 +104,7 @@ function selectedDeclarations(
   onDeclaration,
   allowAbsentOwners = false,
   index = declarationIndex(roots, source),
+  includeFunctionSpellings = false,
 ) {
   const { bytes, aliases, contexts, signatures } = index;
   const selections = [];
@@ -130,8 +149,13 @@ function selectedDeclarations(
       role &&
       !node.isImplicit &&
       Number.isInteger(offset) &&
-      /^[A-Za-z_]\w*$/.test(node.name ?? "") &&
-      bytes.subarray(offset, offset + Buffer.byteLength(node.name)).toString("utf8") === node.name
+      ((includeFunctionSpellings &&
+        role === "function" &&
+        typeof node.name === "string" &&
+        node.name.length > 0) ||
+        (/^[A-Za-z_]\w*$/.test(node.name ?? "") &&
+          bytes.subarray(offset, offset + Buffer.byteLength(node.name)).toString("utf8") ===
+            node.name))
     ) {
       const declaration = {
         offset,
@@ -142,6 +166,24 @@ function selectedDeclarations(
         fileHelper:
           (role === "variable" && !functionOwner) || (node.kind === "FunctionDecl" && !owner),
         owner: functionOwner,
+        definition: isFunction(node)
+          ? functionOwner?.definition === true
+          : role === "variable"
+            ? node.storageClass !== "extern" || node.init !== undefined
+            : role === "field" ||
+              node.completeDefinition === true ||
+              ["TypeAliasDecl", "TypedefDecl"].includes(node.kind) ||
+              (node.kind === "EnumDecl" &&
+                Number.isInteger(node.range?.end?.offset) &&
+                bytes
+                  .subarray(node.range.end.offset, node.range.end.offset + node.range.end.tokLen)
+                  .toString("utf8") === "}"),
+        ...(isFunction(node) && node.inner?.some((child) => child.kind === "CompoundStmt")
+          ? {
+              bodyStart: node.inner.find((child) => child.kind === "CompoundStmt").range?.begin
+                ?.offset,
+            }
+          : {}),
         localDefinition:
           functionOwner?.definition === true &&
           (node.kind === "ParmVarDecl" ||
@@ -399,35 +441,44 @@ export async function currentNamingSelectors(
  * plan(request, { localDefinitionOnly: true }) additionally requires a compiler-
  * proven parameter or non-extern local in this view's physical implementation.
  * This rejects namespace bindings and included-header definitions before edits.
+ * repairOnly permits a recovery AST for planRepair alone. Ordinary selection,
+ * binding summaries and certification remain unavailable in such a session.
  */
 export async function scopedNamingSession(
   tree,
   directory,
-  { file, onSelection, allowAbsentOwners = false } = {},
+  { file, onSelection, allowAbsentOwners = false, repairOnly = false } = {},
 ) {
   const image = joinedProject(tree, file ? [file] : undefined);
   const sourcePath = path.join(directory, "current.cpp");
   await writeFile(sourcePath, image.source);
   const flags = ["-std=c++17", "-pthread"];
-  const roots = await projectAst(sourcePath, flags);
+  const roots = await projectAst(sourcePath, flags, { recoverSourceErrors: repairOnly });
   // This compiler document is unchanged; only the renamed ledger is dynamic.
   const declarations = declarationIndex(roots, image.source);
-  let compiler;
+  let compiler,
+    closed = false;
+  const check = (repair = false) => {
+    if (closed) throw Error("Compiler naming session closed");
+    if (repairOnly && !repair)
+      throw Error("Recovered compiler snapshots only support located repairs");
+  };
   const inspector = {
     ast: (range) => compiler.ast(range),
     symbols: (position) => compiler.symbols(position),
   };
-  const templateWitness = createTemplateCallWitness(roots, image.source, inspector);
-  const referenceWitness = createReferenceCallWitness(roots, image.source, inspector);
-  let directCalls;
+  let templateWitness, referenceWitness, directCalls;
   // Local-variable plans never consult semantic call exclusions. Build this
   // compiler index only when a delivered semantic edit actually needs it.
   const directCallFilter = () =>
     (directCalls ??= createDirectCallEditFilter(roots, image.source, {
       canExclude: async (evidence) =>
-        (await templateWitness(evidence)) || referenceWitness(evidence),
+        (await (templateWitness ??= createTemplateCallWitness(roots, image.source, inspector))(
+          evidence,
+        )) ||
+        (referenceWitness ??= createReferenceCallWitness(roots, image.source, inspector))(evidence),
     }));
-  const keepEdit = (...args) => directCallFilter()(...args);
+  const keepEdit = (entry, edit) => entry.role !== "function" || directCallFilter()(entry, edit);
   const consumed = new Set();
   const renamed = new Map();
   let probed;
@@ -496,11 +547,129 @@ export async function scopedNamingSession(
       if (["type", "function"].includes(entry.role)) renamed.set(entry.offset, entry.newName);
   }
   return {
-    close: () => compiler?.close(),
+    close() {
+      if (closed) return;
+      closed = true;
+      compiler?.close();
+      compiler = undefined;
+      // Dropping a view must release its compiler graph, even while a caller
+      // still holds the closed session or awaits the replacement snapshot.
+      roots.length = 0;
+      declarations.aliases.clear();
+      declarations.contexts.clear();
+      declarations.signatures.clear();
+      declarations.bytes = Buffer.alloc(0);
+      templateWitness = undefined;
+      referenceWitness = undefined;
+      directCalls = undefined;
+      probed = undefined;
+      consumed.clear();
+      renamed.clear();
+    },
+    /** Copy unchanged declarations without retaining the AST. Compiler function
+     * spellings include operators; ordinary rename selection keeps its token guards. */
+    bindings() {
+      check();
+      if (consumed.size) throw Error("Binding summaries require an unconsumed compiler snapshot");
+      const bindings = [];
+      selectedDeclarations(
+        roots,
+        [],
+        image.source,
+        renamed,
+        image.physical,
+        ({ offset, owner, bodyStart, ...entry }) =>
+          bindings.push(
+            Object.freeze({
+              ...entry,
+              ...image.physical(offset, Buffer.byteLength(entry.name)),
+              ...(Number.isInteger(bodyStart)
+                ? { bodyStart: image.physical(bodyStart, 0).start }
+                : {}),
+              ...(owner ? { owner: Object.freeze({ ...owner }) } : {}),
+            }),
+          ),
+        true,
+        declarations,
+        true,
+      );
+      return Object.freeze(bindings);
+    },
+    /** Resolve a fresh public declaration locator in this compiler's own input.
+     * Only this declaration and its compiler-bound uses enter the rename. */
+    async planRepair(operation, current) {
+      check(true);
+      const { target, required } = operation;
+      const identifier = (value) => typeof value === "string" && /^[A-Za-z_]\w*$/.test(value);
+      const conflict = () =>
+        Object.assign(Error("Current repair declaration no longer resolves"), {
+          repairConflict: true,
+        });
+      if (
+        !target ||
+        !identifier(required?.name) ||
+        !Number.isSafeInteger(target.identifier) ||
+        target.identifier < 0 ||
+        (repairOnly &&
+          (typeof target.scope !== "string" ||
+            target.scope.split("::").at(-1) !== target.name ||
+            (target.role === "function" &&
+              (target.owner?.scope !== target.scope ||
+                typeof target.owner?.signature !== "string" ||
+                typeof target.owner?.definition !== "boolean"))))
+      )
+        throw conflict();
+      const parentScope = (value) => value.slice(0, Math.max(0, value.lastIndexOf("::")));
+      const recoveredOwner = repairOnly ? parentScope(target.scope) : undefined;
+      const tokens = (text) => cppTokens(text ?? "").filter((token) => identifier(token.text));
+      const original = tokens(tree[target.file]).at(target.identifier);
+      const present = tokens(current[target.file]).at(target.identifier);
+      if (!original || !present || ![target.name, required.name].includes(present.text))
+        throw conflict();
+      const matches = [];
+      selectedDeclarations(
+        roots,
+        [],
+        image.source,
+        renamed,
+        image.physical,
+        (entry) => {
+          const site = image.physical(entry.offset, Buffer.byteLength(entry.name));
+          if (
+            site.file === target.file &&
+            site.start === original.start &&
+            entry.role === target.role &&
+            (recoveredOwner === undefined || parentScope(entry.scope) === recoveredOwner) &&
+            (!repairOnly || target.role !== "variable" || !entry.owner) &&
+            (!repairOnly ||
+              target.role !== "function" ||
+              (entry.owner?.scope === entry.scope &&
+                entry.owner.signature === target.owner.signature &&
+                entry.owner.definition === target.owner.definition))
+          )
+            matches.push(entry);
+        },
+        true,
+        declarations,
+        true,
+      );
+      const selected = [...new Map(matches.map((entry) => [entry.offset, entry])).values()];
+      if (!selected.length) throw Object.assign(conflict(), { repairAbsent: true });
+      if (selected.length !== 1) throw conflict();
+      const entry = selected[0];
+      if (present.text === required.name) return { id: operation.id, edits: [] };
+      if (entry.name !== original.text || !identifier(entry.name)) throw conflict();
+      const selection = [{ ...entry, newName: required.name, family: operation.id }];
+      notify(selection);
+      const plan = physicalPlan(operation.id, await editsFor(selection));
+      commit(selection, plan);
+      return plan;
+    },
     /** Check exact definition-local bindings in this physical implementation.
      * This consumes no rename. An immediate identical plan reuses the selection;
      * any committed request discards the probe. Consumed declarations do not match. */
     hasLocalBinding(request) {
+      check();
       probed = undefined;
       const selection = selectedDeclarations(
         roots,
@@ -524,7 +693,34 @@ export async function scopedNamingSession(
       if (found) probed = { key: JSON.stringify(request), selection };
       return found;
     },
+    /** Observe a current destination binding for an idempotent public request.
+     * This consumes no edit and grants no benchmark credit. Each explicit selector
+     * must still resolve through the current compiler, including coupled owners.
+     */
+    hasBinding(request, { complete = true } = {}) {
+      check();
+      if (request.category === "helpers" && request.file !== file) return false;
+      const selectors = request.selectors?.length
+        ? request.selectors.map((selector) => [selector])
+        : [undefined];
+      const found = selectors.flatMap((selected) =>
+        request.mapping.map((mapping) =>
+          selectedDeclarations(
+            roots,
+            [{ ...request, mapping: [mapping], selectors: selected }],
+            image.source,
+            renamed,
+            image.physical,
+            undefined,
+            true,
+            declarations,
+          ).some((entry) => entry.name === mapping.from),
+        ),
+      );
+      return complete ? found.every(Boolean) : found.some(Boolean);
+    },
     async plan(request, { localDefinitionOnly = false } = {}) {
+      check();
       const selection =
         probed?.key === JSON.stringify(request) ? probed.selection : select(request);
       probed = undefined;
@@ -564,6 +760,7 @@ export async function scopedNamingSession(
      * sealed source/plan evidence, not from a contributor-supplied checksum.
      */
     async atomicPlans(request) {
+      check();
       if (
         !Array.isArray(request.mapping) ||
         !request.mapping.length ||

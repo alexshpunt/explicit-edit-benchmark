@@ -2,10 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { sealAtomicEffects } from "../../src/suites/explicit-edit-multi-agent/tasks/atomic-preparation.mjs";
 import { prepareCoherentContract } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
-import {
-  checkAtomicInputs,
-  evaluateAtomicGate,
-} from "../../src/suites/explicit-edit-multi-agent/grading/atomic-gate.mjs";
 
 function rename(id, from, to) {
   return {
@@ -37,7 +33,7 @@ function plan(source, old, replacement) {
 
 const source = "int sum(int a, int b) { return a + b; }\n";
 
-test("trusted binding plans seal every intermediate gate and the same coarse endpoint", () => {
+test("trusted binding plans derive independent effects and the same coarse endpoint", () => {
   const nodes = [rename("a", "a", "left"), rename("b", "b", "right")];
   const plans = new Map([
     ["a", plan(source, "a", "left")],
@@ -50,19 +46,18 @@ test("trusted binding plans seal every intermediate gate and the same coarse end
   });
   assert.deepEqual(result.tree, final);
   assert.deepEqual(result.graph.nodes[1].dependencies, []);
-  assert.equal(checkAtomicInputs({ "main.cpp": source }, result.gates.get("a")).status, "pass");
-  assert.equal(evaluateAtomicGate({ "main.cpp": source }, result.gates.get("a")).status, "fail");
-  const intermediate = { "main.cpp": "int sum(int left, int b) { return left + b; }\n" };
-  assert.equal(evaluateAtomicGate(intermediate, result.gates.get("a")).status, "pass");
-  assert.equal(checkAtomicInputs(intermediate, result.gates.get("b")).status, "pass");
-  assert.equal(evaluateAtomicGate(result.tree, result.gates.get("b")).status, "pass");
+  assert.deepEqual(
+    result.effects.map(({ id }) => id),
+    ["a", "b"],
+  );
+  assert.ok(result.effects.every(({ effect }) => effect.remove.length && effect.add.length));
   assert.deepEqual(
     nodes.map((node) => node.dependencies),
     [[], []],
   );
 });
 
-test("selector ordering precedes physical offset planning and is reflected in the gates", () => {
+test("selector ordering precedes physical offset planning and is reflected in the effects", () => {
   const nodes = [rename("a", "a", "left"), rename("b", "b", "right")];
   nodes[0].dependencies = ["b"];
   const result = sealAtomicEffects({ "main.cpp": source }, nodes, {
@@ -71,7 +66,10 @@ test("selector ordering precedes physical offset planning and is reflected in th
       ["b", plan(source, "b", "right")],
     ]),
   });
-  assert.deepEqual([...result.gates.keys()], ["b", "a"]);
+  assert.deepEqual(
+    result.effects.map(({ id }) => id),
+    ["b", "a"],
+  );
   assert.deepEqual(result.graph.nodes[0].dependencies, ["b"]);
   assert.ok(result.tree["main.cpp"].includes("return left + right"));
 });
@@ -113,7 +111,7 @@ test("a structural atom is replayed from its public operations without saved rep
   };
   const result = sealAtomicEffects(initial, [node]);
   assert.ok(result.tree["math.h"].includes("return x + 1;"));
-  assert.equal(evaluateAtomicGate(result.tree, result.gates.get("header")).status, "pass");
-  assert.equal(checkAtomicInputs(initial, result.gates.get("header")).status, "pass");
+  assert.ok(result.effects[0].effect.remove.length > 0);
+  assert.ok(result.effects[0].effect.add.some((record) => record.file === "math.h"));
   assert.equal(result.graph.nodes.length, 1);
 });

@@ -6,6 +6,7 @@ import path from "node:path";
 import { callData, toolCategory } from "./build-trajectory-analysis.mjs";
 import { inspectHarnessOutput } from "./harness-runtime.mjs";
 import { canonicalModelProvider, loadModelRegistry } from "./model-registry.mjs";
+import { ATOMIC_DISPATCH_POLICY } from "../src/suites/explicit-edit-multi-agent/execution/atomic-stream.mjs";
 
 import {
   MULTI_AGENT_BENCHMARK,
@@ -294,6 +295,9 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
   let acceptedRounds = 0;
   let stopped = false;
   const barrierIds = new Set();
+  const availableParents = [];
+  const batchSize = report.batchSize ?? ATOMIC_DISPATCH_POLICY.defaultBatchSize;
+  if (!Number.isSafeInteger(batchSize) || batchSize <= 0) throw Error("Invalid delivery size");
   for (const barrier of report.schedule) {
     if (!/^round-\d{3}$/.test(barrier.id) || barrierIds.has(barrier.id))
       throw Error("Invalid or duplicate team barrier");
@@ -313,7 +317,7 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
     const trialId = `${barrier.id}__${profile.profileId}`;
     const deliveryKeys = new Set();
     const attemptDeliveries = new Map();
-    const owners = new Map();
+    availableParents.push(...taskIds);
     for (const [ordinal, item] of deliveries.entries()) {
       if (
         !Number.isInteger(item.attempt) ||
@@ -325,13 +329,12 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
       )
         throw Error("Invalid participant delivery position");
       if (atomic) {
-        validateStreamDelivery(item, item.tasks, taskIds);
-        const group = attemptDeliveries.get(item.attempt) ?? [];
-        for (const id of atomicDeliveryIds(item)) {
-          if (owners.has(id) && owners.get(id) !== item.agent)
-            throw Error("Repair changed task executor");
-          owners.set(id, item.agent);
+        validateStreamDelivery(item, item.tasks, taskIds, { availableParents, batchSize });
+        if (item.deliveryKind) {
+          if (item.attempt === 1 || !item.atomicId.startsWith(`repair-${barrier.id}-`))
+            throw Error("Invalid barrier repair position");
         }
+        const group = attemptDeliveries.get(item.attempt) ?? [];
         group.push(item);
         attemptDeliveries.set(item.attempt, group);
         if (!["settled", "error"].includes(item.status))
@@ -343,8 +346,7 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
         if (!assigned.length || JSON.stringify(assigned) !== JSON.stringify(item.tasks))
           throw Error("Participant delivery contradicts scheduled tasks");
       }
-      const ids =
-        atomic && !item.deliveryKind ? atomicDeliveryIds(item) : [item.deliveryKind ?? item.agent];
+      const ids = atomic ? [...atomicDeliveryIds(item), `artifact:${item.atomicId}`] : [item.agent];
       for (const id of ids) {
         const key = `${item.attempt}:${id}`;
         if (deliveryKeys.has(key)) throw Error("Duplicate participant delivery");
@@ -370,12 +372,12 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
         agent: item.agent,
         barrierAttempt: item.attempt - 1,
         ...(atomic
-          ? item.deliveryKind
-            ? { deliveryKind: item.deliveryKind }
-            : {
-                atomicId: item.atomicId,
-                ...(item.atomicIds ? { atomicIds: [...item.atomicIds] } : {}),
-              }
+          ? {
+              atomicId: item.atomicId,
+              ...(item.atomicIds ? { atomicIds: [...item.atomicIds] } : {}),
+              ...(item.deliveryKind ? { deliveryKind: item.deliveryKind } : {}),
+              ...(item.repairIds ? { repairIds: [...item.repairIds] } : {}),
+            }
           : {}),
         taskIds: item.tasks,
         exactPassed,
@@ -419,7 +421,7 @@ export function normalizeTeamReport(report, profile, fixtureSha256) {
       if (atomic) {
         const latest = latestStreamDeliveries(deliveries);
         if (
-          [...latest.values()].some((item) => !settledStreamDelivery(item)) ||
+          [...latest.values(), ...last].some((item) => !settledStreamDelivery(item)) ||
           taskIds.some(
             (task) =>
               !deliveries.some(
@@ -524,6 +526,11 @@ export async function exportNormalizedRun(rootDirectory, outputDirectory, option
           Object.keys(suite.atomic).some((field) => report.atomic[field] !== suite.atomic[field]))
       )
         throw Error("Team report contradicts atomic identity");
+      if (
+        (report.batchSize ?? ATOMIC_DISPATCH_POLICY.defaultBatchSize) !==
+        (suite.batchSize ?? ATOMIC_DISPATCH_POLICY.defaultBatchSize)
+      )
+        throw Error("Team report contradicts delivery size");
       if (report.atomic) validateAtomicIdentity(report.atomic);
       suite.schedule = report.schedule;
       suite.observations.push({

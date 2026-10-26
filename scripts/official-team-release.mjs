@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { validateReferenceExecution } from "../src/suites/explicit-edit-multi-agent/reference/execution-proof.mjs";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -82,6 +83,12 @@ export async function approvedTeamRelease(root = process.cwd()) {
   assert.match(evidence.reference.reportSha256, /^[a-f0-9]{64}$/);
   assert.match(evidence.reference.normalizedSha256, /^[a-f0-9]{64}$/);
   assert.equal(evidence.reference.status, "pass");
+  validateReferenceExecution(evidence.reference, 15);
+  assert.equal(
+    evidence.reference.referenceSourceSha256,
+    evidence.release.runner.verifierSha256,
+    "Reference source identity differs",
+  );
   assert.equal(evidence.reference.modelCalls, 0);
   assert.equal(evidence.reference.agents, 15);
   assert.equal(evidence.reference.acceptedTasks, 71);

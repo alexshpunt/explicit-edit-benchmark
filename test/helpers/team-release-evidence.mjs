@@ -1,6 +1,10 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { atomicIdentity } from "./atomic-identity.mjs";
+import {
+  REFERENCE_EXECUTION_POLICY,
+  referenceFirstPass,
+} from "../../src/suites/explicit-edit-multi-agent/reference/execution-proof.mjs";
 import { pathToFileURL } from "node:url";
 import { teamFixtureSources } from "../../scripts/official-team-release.mjs";
 import { suiteVerifier } from "../../scripts/run-multi-agent-batch.mjs";
@@ -30,6 +34,42 @@ export async function seedTeamReleaseEvidence(root) {
   evidence.release.atomic = atomicIdentity();
   evidence.reference.atomic = evidence.release.atomic;
   evidence.reference.acceptedAtomicEdits = evidence.release.atomic.edits;
+  evidence.reference.referenceExecution = REFERENCE_EXECUTION_POLICY;
+  const rounds = Array.from({ length: evidence.reference.acceptedRounds }, (_, index) => ({
+    round: `fixture-round-${index + 1}`,
+    attempt: 1,
+    status: "accepted",
+  }));
+  const atoms = Array.from(
+    { length: evidence.reference.acceptedAtomicEdits },
+    (_, index) => `fixture-atom-${index + 1}`,
+  );
+  evidence.reference.referenceFirstPass = referenceFirstPass({
+    repairs: 0,
+    acceptedRounds: rounds.length,
+    totalRounds: rounds.length,
+    atomic: evidence.reference.atomic,
+    atomicBarriers: rounds,
+    checks: ["initial", ...rounds.map(({ round }) => round)].map((contractId) => ({
+      contractId,
+      status: "pass",
+    })),
+    executions: Array.from({ length: Math.ceil(atoms.length / 50) }, (_, index) => ({
+      attempt: 1,
+      status: "settled",
+      atomicIds: atoms.slice(index * 50, (index + 1) * 50),
+    })),
+  });
+  evidence.reference.referenceSourceSha256 = evidence.release.runner.verifierSha256;
+  evidence.reference.referenceConcurrency = {
+    executors: 15,
+    maxWorking: 15,
+    maxPlanning: 15,
+    maxPublishing: 2,
+    workIntervals: 11178,
+    planningIntervals: 11178,
+    publicationIntervals: 11178,
+  };
   const file = path.join(root, `policies/official-runs/multi-agent-v${MULTI_AGENT_VERSION}.json`);
   await writeFile(file, JSON.stringify(evidence));
   return file;

@@ -111,11 +111,20 @@ export function declarationContexts(roots, aliases = anonymousRecordAliases(root
 }
 /** Read project AST roots while streaming. Keep system namespace identities without
  * their bodies, so project specializations retain their real semantic namespace owners.
+ * recoverSourceErrors is only for located editing repairs; it still requires a
+ * complete JSON tree and never turns compiler diagnostics into acceptance.
  */
-export async function projectAst(sourcePath, flags) {
+export async function projectAst(sourcePath, flags, { recoverSourceErrors = false } = {}) {
   const child = spawn(
     "clang++",
-    [...flags, "-fsyntax-only", "-Xclang", "-ast-dump=json", sourcePath],
+    [
+      ...flags,
+      ...(recoverSourceErrors ? ["-ferror-limit=0"] : []),
+      "-fsyntax-only",
+      "-Xclang",
+      "-ast-dump=json",
+      sourcePath,
+    ],
     {
       env: { ...process.env, LC_ALL: "C" },
     },
@@ -127,8 +136,22 @@ export async function projectAst(sourcePath, flags) {
   });
   const completed = new Promise((resolve, reject) => {
     child.on("error", reject);
-    child.on("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error(`Compiler AST failed: ${stderr}`)),
+    child.on("close", (code, signal) =>
+      code === 0
+        ? resolve()
+        : reject(
+            Object.assign(new Error(`Compiler AST failed: ${stderr}`), {
+              compilerSourceFailure:
+                code === 1 &&
+                !signal &&
+                /(?:^|\n)[^\n]+:\d+:\d+:\s*(?:fatal )?error:/.test(stderr) &&
+                !/^(?:(?:\S*[\\/])?(?:clang[^\s:]*|LLVM|LLD):\s*(?:fatal )?error:|LLVM ERROR:|PLEASE submit a bug report|Stack dump:|fatal error: error in backend:)/m.test(
+                  stderr,
+                ),
+              compilerExitCode: code,
+              compilerSignal: signal,
+            }),
+          ),
     );
   });
   // Attach a handler before streaming so early compiler failures are not unhandled.
@@ -220,7 +243,13 @@ export async function projectAst(sourcePath, flags) {
       if (active && !headerKnown) body += text.slice(headerStart);
       if (active && headerKnown && keep) parts.push(text.slice(partStart));
     }
-    await completed;
+    try {
+      await completed;
+    } catch (error) {
+      // A located repair can inspect the compiler's complete recovery tree.
+      // Signals, driver/backend failures and truncated JSON are never usable.
+      if (!recoverSourceErrors || !error.compilerSourceFailure) throw error;
+    }
     if (depth || quoted || active) throw new Error("Incomplete compiler AST");
     return [...roots, ...namespaceContexts];
   } finally {

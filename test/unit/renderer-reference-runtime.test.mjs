@@ -26,6 +26,8 @@ await test("clustered reference runtimes stage only editing dependencies and can
     "reference/full-worker.mjs",
     "reference/full-structure-edit.mjs",
     "reference/implementation-edit.mjs",
+    "reference/problem-edit.mjs",
+    "cpp/repair-identity.mjs",
     "reference/scripted-worker.mjs",
     "cpp/cpp-structure.mjs",
     "cpp/cpp-tokens.mjs",
@@ -52,23 +54,13 @@ await test("clustered reference runtimes stage only editing dependencies and can
     },
     {
       entry: "concurrent-worker.mjs",
-      prepare: prepareConcurrentExecutor,
-      extra: [
-        "reference/coherent-edit.mjs",
-        "reference/concurrent-commit.mjs",
-        "reference/current-naming-service.mjs",
-        "reference/current-naming-worker.mjs",
-      ],
-    },
-    {
-      entry: "current-naming-worker.mjs",
       channel: true,
       prepare: prepareConcurrentExecutor,
       extra: [
         "reference/coherent-edit.mjs",
         "reference/concurrent-commit.mjs",
         "reference/current-naming-service.mjs",
-        "reference/current-naming-worker.mjs",
+        "reference/ordinary-edit.mjs",
       ],
     },
   ];
@@ -87,7 +79,7 @@ await test("clustered reference runtimes stage only editing dependencies and can
       await mkdir(workspace);
       await item.prepare(tools);
       assert.deepEqual(await stagedFiles(tools), [...shared, ...item.extra].sort());
-      const entry = path.join(tools, "reference", item.channel ? item.entry : "full-worker.mjs");
+      const entry = path.join(tools, "reference/full-worker.mjs");
       assert.deepEqual(
         await readFile(entry),
         await readFile(path.join("src/suites/explicit-edit-multi-agent/reference", item.entry)),
@@ -133,7 +125,7 @@ try {
           tools,
           trusted,
           adjacent,
-          item.entry,
+          "full-worker.mjs",
         ],
         { timeout: 30_000 },
       );

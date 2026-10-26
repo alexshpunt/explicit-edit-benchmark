@@ -10,6 +10,7 @@ import { prepareCoherentExecutor } from "../../src/suites/explicit-edit-multi-ag
 import { fullExecutor } from "../../src/suites/explicit-edit-multi-agent/reference/full-executor.mjs";
 import {
   applyCoherentStructure,
+  applyCurrentStructure,
   coherentModuleCleanup,
 } from "../../src/suites/explicit-edit-multi-agent/reference/coherent-edit.mjs";
 import { execFileSync } from "node:child_process";
@@ -183,6 +184,24 @@ await test("temporary declarations that travel with a conditional module are rem
   assert.equal(result["main.cpp"], tree["main.cpp"]);
   assert.equal(result["frond_bvh.cpp"], tree["frond_bvh.cpp"].replace("bool supported();", ""));
   assert.throws(() => applyCoherentStructure(result, request), /Missing/);
+});
+await test("a current cleanup can observe an already absent prototype without removing its definition or header", () => {
+  const tree = {
+    "main.cpp": "namespace frond { int helper(int value) { return value; } }\n",
+    "frond_shape.h": "namespace frond { int helper(int value); }\n",
+  };
+  const request = {
+    action: "remove-generated-declaration",
+    file: "main.cpp",
+    selector: { scope: "frond", declarator: "inthelper(intvalue)", definition: false },
+  };
+  assert.deepEqual(applyCurrentStructure(tree, request), tree);
+  assert.throws(() => applyCoherentStructure(tree, request), /Missing/);
+  const ambiguous = {
+    ...tree,
+    "main.cpp": "namespace frond { int helper(int value); int helper(int value); }\n",
+  };
+  assert.throws(() => applyCurrentStructure(ambiguous, request), /ambiguous/);
 });
 await test("whole-task editing moves only delivered module owners and keeps successful bound edits when a later owner is rejected", async () => {
   await mkdir(".tmp", { recursive: true });

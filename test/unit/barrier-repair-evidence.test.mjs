@@ -191,15 +191,129 @@ await test("a task-owned barrier repair retains joint credit and once-only metri
   assert.equal(aggregate.recoveryRounds, 1);
 });
 
-await test("an unscoped global repair cannot enter either result format", () => {
+await test("generic team repairs retain one native receipt without inventing atom IDs", () => {
   const raw = fixture();
-  delete raw.executions[2].atomicId;
-  raw.executions[2].deliveryKind = "barrier-repair";
-  raw.executions[2].tasks = ["task-001", "task-002"];
-  assert.throws(() => normalizeTeamReport(raw, profile, raw.initial), /Unscoped global repair/);
-  assert.throws(() => multiAgentResult(raw), /Unscoped global repair/);
+  Object.assign(raw.executions[2], {
+    agent: 14,
+    deliveryKind: "barrier-repair",
+    atomicId: "repair-round-001-repair-0-0",
+    atomicIds: [],
+    tasks: ["task-001", "task-002"],
+  });
+  const projected = normalizeTeamReport(raw, profile, raw.initial);
+  validate(raw, projected);
+  assert.equal(projected.rounds.length, 3);
+  assert.equal(projected.rounds[2].deliveryKind, "barrier-repair");
+  assert.deepEqual(projected.rounds[2].atomicIds, []);
+  assert.equal(projected.rounds[2].agent, 14);
+  assert.equal(projected.trials[0].finalExactPassed, true);
+  assert.equal(
+    projected.rounds.reduce((sum, item) => sum + item.totalTokens, 0),
+    42,
+  );
+  assert.equal(multiAgentResult(raw).progress.acceptedTasks, 2);
 });
-await test("task-owned repairs reject invalid kinds, atom IDs, budgets, parents, duplicate or mixed attempts", () => {
+
+await test("generic repair task lists cannot invent undelivered atomic parent coverage", () => {
+  const raw = fixture();
+  Object.assign(raw.executions[2], {
+    deliveryKind: "barrier-repair",
+    atomicId: "repair-round-001-repair-0-0",
+    atomicIds: [],
+    tasks: ["task-001", "task-002"],
+  });
+  const projected = normalizeTeamReport(raw, profile, raw.initial);
+  validate(raw, projected);
+  const missing = structuredClone(raw);
+  missing.executions.splice(1, 1);
+  missing.deliveries--;
+  assert.throws(() => multiAgentResult(missing), assert.AssertionError);
+  const missingRows = structuredClone(projected);
+  missingRows.rounds.splice(1, 1);
+  assert.throws(() => validate(raw, missingRows), assert.AssertionError);
+  Object.assign(missing.executions[1], { tasks: ["task-002"], atomicIds: ["task-002-atom-001"] });
+  assert.equal(multiAgentResult(missing).progress.acceptedTasks, 2);
+  validate(missing, normalizeTeamReport(missing, profile, missing.initial));
+});
+
+await test("repairs can move to another participant and redistribute both original requests", () => {
+  const raw = fixture();
+  raw.executions[2].agent = 14;
+  raw.executions.push({ ...raw.executions[0], attempt: 2, agent: 13 });
+  raw.deliveries++;
+  raw.repairs++;
+  const projected = normalizeTeamReport(raw, profile, raw.initial);
+  validate(raw, projected);
+  assert.deepEqual(
+    projected.rounds.slice(2).map((item) => item.agent),
+    [14, 13],
+  );
+  assert.deepEqual(
+    projected.rounds.slice(2).map((item) => item.atomicId),
+    ["task-002-atom-001", "task-001-atom-001"],
+  );
+  assert.equal(projected.trials[0].finalExactPassed, true);
+  assert.equal(multiAgentResult(raw).progress.acceptedTasks, 2);
+});
+
+await test("a later barrier may repair disclosed earlier work but cannot repair future tasks", () => {
+  const raw = fixture();
+  const current = raw.schedule[1];
+  const fresh = current.assignments.map(({ task }, agent) => ({
+    round: current.id,
+    attempt: 1,
+    agent,
+    tasks: [task],
+    atomicId: `${task}-atom-001`,
+    status: "settled",
+    receipt: { ...receipt },
+  }));
+  raw.executions.push(...fresh, {
+    round: current.id,
+    attempt: 2,
+    agent: 14,
+    tasks: ["task-002"],
+    deliveryKind: "barrier-repair",
+    atomicId: "repair-round-002-repair-0-0",
+    atomicIds: ["task-002-atom-001"],
+    status: "settled",
+    receipt: { ...receipt },
+  });
+  raw.checks.push(
+    { label: "round-002-attempt-1", contractId: current.id, status: "fail", category: "structure" },
+    { label: "round-002-attempt-2", contractId: current.id, status: "pass" },
+  );
+  raw.acceptedRounds = 2;
+  raw.acceptedTasks = 5;
+  raw.deliveries += fresh.length + 1;
+  raw.repairs++;
+  raw.terminal.id = "round-003";
+  const projected = normalizeTeamReport(raw, profile, raw.initial);
+  validate(raw, projected);
+  assert.deepEqual(projected.rounds.at(-1).atomicIds, ["task-002-atom-001"]);
+  assert.equal(projected.trials[1].finalExactPassed, true);
+  assert.equal(multiAgentResult(raw).progress.acceptedTasks, 5);
+  raw.executions.at(-1).tasks = ["task-006"];
+  raw.executions.at(-1).atomicIds = ["task-006-atom-001"];
+  assert.throws(() => normalizeTeamReport(raw, profile, raw.initial));
+  assert.throws(() => multiAgentResult(raw));
+});
+
+await test("malformed repair artifact IDs fail validation before string operations", () => {
+  for (const atomicId of [undefined, null, 42, [], "", "task-002-atom-001"]) {
+    const raw = fixture();
+    Object.assign(raw.executions[2], {
+      deliveryKind: "barrier-repair",
+      atomicId,
+      atomicIds: [],
+      tasks: ["task-001", "task-002"],
+    });
+    assert.throws(() => normalizeTeamReport(raw, profile, raw.initial), assert.AssertionError);
+    assert.throws(() => multiAgentResult(raw), assert.AssertionError);
+  }
+});
+
+await test("repairs reject invalid kinds, atom IDs, budgets, parents, duplicate or mixed attempts", () => {
   for (const mutate of [
     (raw) => {
       raw.executions[2].deliveryKind = "atomic";
@@ -234,14 +348,6 @@ await test("task-owned repairs reject invalid kinds, atom IDs, budgets, parents,
       raw.repairs++;
     },
     (raw) => {
-      raw.executions.push({ ...raw.executions[0], attempt: 2, agent: 13 });
-      raw.deliveries++;
-      raw.repairs++;
-    },
-    (raw) => {
-      raw.executions[2].agent = 14;
-    },
-    (raw) => {
       raw.executions[0].status = "error";
     },
     (raw) => {
@@ -272,7 +378,7 @@ await test("task-owned repairs reject invalid kinds, atom IDs, budgets, parents,
       rows.push({ ...rows[2], roundId: "duplicate" });
     },
     (rows) => {
-      rows[2].agent = 14;
+      rows[2].agent = 15;
     },
   ]) {
     const copy = structuredClone(projected);

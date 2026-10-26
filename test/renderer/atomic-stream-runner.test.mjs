@@ -1,19 +1,22 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
+import { MULTI_AGENT_MAX_ATTEMPTS } from "../../src/suites/explicit-edit-multi-agent/results.mjs";
 import { runCoherent } from "../../src/suites/explicit-edit-multi-agent/execution/coherent-run.mjs";
 import { runConcurrent } from "../../src/suites/explicit-edit-multi-agent/execution/concurrent-run.mjs";
 import { startBaseline } from "../../src/suites/explicit-edit-multi-agent/execution/pi-baseline.mjs";
 import { providerFixture } from "./provider-fixture.mjs";
+import { independentPiFactory } from "./pi-independent-reference.mjs";
+import { prepareConcurrentExecutor } from "../../src/suites/explicit-edit-multi-agent/reference/concurrent-executor.mjs";
 import { prepareConcurrent } from "../../src/suites/explicit-edit-multi-agent/tasks/prepare-concurrent.mjs";
-import {
-  prepareCoherentContract,
-  evaluateCoherentContract,
-} from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
+import { prepareCoherentContract } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
 import { buildCoherentCandidate } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-build.mjs";
-import { applyCoherentStructure } from "../../src/suites/explicit-edit-multi-agent/reference/coherent-edit.mjs";
+import {
+  applyCoherentStructure,
+  applyCurrentStructure,
+} from "../../src/suites/explicit-edit-multi-agent/reference/coherent-edit.mjs";
 import { coherentTaskPrompt } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-tasks.mjs";
 import {
   readTree,
@@ -25,38 +28,21 @@ const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const quiet = () => {};
 function atomicRows(report) {
   return report.executions.flatMap((row) =>
-    row.atomicIds
-      ? row.atomicIds.map((atomicId, index) => ({
-          ...row,
-          atomicId,
-          atomicCheck: row.atomicChecks[atomicId],
-          receipts: row.receipts ? [row.receipts[index]] : undefined,
-        }))
-      : [row],
+    row.atomicIds.map((atomicId, index) => ({
+      ...row,
+      atomicId,
+      receipts: row.receipts ? [row.receipts[index]] : undefined,
+    })),
   );
 }
-
-function assertInputTrace(report) {
+function assertBarrierOnly(report) {
   for (const barrier of report.atomicBarriers) {
-    assert.ok(Array.isArray(barrier.inputChecks), "Every barrier retains its actual input checks");
-    for (const check of barrier.inputChecks) {
-      assert.ok(typeof check.atomicId === "string");
-      assert.ok(check.startedMs >= 0 && check.elapsedMs >= 0);
-      assert.ok(["pass", "fail", "pending", "aborted", "error"].includes(check.decision));
-      assert.ok(Array.isArray(check.observations));
-      for (const observation of check.observations) {
-        assert.deepEqual(Object.keys(observation).sort(), ["atomicId", "mode", "reason", "status"]);
-        assert.ok(
-          ["prerequisite-output", "current-output", "current-input", "continuation"].includes(
-            observation.mode,
-          ),
-        );
-        if (observation.mode === "continuation") {
-          assert.equal(observation.status, "waived");
-          assert.equal(observation.reason, "already-started");
-        }
-      }
-    }
+    assert.equal(Object.hasOwn(barrier, "inputChecks"), false);
+    assert.equal(Object.hasOwn(barrier, "retained"), false);
+  }
+  for (const row of report.executions) {
+    assert.equal(Object.hasOwn(row, "atomicCheck"), false);
+    assert.equal(Object.hasOwn(row, "atomicChecks"), false);
   }
 }
 
@@ -153,105 +139,115 @@ function currentHeader(prompt) {
   });
 }
 
-async function waitForPeer(ready, signal) {
+function headerDelivery(prompt, options) {
+  if (options.deliveryKind !== "barrier-repair") return currentHeader(prompt);
+  assert.deepEqual(options.atomicIds, []);
+  assert.ok(options.repairTasks?.length > 0);
+  return options.repairTasks.flatMap((task) =>
+    task.operations.flatMap((operation) => {
+      assert.equal(operation.phase, "repair");
+      if (
+        !["create-module", "remove-source-module"].includes(operation.action) ||
+        operation.required?.kind !== "header"
+      )
+        return [];
+      return [
+        {
+          phase: "structure",
+          action: "header",
+          file: operation.required.file,
+          guard: operation.required.guard,
+          includes: operation.setup?.includes ?? [],
+        },
+      ];
+    }),
+  );
+}
+
+async function waitForPeer(promise, signal) {
   signal.throwIfAborted();
   const aborted = Promise.withResolvers();
   const abort = () => aborted.reject(signal.reason);
   signal.addEventListener("abort", abort, { once: true });
   try {
-    await Promise.race([ready, aborted.promise]);
+    await Promise.race([promise, aborted.promise]);
   } finally {
     signal.removeEventListener("abort", abort);
   }
 }
+
 function deterministicDrivers({
   skipFirstNorth = false,
+  noEdits = false,
   breakBuild = false,
-  breakOwnBuild = false,
-  precompletedSouth = false,
 } = {}) {
   const histories = [],
     calls = [];
+  const firstWave = Promise.withResolvers();
   let writes = Promise.resolve(),
     deliveries = 0;
-  const both = Promise.withResolvers(),
-    peer = Promise.withResolvers();
-  const createDriver = async (workspace, _state, agent) => {
-    if (precompletedSouth && agent === 0) {
-      const edited = applyCoherentStructure(await readTree(workspace), {
-        phase: "structure",
-        action: "header",
-        file: "south.h",
-        guard: "SOUTH_H",
-        includes: [],
-      });
-      for (const [file, source] of Object.entries(edited))
-        await writeFile(path.join(workspace, file), source);
-    }
-    const history = [];
-    histories[agent] = history;
-    let closed = false;
-    return {
-      get closed() {
-        return closed;
-      },
-      async execute(prompt, options) {
-        assert.equal(closed, false);
-        history.push({ prompt, ...options });
-        assert.equal(options.deliveryKind, undefined);
-        const operations = currentHeader(prompt);
-        assert.equal(operations.length, options.atomicIds.length);
-        for (const [index, operation] of operations.entries())
-          calls.push({
-            agent,
-            prompt,
-            ...options,
-            atomicId: options.atomicIds[index],
-            operation,
-          });
-        if (++deliveries >= 2) both.resolve();
-        await waitForPeer(both.promise, options.signal);
-        for (const operation of operations) {
-          if (skipFirstNorth && operation.guard === "NORTH_H" && options.attempt === 1) {
-            await waitForPeer(peer.promise, options.signal);
-            continue;
-          }
+  return {
+    histories,
+    calls,
+    createDriver: async (workspace, _state, agent) => {
+      const history = [];
+      histories[agent] = history;
+      let closed = false;
+      return {
+        get closed() {
+          return closed;
+        },
+        async execute(prompt, options) {
+          assert.equal(closed, false);
+          const operations = headerDelivery(prompt, options);
+          history.push({ prompt, ...options });
+          calls.push({ agent, operations, ...options });
+          if (++deliveries >= 2) firstWave.resolve();
+          await waitForPeer(firstWave.promise, options.signal);
+          // This fixture fixes a source interleaving to test barrier decisions.
+          // The real reference proof above uses ordinary independent editors.
           writes = writes.then(async () => {
-            const tree = await readTree(workspace);
-            const edited =
-              (precompletedSouth && operation.guard === "SOUTH_H" && tree["south.h"]) ||
-              (breakOwnBuild && operation.guard === "NORTH_H" && options.attempt > 1)
-                ? tree
-                : applyCoherentStructure(tree, operation);
-            if (breakOwnBuild && operation.guard === "NORTH_H") {
-              if (options.attempt === 1)
-                edited["main.cpp"] = edited["main.cpp"].replace("#include <array>\n", "");
-              else edited["north.h"] = "#include <array>\n" + edited["north.h"];
+            if (noEdits) return;
+            let tree = await readTree(workspace);
+            for (const operation of operations) {
+              if (skipFirstNorth && operation.guard === "NORTH_H" && options.attempt === 1)
+                continue;
+              if (tree["main.cpp"].includes("#ifndef " + operation.guard))
+                tree = applyCurrentStructure(tree, operation);
             }
-            if (breakBuild && operation.guard === "WEST_H")
-              edited["main.cpp"] = edited["main.cpp"].replace("#include <fstream>\n", "");
-            for (const [file, source] of Object.entries(edited))
+            if (breakBuild && options.attempt === 1)
+              tree["main.cpp"] = tree["main.cpp"].replace("#include <fstream>\n", "");
+            if (
+              breakBuild &&
+              options.attempt > 1 &&
+              !tree["main.cpp"].includes("#include <fstream>")
+            )
+              tree["main.cpp"] = "#include <fstream>\n" + tree["main.cpp"];
+            for (const [file, source] of Object.entries(tree))
               await writeFile(path.join(workspace, file), source);
           });
           await writes;
-          if (operation.guard !== "NORTH_H") peer.resolve();
-        }
-        return { sessionId: `participant-${agent}`, sequence: history.length, status: "settled" };
-      },
-      async close() {
-        closed = true;
-      },
-    };
+          return {
+            sessionId: "participant-" + agent,
+            sequence: history.length,
+            status: "settled",
+            reply: "Edits are still unfinished.",
+          };
+        },
+        async close() {
+          closed = true;
+        },
+      };
+    },
   };
-  return { createDriver, histories, calls };
 }
 
 await test(
-  "partial atomic runner with three edits and two scoring groups",
-  { timeout: 90_000 },
+  "shared-source atomic queues are checked only at retained full barriers",
+  { timeout: 240_000 },
   async (t) => {
     await mkdir(".tmp", { recursive: true });
-    const root = await mkdtemp(path.resolve(".tmp/atomic-stream-runner-"));
+    const root = await mkdtemp(path.resolve(".tmp/barrier-stream-runner-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     const { preparation, expected, pixels } = await prepareFixture(root);
     const caseEvents = [];
@@ -260,256 +256,75 @@ await test(
       onCase: (event) => caseEvents.push(event),
     });
     assert.equal(reference.status, "pass", JSON.stringify(reference.terminal));
-    assert.equal(atomicRows(reference).length, 3);
     assert.equal(reference.acceptedTasks, 2);
     assert.equal(reference.acceptedRounds, 1);
-    assert.equal(caseEvents.length, 6);
-    for (const execution of atomicRows(reference))
-      assert.deepEqual(
-        caseEvents.filter((event) => event.id === execution.atomicId),
-        [
-          {
-            event: "case-start",
-            id: execution.atomicId,
-            phase: "atomic",
-            round: "round-001",
-            attempt: 1,
-          },
-          {
-            event: "case-end",
-            id: execution.atomicId,
-            phase: "atomic",
-            status: "pass",
-            round: "round-001",
-            attempt: 1,
-          },
-        ],
-      );
+    assert.equal(new Set(atomicRows(reference).map((row) => row.atomicId)).size, 3);
     assert.equal(new Set(atomicRows(reference).map((row) => row.receipts[0].lifetime)).size, 2);
-    assert.ok(atomicRows(reference).some((row) => row.receipts[0].delivered === 2));
+    assert.equal(caseEvents.length, atomicRows(reference).length * 2);
+    assert.ok(
+      caseEvents
+        .filter((event) => event.event === "case-end")
+        .every((event) => event.phase === "delivery" && event.status === "settled"),
+    );
+    assertBarrierOnly(reference);
     const proofFile = path.join(preparation, "verification-2.json");
     const proof = JSON.parse(await readFile(proofFile, "utf8"));
-    assert.deepEqual(proof.atomic, reference.atomic);
     assert.equal(proof.acceptedAtomicEdits, 3);
-    assert.equal(proof.agents, 2);
+    assert.deepEqual(proof.atomic, reference.atomic);
+    assert.equal(proof.repairs, 0);
+    assert.equal(proof.referenceFirstPass.repairs, 0);
+    assert.ok(proof.referenceFirstPass.barriers.every((barrier) => barrier.attempt === 1));
+    assert.ok(proof.referenceFirstPass.checks.every((check) => check.status === "pass"));
 
     await t.test(
-      "free persistent participants receive only ready batch members in their retained histories",
+      "an explicit scripted driver stops at its first failed drained barrier",
       async () => {
-        const drivers = deterministicDrivers();
-        const report = await runConcurrent(preparation, path.join(root, "live"), {
-          ...drivers,
-          log: quiet,
-        });
-        assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        assert.equal(atomicRows(report).length, 3);
-        assert.equal(report.acceptedTasks, 2);
-        assert.equal(
-          report.repairs,
-          0,
-          JSON.stringify({
-            executions: atomicRows(report),
-            barriers: report.atomicBarriers,
-            checks: report.checks,
-          }),
-        );
-        assert.equal(new Set(drivers.calls.map((row) => row.atomicId)).size, 3);
-        assert.equal(
-          drivers.histories.reduce((sum, history) => sum + history.length, 0),
-          report.deliveries,
-        );
-        assert.ok(report.agentsClosed.every(Boolean));
-        assertInputTrace(report);
-        assert.ok(
-          report.atomicBarriers[0].inputChecks.some(
-            (check) =>
-              check.decision === "pass" &&
-              check.observations.some(
-                (row) => row.mode === "current-input" && row.status === "pass",
-              ) &&
-              !check.observations.some((row) => row.mode === "current-output"),
-          ),
-          "A valid structural input must not first materialize and grade its full output",
-        );
-        assert.ok(
-          report.atomicBarriers[0].inputChecks.every(
-            (check) =>
-              check.observations.find(
-                (row) => row.mode === "current-input" || row.mode === "current-output",
-              )?.mode !== "current-output",
-          ),
-          "Structural input observation comes before the already-correct output fallback",
-        );
-        const saved = JSON.parse(await readFile(path.join(root, "live/report.json"), "utf8"));
-        assert.deepEqual(saved.atomicBarriers[0].inputChecks, report.atomicBarriers[0].inputChecks);
-        assert.deepEqual(await readTree(path.join(root, "live/workspace")), expected);
-        assert.deepEqual(report.checks.at(-1).pixels, pixels);
-      },
-    );
-
-    await t.test(
-      "an already-correct structural output remains eligible after its input check",
-      async () => {
-        const drivers = deterministicDrivers({ precompletedSouth: true });
-        const report = await runConcurrent(preparation, path.join(root, "already-correct"), {
-          agents: 2,
-          createDriver: drivers.createDriver,
-          log: quiet,
-        });
-        assert.equal(report.status, "pass");
-        assert.equal(report.acceptedTasks, 2);
-        assert.equal(new Set(drivers.calls.map((row) => row.atomicId)).size, 3);
-        const fallback = report.atomicBarriers[0].inputChecks.find((check) =>
-          check.observations.some((row) => row.mode === "current-output" && row.status === "pass"),
-        );
-        assert.ok(fallback, "Already-correct output is checked, not silently waived");
-        assert.equal(fallback.observations[0].mode, "current-input");
-        assert.notEqual(fallback.observations[0].status, "pass");
-        assert.ok(report.agentsClosed.every(Boolean));
-      },
-    );
-
-    await t.test(
-      "one failed atomic output receives a correction without repeating the verified peer",
-      async () => {
-        // An intermittent run recorded only one NORTH delivery. Repeat this tiny
-        // filesystem scenario without repeating expensive fixture preparation.
-        for (let repetition = 0; repetition < 6; repetition++) {
-          const output = path.join(root, `corrected-${repetition}`);
-          const drivers = deterministicDrivers({ skipFirstNorth: true });
-          const report = await runConcurrent(preparation, output, {
-            ...drivers,
-            log: quiet,
-          });
-          assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-          const byGuard = (guard) => drivers.calls.filter((row) => row.operation?.guard === guard);
-          assert.equal(
-            byGuard("NORTH_H").length,
-            2,
-            JSON.stringify({
-              repetition,
-              calls: drivers.calls.map(({ atomicId, attempt }) => ({ atomicId, attempt })),
-              executions: atomicRows(report),
-              barriers: report.atomicBarriers,
-              checks: report.checks,
-            }),
-          );
-          const [original, correction] = byGuard("NORTH_H");
-          assert.equal(correction.agent, original.agent);
-          const receipts = atomicRows(report).filter((row) => row.atomicId === original.atomicId);
-          assert.equal(receipts[0].receipt.sessionId, receipts[1].receipt.sessionId);
-          assert.deepEqual(Object.keys(correction.diagnostics), [correction.atomicId]);
-          assert.ok(correction.diagnostics[correction.atomicId].length > 0);
-          assert.ok(
-            correction.diagnostics[correction.atomicId].every(
-              (entry) =>
-                !JSON.stringify(entry).includes("SOUTH") && !JSON.stringify(entry).includes("WEST"),
-            ),
-          );
-          assert.ok(
-            drivers.histories[original.agent].some(
-              (entry) => entry.attempt === 1 && entry.atomicIds.includes(original.atomicId),
-            ),
-          );
-          assert.equal(byGuard("SOUTH_H").length, 1);
-          assert.equal(byGuard("WEST_H").length, 1);
-          assert.equal(atomicRows(report).length, 4);
-          assert.deepEqual(
-            byGuard("NORTH_H").map((row) => row.attempt),
-            [1, 2],
-            "The failed atom must get its first opportunity before spending a correction",
-          );
-          assert.equal(report.repairs, drivers.calls.filter((row) => row.attempt > 1).length);
-          assertInputTrace(report);
-          const north = byGuard("NORTH_H")[0].atomicId;
-          assert.ok(
-            report.atomicBarriers[1].inputChecks.some(
-              (check) =>
-                check.atomicId === north &&
-                check.decision === "pass" &&
-                check.observations.some(
-                  (row) => row.mode === "continuation" && row.status === "waived",
-                ),
-            ),
-          );
-          assert.equal(report.acceptedTasks, 2);
-          assert.equal(
-            report.checks.find((check) => check.status === "fail").category,
-            "structure",
-          );
-          // Failure drains existing deliveries, but does not require WEST to
-          // have started. Retain every verified peer, whichever finishes first.
-          const verifiedPeers = atomicRows(report).filter(
-            (row) => row.attempt === 1 && row.atomicCheck?.status === "pass",
-          );
-          assert.ok(verifiedPeers.length > 0, "The correction must retain a verified peer");
-          assert.deepEqual(
-            [...report.atomicBarriers[1].retained].sort(),
-            verifiedPeers.map((row) => row.atomicId).sort(),
-            JSON.stringify({
-              repetition,
-              executions: atomicRows(report),
-              barriers: report.atomicBarriers,
-            }),
-          );
-          assert.deepEqual(await readTree(path.join(output, "workspace")), expected);
-        }
-      },
-    );
-
-    await t.test(
-      "real Pi repairs only its own failed atom in the original native history",
-      async (t) => {
-        const calls = [];
-        const providers = [];
-        const output = path.join(root, "native-repair");
+        const beforeProof = await readFile(proofFile, "utf8");
+        const drivers = deterministicDrivers({ skipFirstNorth: true });
+        const output = path.join(root, "reference-first-failure");
         const report = await runConcurrent(preparation, output, {
+          ...drivers,
+          reference: true,
+          log: quiet,
+        });
+        assert.equal(report.mode, "scripted");
+        assert.equal(report.status, "blocked");
+        assert.equal(report.repairs, 0);
+        assert.equal(report.acceptedRounds, 0);
+        assert.equal(report.acceptedTasks, 0);
+        assert.equal(report.atomicBarriers.length, 1);
+        assert.deepEqual(
+          report.checks.map((check) => check.status),
+          ["pass", "fail"],
+        );
+        assert.ok(drivers.calls.length > 0 && drivers.calls.every((call) => call.attempt === 1));
+        assert.ok(
+          report.executions.every(
+            (row) => row.attempt === 1 && row.atomicIds.length > 0 && !row.repairIds,
+          ),
+        );
+        assert.ok(report.agentsClosed.every(Boolean));
+        assert.equal(await readFile(proofFile, "utf8"), beforeProof);
+        await assert.rejects(access(path.join(output, "verification.json")), { code: "ENOENT" });
+        assertBarrierOnly(report);
+      },
+    );
+
+    await t.test(
+      "a real native scripted driver receives no repair turns after a failed barrier",
+      async (t) => {
+        const calls = [],
+          providers = [];
+        const output = path.join(root, "native-reference-first-failure");
+        const report = await runConcurrent(preparation, output, {
+          reference: true,
           log: quiet,
           createDriver: async (workspace, state, agent) => {
             const providerRoot = state + "-provider";
             await mkdir(providerRoot, { recursive: true });
-            const provider = await providerFixture(providerRoot, (body) => {
-              if (body.messages.at(-1).role === "tool") return {};
-              const message = body.messages.findLast((item) => item.role === "user").content;
-              const prompt =
-                typeof message === "string"
-                  ? message
-                  : message
-                      .filter((part) => part.type === "text")
-                      .map((part) => part.text)
-                      .join("");
-              const detail = prompt.split("\n").flatMap((line) => {
-                try {
-                  const parsed = JSON.parse(line);
-                  return Array.isArray(parsed) ? parsed : [];
-                } catch {
-                  return [];
-                }
-              });
-              const operations = currentHeader(prompt).filter(
-                (operation) =>
-                  operation.guard !== "NORTH_H" ||
-                  detail.some((entry) => entry.file === operation.file),
-              );
-              const program = [
-                "import fcntl, json, pathlib",
-                "operations = json.loads(" + JSON.stringify(JSON.stringify(operations)) + ")",
-                "with open('main.cpp', 'r+') as source:",
-                " fcntl.flock(source, fcntl.LOCK_EX)",
-                " text = source.read()",
-                " for operation in operations:",
-                "  marker = '#ifndef ' + operation['guard'] + '\\n'",
-                "  if marker not in text: continue",
-                "  start = text.index(marker)",
-                "  end = text.index('#endif', start) + len('#endif')",
-                "  pathlib.Path(operation['file']).write_text(text[start:end] + '\\n')",
-                "  text = text[:start] + '#include ' + chr(34) + operation['file'] + chr(34) + '\\n' + text[end:]",
-                " source.seek(0)",
-                " source.write(text)",
-                " source.truncate()",
-              ].join("\n");
-              return { command: "python3 -c '" + program.replaceAll("'", "'\\''") + "'" };
-            });
+            const provider = await providerFixture(providerRoot, (body) =>
+              body.messages.at(-1).role === "tool" ? {} : { command: "true" },
+            );
             providers.push(provider);
             t.after(() => provider.close());
             const driver = await startBaseline(workspace, state, provider.config, {
@@ -528,208 +343,372 @@ await test(
             };
           },
         });
-        assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        const correction = calls.find((call) => call.attempt === 2);
-        assert.ok(correction);
-        const first = calls.find(
-          (call) => call.attempt === 1 && call.atomicIds.includes(correction.atomicId),
-        );
-        assert.equal(correction.agent, first.agent);
-        assert.equal(correction.receipt.sessionId, first.receipt.sessionId);
-        assert.equal(correction.receipt.lifetime, first.receipt.lifetime);
-        assert.ok(correction.receipt.messageCount > first.receipt.messageCount);
-        assert.deepEqual(Object.keys(correction.diagnostics), [correction.atomicId]);
-        assert.ok(correction.diagnostics[correction.atomicId].length);
-        assert.equal(
-          evaluateCoherentContract(
-            await readTree(path.join(output, "workspace")),
-            prepareCoherentContract(expected),
-          ).status,
-          "pass",
-        );
-        assert.equal(calls.filter((call) => call.attempt > 1).length, 1);
-        assert.equal(providers.length, 2);
-      },
-    );
-
-    await t.test(
-      "a uniquely located build error returns only to its task's original executor",
-      async () => {
-        const drivers = deterministicDrivers({ breakOwnBuild: true });
-        const report = await runConcurrent(preparation, path.join(root, "owned-build-repair"), {
-          ...drivers,
-          log: quiet,
-        });
-        assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        const corrections = drivers.calls.filter((call) => call.attempt > 1);
-        assert.equal(corrections.length, 1);
-        const correction = corrections[0];
-        const original = drivers.calls.find(
-          (call) => call.atomicId === correction.atomicId && call.attempt === 1,
-        );
-        assert.equal(correction.agent, original.agent);
-        assert.equal(correction.operation.guard, "NORTH_H");
-        assert.deepEqual(Object.keys(correction.diagnostics), [correction.atomicId]);
-        assert.ok(
-          correction.diagnostics[correction.atomicId].some(
-            (entry) =>
-              entry.category === "build" &&
-              entry.file === "north.h" &&
-              entry.severity === "error" &&
-              Number.isInteger(entry.line),
-          ),
-        );
-        assert.ok(
-          correction.diagnostics[correction.atomicId].every((entry) => entry.file === "north.h"),
-        );
-        assert.equal(report.acceptedTasks, 2);
-        assert.equal(report.repairs, 1);
-        assert.ok(
-          atomicRows(report)
-            .filter((row) => row.attempt === 1)
-            .every((row) => row.atomicCheck.status === "pass"),
-        );
-      },
-    );
-
-    await t.test(
-      "an unattributed build failure stops without guessing an executor or broadcasting",
-      async () => {
-        const drivers = deterministicDrivers({ breakBuild: true });
-        const report = await runConcurrent(preparation, path.join(root, "barrier-repair"), {
-          ...drivers,
-          log: quiet,
-        });
-        assert.equal(report.status, "infrastructure", JSON.stringify(report.terminal));
-        assert.match(report.terminal.message, /cannot be attributed/);
-        assert.equal(atomicRows(report).length, 3);
+        assert.equal(report.status, "blocked");
         assert.equal(report.repairs, 0);
-        assert.equal(report.acceptedTasks, 0);
-        assertInputTrace(report);
-        assert.ok(
-          atomicRows(report).every((row) => row.attempt === 1 && row.atomicCheck.status === "pass"),
+        assert.equal(report.atomicBarriers.length, 1);
+        assert.deepEqual(
+          report.checks.map((check) => check.status),
+          ["pass", "fail"],
         );
-        assert.ok(drivers.calls.every((row) => row.attempt === 1));
-        const failure = report.checks.find((check) => check.status === "fail");
-        assert.equal(failure.category, "build");
+        assert.equal(calls.length, report.deliveries);
+        assert.equal(new Set(calls.map((call) => call.agent)).size, 2);
         assert.ok(
-          failure.diagnostics.some(
-            (entry) => entry.file === "main.cpp" && entry.severity === "error",
+          calls.every(
+            (call) =>
+              call.attempt === 1 &&
+              call.atomicIds.length > 0 &&
+              call.receipt.toolCalls === 1 &&
+              call.receipt.failedToolCalls === 0,
           ),
         );
+        assert.equal(providers.length, 2);
+        assert.ok(report.agentsClosed.every(Boolean));
+        await assert.rejects(access(path.join(output, "verification.json")), { code: "ENOENT" });
+        assertBarrierOnly(report);
       },
     );
+    await t.test(
+      "a successful native scripted proof does not overwrite the Node prerequisite",
+      async () => {
+        const beforeProof = await readFile(proofFile, "utf8");
+        const output = path.join(root, "native-reference-success");
+        const tools = path.join(root, "native-reference-tools");
+        await prepareConcurrentExecutor(tools);
+        const workload = JSON.parse(
+          await readFile(path.join(preparation, "atomic/tasks.json"), "utf8"),
+        );
+        const report = await runConcurrent(preparation, output, {
+          reference: true,
+          log: quiet,
+          createDriver: independentPiFactory({
+            runtime: process.env.RENDERER_PI_RUNTIME,
+            tools,
+            tasks: new Map(workload.nodes.map((node) => [node.id, node])),
+            artifacts: path.join(root, "native-reference-artifacts"),
+          }),
+        });
+        assert.equal(report.status, "pass", JSON.stringify(report.terminal));
+        assert.equal(report.mode, "scripted");
+        assert.equal(report.repairs, 0);
+        assert.equal(report.atomicBarriers.length, 1);
+        const nativeProof = JSON.parse(
+          await readFile(path.join(output, "verification.json"), "utf8"),
+        );
+        assert.deepEqual(nativeProof.referenceFirstPass, report.referenceFirstPass);
+        assert.equal(nativeProof.referenceFirstPass.originalAtomicEdits, 3);
+        assert.equal(await readFile(proofFile, "utf8"), beforeProof);
+        assert.ok(
+          report.executions.every(
+            (row) => row.receipt.toolCalls === 1 && row.receipt.failedToolCalls === 0,
+          ),
+        );
+        assert.ok(report.agentsClosed.every(Boolean));
+        assert.deepEqual(await readTree(path.join(output, "workspace")), expected);
+        assert.deepEqual(report.checks.at(-1).pixels, pixels);
+        assertBarrierOnly(report);
+      },
+    );
+    await t.test("both histories drain before the combined build and pixel check", async () => {
+      const drivers = deterministicDrivers();
+      const report = await runConcurrent(preparation, path.join(root, "live"), {
+        ...drivers,
+        log: quiet,
+      });
+      assert.equal(report.status, "pass", JSON.stringify(report.terminal));
+      assert.equal(atomicRows(report).length, 3);
+      assert.equal(report.repairs, 0);
+      assert.equal(report.acceptedTasks, 2);
+      assert.equal(
+        drivers.histories.reduce((sum, history) => sum + history.length, 0),
+        report.deliveries,
+      );
+      assert.equal(new Set(report.executions.map((row) => row.agent)).size, 2);
+      const first = report.executions.filter((row) => row.attempt === 1);
+      assert.ok(
+        Math.max(...first.map((row) => row.startedMs)) <
+          Math.min(...first.map((row) => row.startedMs + row.elapsedMs)),
+      );
+      assert.ok(
+        report.checks.at(-1).startedMs >=
+          Math.max(...first.map((row) => row.startedMs + row.elapsedMs)),
+      );
+      assertBarrierOnly(report);
+      assert.deepEqual(await readTree(path.join(root, "live/workspace")), expected);
+      assert.deepEqual(report.checks.at(-1).pixels, pixels);
+      assert.ok(report.agentsClosed.every(Boolean));
+    });
 
     await t.test(
-      "saved input checks identify a controlled prerequisite before dependent dispatch",
+      "a missing edit waits for the barrier and repairs on another participant",
       async () => {
-        const selected = path.join(root, "dependent-prepared");
-        await cp(preparation, selected, {
-          recursive: true,
-          errorOnExist: true,
-          force: false,
-          filter: (file) => path.basename(file) !== "verification-2.json",
-        });
-        const taskFile = path.join(selected, "atomic/tasks.json");
-        const workload = JSON.parse(await readFile(taskFile, "utf8"));
-        const byGuard = (guard) =>
-          workload.nodes.find((node) => node.operations[0].guard === guard);
-        const north = byGuard("NORTH_H");
-        const south = byGuard("SOUTH_H");
-        // This controlled graph makes an input requirement explicit. Produce a
-        // fresh real reference proof instead of relabelling the original proof.
-        south.dependencies.push(north.id);
-        workload.summary.dependencyEdges++;
-        const bytes = JSON.stringify(workload) + "\n";
-        await writeFile(taskFile, bytes);
-        const manifestFile = path.join(selected, "manifest.json");
-        const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
-        manifest.atomic.workloadSha256 = digest(bytes);
-        await writeFile(manifestFile, JSON.stringify(manifest));
-        const reference = await runConcurrent(selected, path.join(root, "dependent-reference"), {
+        const drivers = deterministicDrivers({ skipFirstNorth: true });
+        const report = await runConcurrent(preparation, path.join(root, "repair"), {
+          ...drivers,
           log: quiet,
         });
-        assert.equal(reference.status, "pass", JSON.stringify(reference.terminal));
-        const drivers = deterministicDrivers();
-        const output = path.join(root, "dependent-live");
-        const report = await runConcurrent(selected, output, { ...drivers, log: quiet });
         assert.equal(report.status, "pass", JSON.stringify(report.terminal));
-        assert.equal(atomicRows(report).length, 3);
-        assertInputTrace(report);
-        const checks = report.atomicBarriers[0].inputChecks.filter(
-          (check) => check.atomicId === south.id,
+        const original = drivers.calls.find(
+          (call) =>
+            call.attempt === 1 &&
+            call.operations.some((operation) => operation.guard === "NORTH_H"),
         );
-        const passed = checks.find((check) => check.decision === "pass");
-        assert.ok(passed);
-        assert.deepEqual(passed.observations[0], {
-          atomicId: north.id,
-          mode: "prerequisite-output",
-          status: "pass",
-          reason: null,
-        });
-        const dependent = atomicRows(report).find((row) => row.atomicId === south.id);
-        assert.ok(passed.startedMs + passed.elapsedMs <= dependent.startedMs);
+        const corrections = drivers.calls.filter((call) => call.attempt > 1);
+        assert.ok(corrections.length);
+        const corrected = corrections.find((call) =>
+          call.operations.some((operation) => operation.guard === "NORTH_H"),
+        );
+        assert.ok(corrected);
+        assert.notEqual(corrected.agent, original.agent);
+        assert.equal(corrected.attempt, 2);
+        assert.deepEqual(corrected.atomicIds, []);
+        assert.ok(
+          corrected.repairTasks.every(
+            (task) =>
+              task.id.startsWith("repair-round-001-attempt-2-") &&
+              task.operations.every((operation) => operation.phase === "repair"),
+          ),
+        );
+        assert.ok(
+          report.executions
+            .filter((row) => row.attempt > 1)
+            .every(
+              (row) =>
+                row.tasks.length === 0 &&
+                row.atomicIds.length === 0 &&
+                row.repairIds.length > 0 &&
+                row.repairIds.length <= report.batchSize,
+            ),
+        );
+        const rejected = report.checks.find((check) => check.status === "fail");
+        const first = report.executions.filter((row) => row.attempt === 1);
+        assert.ok(first.every((row) => row.startedMs + row.elapsedMs <= rejected.startedMs));
+        assert.equal(rejected.category, "structure");
         assert.equal(
-          atomicRows(report).find((row) => row.atomicId === north.id).atomicCheck.status,
-          "pass",
+          new Set(
+            atomicRows(report)
+              .filter((row) => row.attempt === 1)
+              .map((row) => row.atomicId),
+          ).size,
+          3,
         );
-        const saved = JSON.parse(await readFile(path.join(output, "report.json"), "utf8"));
-        assert.deepEqual(saved.atomicBarriers[0].inputChecks, report.atomicBarriers[0].inputChecks);
+        assertBarrierOnly(report);
+        assert.deepEqual(await readTree(path.join(root, "repair/workspace")), expected);
+        assert.deepEqual(report.checks.at(-1).pixels, pixels);
+      },
+    );
+
+    await t.test("compiler failures without an original executor remain team repairs", async () => {
+      const drivers = deterministicDrivers({ breakBuild: true });
+      const report = await runConcurrent(preparation, path.join(root, "compiler-repair"), {
+        ...drivers,
+        log: quiet,
+      });
+      assert.equal(report.status, "pass", JSON.stringify(report.terminal));
+      const rejected = report.checks.find((check) => check.status === "fail");
+      assert.ok(rejected);
+      assert.ok(report.executions.some((row) => row.attempt > 1));
+      assert.equal(report.acceptedTasks, 2);
+      assertBarrierOnly(report);
+      assert.deepEqual(report.checks.at(-1).pixels, pixels);
+    });
+
+    await t.test(
+      "settled turns without edits exhaust the fixed barrier budget without credit",
+      async () => {
+        const drivers = deterministicDrivers({ noEdits: true });
+        const report = await runConcurrent(preparation, path.join(root, "exhausted"), {
+          ...drivers,
+          log: quiet,
+        });
+        assert.equal(report.status, "blocked");
+        assert.equal(report.acceptedTasks, 0);
+        assert.equal(report.acceptedRounds, 0);
+        assert.equal(report.atomicBarriers.length, MULTI_AGENT_MAX_ATTEMPTS);
+        assert.equal(
+          report.checks.filter((check) => check.status === "fail").length,
+          MULTI_AGENT_MAX_ATTEMPTS,
+        );
+        assert.ok(report.agentsClosed.every(Boolean));
+        assertBarrierOnly(report);
       },
     );
 
     await t.test(
-      "a proof for an earlier dispatch contract rejects before driver startup",
+      "cancellation waits for active harness turns and closes persistent histories",
+      async () => {
+        const controller = new AbortController();
+        const active = new Set(),
+          closed = new Set();
+        let entered = 0;
+        const report = await runConcurrent(preparation, path.join(root, "cancelled"), {
+          signal: controller.signal,
+          log: quiet,
+          createDriver: async (_workspace, _state, agent) => ({
+            get closed() {
+              return closed.has(agent);
+            },
+            async execute(_prompt, options) {
+              active.add(agent);
+              if (++entered === 2) controller.abort(new Error("cancel fixture"));
+              try {
+                await waitForPeer(new Promise(() => {}), options.signal);
+              } finally {
+                active.delete(agent);
+              }
+            },
+            async close() {
+              assert.equal(active.has(agent), false);
+              closed.add(agent);
+            },
+          }),
+        });
+        assert.equal(report.status, "cancelled");
+        assert.equal(active.size, 0);
+        assert.equal(closed.size, 2);
+        assert.equal(report.acceptedTasks, 0);
+      },
+    );
+
+    await t.test(
+      "real Pi Bash repairs retained source in the newly assigned native history",
+      async (t) => {
+        const calls = [],
+          providers = [];
+        const output = path.join(root, "native-repair");
+        const report = await runConcurrent(preparation, output, {
+          log: quiet,
+          createDriver: async (workspace, state, agent) => {
+            const providerRoot = state + "-provider";
+            await mkdir(providerRoot, { recursive: true });
+            let current;
+            const provider = await providerFixture(providerRoot, (body) => {
+              if (body.messages.at(-1).role === "tool") return {};
+              const operations = headerDelivery(current.prompt, current.options).filter(
+                (operation) => operation.guard !== "NORTH_H" || current.options.attempt > 1,
+              );
+              const program = [
+                "import json, pathlib",
+                "operations = json.loads(" + JSON.stringify(JSON.stringify(operations)) + ")",
+                "for operation in operations:",
+                " source = pathlib.Path('main.cpp')",
+                " text = source.read_text()",
+                " marker = '#ifndef ' + operation['guard'] + '\\n'",
+                " if marker not in text: continue",
+                " start = text.index(marker)",
+                " end = text.index('#endif', start) + len('#endif')",
+                " pathlib.Path(operation['file']).write_text(text[start:end])",
+                " source.write_text(text[:start] + '#include ' + chr(34) + operation['file'] + chr(34) + '\\n' + text[end:].lstrip('\\n'))",
+              ].join("\n");
+              return { command: "python3 -c '" + program.replaceAll("'", "'\\''") + "'" };
+            });
+            providers.push(provider);
+            t.after(() => provider.close());
+            const driver = await startBaseline(workspace, state, provider.config, {
+              eventsFile: path.join(state, "events.jsonl"),
+            });
+            return {
+              get closed() {
+                return driver.closed;
+              },
+              async execute(prompt, options) {
+                current = { prompt, options };
+                try {
+                  const receipt = await driver.execute(prompt, options);
+                  calls.push({
+                    agent,
+                    ...options,
+                    operations: headerDelivery(prompt, options),
+                    receipt,
+                  });
+                  return receipt;
+                } finally {
+                  current = undefined;
+                }
+              },
+              close: () => driver.close(),
+            };
+          },
+        });
+        assert.equal(report.status, "pass", JSON.stringify(report.terminal));
+        const correction = calls.find(
+          (call) =>
+            call.attempt > 1 && call.operations.some((operation) => operation.guard === "NORTH_H"),
+        );
+        const original = calls.find(
+          (call) =>
+            call.attempt === 1 &&
+            call.operations.some((operation) => operation.guard === "NORTH_H"),
+        );
+        assert.ok(correction && original);
+        assert.deepEqual(correction.atomicIds, []);
+        assert.ok(
+          correction.repairTasks.every((task) =>
+            task.operations.every((operation) => operation.phase === "repair"),
+          ),
+        );
+        assert.notEqual(correction.agent, original.agent);
+        const ownFirst = calls.find(
+          (call) => call.agent === correction.agent && call.attempt === 1,
+        );
+        assert.equal(correction.receipt.sessionId, ownFirst.receipt.sessionId);
+        assert.equal(correction.receipt.lifetime, ownFirst.receipt.lifetime);
+        assert.ok(correction.receipt.messageCount > ownFirst.receipt.messageCount);
+        assert.ok(
+          calls.every((call) => call.receipt.toolCalls === 1 && call.receipt.failedToolCalls === 0),
+        );
+        assert.deepEqual(await readTree(path.join(output, "workspace")), expected);
+        assert.deepEqual(report.checks.at(-1).pixels, pixels);
+        assert.equal(providers.length, 2);
+        assertBarrierOnly(report);
+      },
+    );
+
+    await t.test(
+      "mismatched dispatch or inventory proofs reject before driver startup",
       async () => {
         const manifestFile = path.join(preparation, "manifest.json");
-        const original = await readFile(manifestFile, "utf8");
-        const manifest = JSON.parse(original);
-        const output = path.join(root, "invalid-dispatch-contract");
-        manifest.atomic.dispatchPolicySha256 = "0".repeat(64);
-        await writeFile(manifestFile, JSON.stringify(manifest));
-        let opened = false;
-        try {
-          await assert.rejects(
-            runConcurrent(preparation, output, {
-              log: quiet,
-              createDriver: async () => {
-                opened = true;
-                throw Error("Driver must not start");
-              },
-            }),
-            /Atomic dispatch policy changed/,
-          );
-          assert.equal(opened, false);
-          await assert.rejects(access(output), { code: "ENOENT" });
-        } finally {
-          await writeFile(manifestFile, original);
-        }
-      },
-    );
-    await t.test(
-      "wrong reference participant or atomic inventory counts reject before driver startup",
-      async () => {
-        for (const [field, value, message] of [
-          ["agents", 1, /participant count/],
-          ["acceptedAtomicEdits", 2, /inventory is incomplete/],
+        const originalManifest = await readFile(manifestFile, "utf8");
+        const manifest = JSON.parse(originalManifest);
+        for (const [kind, field, value] of [
+          ["manifest", "dispatchPolicySha256", "0".repeat(64)],
+          ["proof", "agents", 1],
+          ["proof", "acceptedAtomicEdits", 2],
+          ["proof", "repairs", 1],
+          ["proof", "referenceFirstPass", undefined],
+          [
+            "proof",
+            "referenceFirstPass",
+            {
+              ...proof.referenceFirstPass,
+              barriers: proof.referenceFirstPass.barriers.map((barrier) => ({
+                ...barrier,
+                attempt: 2,
+              })),
+            },
+          ],
         ]) {
-          const output = path.join(root, `invalid-${field}`);
-          await writeFile(proofFile, JSON.stringify({ ...proof, [field]: value }));
+          const output = path.join(root, "invalid-" + field);
           let opened = false;
           try {
+            if (kind === "manifest")
+              await writeFile(
+                manifestFile,
+                JSON.stringify({ ...manifest, atomic: { ...manifest.atomic, [field]: value } }),
+              );
+            else await writeFile(proofFile, JSON.stringify({ ...proof, [field]: value }));
             await assert.rejects(
               runConcurrent(preparation, output, {
                 log: quiet,
                 createDriver: async () => {
                   opened = true;
-                  throw Error("Driver must not start");
+                  throw new Error("unexpected driver");
                 },
               }),
-              message,
             );
             assert.equal(opened, false);
             await assert.rejects(access(output), { code: "ENOENT" });
           } finally {
+            await writeFile(manifestFile, originalManifest);
             await writeFile(proofFile, JSON.stringify(proof));
           }
         }

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAtomicInventory } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-inventory.mjs";
 import { prepareCoherentContract } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
-import { evaluateAtomicBindingGate } from "../../src/suites/explicit-edit-multi-agent/grading/atomic-binding-gate.mjs";
 
 const source = "int sum(int left) { return left + 7; }\n";
 
@@ -108,32 +107,4 @@ await test("file reuse preserves inventory order and rejects malformed peer file
   assert.deepEqual(repaired, prepareCoherentContract(tree));
   const reversed = Object.fromEntries(Object.entries(tree).reverse());
   assert.deepEqual(read(reversed), prepareCoherentContract(reversed));
-});
-
-await test("binding decisions remain fresh while unchanged lexical records are reused", () => {
-  const readInventory = createAtomicInventory();
-  const expected = prepareCoherentContract({ "main.cpp": source });
-  const owner = expected.obligations.find((record) => record.kind === "owner");
-  const projection = {
-    records: [
-      {
-        ...owner,
-        masks: owner.tokens.flatMap((token, index) =>
-          token === "left" ? [{ index, from: "a", to: "left", role: "current" }] : [],
-        ),
-      },
-    ],
-  };
-  const tree = { "main.cpp": source };
-  const passed = evaluateAtomicBindingGate(tree, projection, { readInventory });
-  assert.equal(passed.status, "pass");
-  const second = evaluateAtomicBindingGate(tree, projection, { readInventory });
-  assert.notEqual(second, passed);
-  tree["main.cpp"] = source.replaceAll("left", "a");
-  assert.equal(evaluateAtomicBindingGate(tree, projection, { readInventory }).status, "fail");
-  tree["main.cpp"] = source.replace("7", "8");
-  assert.equal(
-    evaluateAtomicBindingGate(tree, projection, { readInventory }).status,
-    "unobservable",
-  );
 });

@@ -17,11 +17,11 @@ export const MULTI_AGENT_POLICY = Object.freeze({
   trialTimeoutMs: null,
   attemptTimeoutMs: null,
   oracleRecoveries: 5,
-  feedbackMode: "task-scoped-diagnostics",
+  feedbackMode: "public-prompts-then-compiler-then-pixels",
   workspace: "shared-live",
   checkpoint: "ready-task-barrier",
   commitOrder: "observed-not-prescribed",
-  assignment: "rotating-stable-ready-order",
+  assignment: "balanced-team-dependency-queues",
 });
 /** Initial delivery plus the fixed retained-state correction budget. */
 export const MULTI_AGENT_MAX_ATTEMPTS = MULTI_AGENT_POLICY.oracleRecoveries + 1;
@@ -64,6 +64,9 @@ function comparisonKey(result) {
       protocol: result.protocol,
       identity: result.identity,
       agents: result.configuration.agents,
+      ...(Object.hasOwn(result.configuration, "batchSize")
+        ? { batchSize: result.configuration.batchSize }
+        : {}),
       runtime: result.configuration.runtime,
       harness: result.configuration.harness,
       policy: result.policy,
@@ -71,19 +74,40 @@ function comparisonKey(result) {
   );
 }
 
-/** Return every atomic member of one native delivery without multiplying its receipt.
- * atomicId is the first member and names the native artifact directory. Historical
- * singleton deliveries have no atomicIds array. Unscoped global repairs are invalid.
+/** Return original atom coverage, not fresh problem-work identities.
+ * Fresh repairs carry repairIds and no original atoms. Unversioned historical
+ * reports may lack problem IDs and retain their earlier delivery representation.
  */
 export function atomicDeliveryIds(delivery) {
-  assert.ok(!Object.hasOwn(delivery, "deliveryKind"), "Unscoped global repair is not permitted");
+  assert.equal(typeof delivery.atomicId, "string", "Missing atomic delivery artifact ID");
+  const repair = Object.hasOwn(delivery, "deliveryKind");
+  if (repair) {
+    assert.equal(delivery.deliveryKind, "barrier-repair", "Unsupported delivery kind");
+    assert.match(delivery.atomicId, /^repair-round-\d{3}-[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+    assert.ok(Object.hasOwn(delivery, "atomicIds"), "Repair must declare its original atom IDs");
+  }
   const ids = Object.hasOwn(delivery, "atomicIds") ? delivery.atomicIds : [delivery.atomicId];
-  assert.ok(
-    Array.isArray(ids) && ids.length > 0 && ids.length <= ATOMIC_DISPATCH_POLICY.maxBatchSize,
-    "Invalid atomic batch size",
-  );
+  assert.ok(Array.isArray(ids) && (repair || ids.length > 0), "Invalid atomic batch size");
+  if (Object.hasOwn(delivery, "repairIds")) {
+    assert.ok(repair, "Only barrier repairs can carry problem IDs");
+    assert.equal(ids.length, 0, "Fresh repairs cannot replay original atom IDs");
+    assert.ok(Array.isArray(delivery.repairIds) && delivery.repairIds.length > 0);
+    assert.equal(new Set(delivery.repairIds).size, delivery.repairIds.length);
+    assert.equal(
+      delivery.atomicId,
+      delivery.repairIds[0],
+      "Repair artifact differs from first problem",
+    );
+    for (const id of delivery.repairIds)
+      assert.ok(typeof id === "string" && /^repair-[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(id));
+  }
   assert.equal(new Set(ids).size, ids.length, "Duplicate atomic batch member");
-  assert.equal(delivery.atomicId, ids[0], "Atomic representative differs from first batch member");
+  if (!repair)
+    assert.equal(
+      delivery.atomicId,
+      ids[0],
+      "Atomic representative differs from first batch member",
+    );
   for (const id of ids) {
     assert.ok(typeof id === "string", "Missing atomic delivery ID");
     assert.match(id, /^task-\d{3}[-_:][A-Za-z0-9][A-Za-z0-9._:-]*$/);
@@ -91,23 +115,49 @@ export function atomicDeliveryIds(delivery) {
   return ids;
 }
 
-/** Resolve the last delivery for each member, including partial batch corrections. */
+/** Return scheduling work identities without treating repair work as atom coverage. */
+export function streamDeliveryWorkIds(delivery) {
+  const atoms = atomicDeliveryIds(delivery);
+  return delivery.repairIds ?? atoms;
+}
+/** Resolve retained atom deliveries. Generic repairs remain separate native turns. */
 export function latestStreamDeliveries(deliveries) {
   return new Map(deliveries.flatMap((item) => atomicDeliveryIds(item).map((id) => [id, item])));
 }
 
-/** Validate that one delivery contains only its declared parents from this barrier. */
-export function validateAtomicParents(delivery, parents, barrierParents) {
+/** Validate original delivery attribution and fresh problem-work bounds.
+ * Fresh repairs claim no original parents. Historical deliveries without problem
+ * IDs retain their previous public-prefix rules for reading old observations.
+ */
+export function validateAtomicParents(
+  delivery,
+  parents,
+  barrierParents,
+  { availableParents = barrierParents, batchSize = ATOMIC_DISPATCH_POLICY.defaultBatchSize } = {},
+) {
+  integer(batchSize, 1);
   const ids = atomicDeliveryIds(delivery);
-  const actual = [...new Set(ids.map((id) => id.slice(0, 8)))];
-  assert.ok(Array.isArray(parents), "Missing atomic parent tasks");
-  assert.deepEqual(
-    [...parents].sort(),
-    actual.sort(),
-    "Atomic delivery contradicts its parent tasks",
-  );
   assert.ok(
-    parents.every((task) => barrierParents.includes(task)),
+    streamDeliveryWorkIds(delivery).length <= batchSize,
+    "Delivery exceeds the configured message size",
+  );
+  const actual = [...new Set(ids.map((id) => id.slice(0, 8)))];
+  assert.ok(
+    Array.isArray(parents) && (delivery.deliveryKind || parents.length > 0),
+    "Missing atomic parent tasks",
+  );
+  if (delivery.repairIds)
+    assert.equal(parents.length, 0, "Fresh problems cannot claim original parent deliveries");
+  assert.equal(new Set(parents).size, parents.length, "Duplicate atomic parent task");
+  if (ids.length)
+    assert.deepEqual(
+      [...parents].sort(),
+      actual.sort(),
+      "Atomic delivery contradicts its parent tasks",
+    );
+  const allowed = delivery.deliveryKind ? availableParents : barrierParents;
+  assert.ok(
+    parents.every((task) => allowed.includes(task)),
     "Unscheduled atomic parent task",
   );
 }
@@ -125,7 +175,8 @@ function settledStreamDelivery(execution) {
 function validateStreamExecutions(raw, rounds) {
   const deliveries = new Map();
   const positions = new Map(raw.schedule.map((round, index) => [round.id, index]));
-  const owners = new Map();
+  const batchSize = raw.batchSize ?? ATOMIC_DISPATCH_POLICY.defaultBatchSize;
+  integer(batchSize, 1);
   let previous = -1;
   for (const execution of raw.executions) {
     const round = rounds.get(execution.round);
@@ -143,19 +194,28 @@ function validateStreamExecutions(raw, rounds) {
       execution,
       execution.tasks,
       round.assignments.map((item) => item.task),
+      {
+        batchSize,
+        availableParents: raw.schedule
+          .slice(0, position + 1)
+          .flatMap((item) => item.assignments.map((assignment) => assignment.task)),
+      },
     );
-    for (const id of atomicDeliveryIds(execution)) {
-      const key = `${round.id}:${id}`;
-      if (owners.has(key))
-        assert.equal(owners.get(key), execution.agent, "Repair changed task executor");
-      else owners.set(key, execution.agent);
+    if (execution.deliveryKind) {
+      assert.ok(execution.attempt > 1, "Initial delivery cannot be a barrier repair");
+      assert.ok(
+        execution.atomicId.startsWith(`repair-${round.id}-`),
+        "Repair artifact has another barrier",
+      );
     }
     assert.ok(["settled", "error"].includes(execution.status), "Invalid atomic delivery status");
     const key = `${round.id}:${execution.attempt}`;
     const group = deliveries.get(key) ?? [];
     assert.ok(
-      !group.some((item) =>
-        atomicDeliveryIds(item).some((id) => atomicDeliveryIds(execution).includes(id)),
+      !group.some(
+        (item) =>
+          item.atomicId === execution.atomicId ||
+          streamDeliveryWorkIds(item).some((id) => streamDeliveryWorkIds(execution).includes(id)),
       ),
       "Duplicate atomic delivery",
     );
@@ -190,13 +250,13 @@ function validateStreamExecutions(raw, rounds) {
     );
     const latest = latestStreamDeliveries(earlier);
     assert.ok(
-      [...latest.values()].every(settledStreamDelivery),
+      [...latest.values(), ...group].every(settledStreamDelivery),
       "Passing barrier has unsettled atomic deliveries",
     );
     assert.ok(
       round.assignments.every((assignment) =>
-        earlier.some(
-          (item) => Object.hasOwn(item, "atomicId") && item.tasks.includes(assignment.task),
+        earlier.some((item) =>
+          atomicDeliveryIds(item).some((id) => id.slice(0, 8) === assignment.task),
         ),
       ),
       "Passing barrier lacks parent task deliveries",
@@ -240,7 +300,16 @@ export function validateMultiAgentResult(result) {
     "initial",
   ]);
   for (const value of Object.values(result.identity)) digest(value);
-  keys(result.configuration, ["agents", "graphWidth", "model", "thinking", "harness", "runtime"]);
+  keys(result.configuration, [
+    "agents",
+    "graphWidth",
+    "model",
+    "thinking",
+    "harness",
+    "runtime",
+    ...(Object.hasOwn(result.configuration, "batchSize") ? ["batchSize"] : []),
+  ]);
+  if (Object.hasOwn(result.configuration, "batchSize")) integer(result.configuration.batchSize, 1);
   integer(result.configuration.agents, 1);
   integer(result.configuration.graphWidth, 1);
   assert.ok(result.configuration.agents <= result.configuration.graphWidth);
@@ -454,6 +523,7 @@ export function multiAgentResult(raw) {
     },
     configuration: {
       agents: raw.agents,
+      batchSize: raw.batchSize ?? ATOMIC_DISPATCH_POLICY.defaultBatchSize,
       graphWidth: raw.graphWidth,
       model: raw.model ?? null,
       thinking: raw.thinking ?? null,

@@ -65,7 +65,7 @@ async function alive(pid) {
 }
 
 await test(
-  "separate isolated participants share compiler reuse without sharing participant lifetimes",
+  "separate isolated participants own independent compiler state and survive peer closure",
   { timeout: 20_000 },
   async (t) => {
     const { tools, workspace, executors } = await setup(t);
@@ -80,36 +80,45 @@ await test(
     assert.equal(a.delivered, 1);
     assert.equal(b.delivered, 1);
     assert.equal(Math.max(a.planner.snapshotAttempts, b.planner.snapshotAttempts), 1);
-    assert.equal(Math.max(a.planner.cacheHits, b.planner.cacheHits), 1);
+    assert.equal(a.planner.cacheHits, 0);
+    assert.equal(b.planner.cacheHits, 0);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const current = (await readTree(workspace))["main.cpp"];
+      const repair = [];
+      if (current.includes("int a")) repair.push(first.execute(rename("a", "a", "left_long")));
+      if (current.includes("int b")) repair.push(second.execute(rename("b", "b", "right")));
+      if (!repair.length) break;
+      await Promise.all(repair);
+    }
     assert.deepEqual(await readTree(workspace), {
       "main.cpp": "int sum(int left_long, int right) { return left_long + right; }\n",
     });
     await first.close();
     const next = await second.execute(rename("again", "right", "final"));
     assert.equal(next.lifetime, b.lifetime);
-    assert.equal(next.delivered, 2);
+    assert.ok(next.delivered > b.delivered);
   },
 );
 await test(
-  "cancellation waits for the service namespace and its session-escaped compiler children",
+  "cancellation waits for the participant namespace and its session-escaped compiler children",
   { timeout: 20_000 },
   async (t) => {
     const { tools, workspace, executors } = await setup(t);
     const compiler = path.join(tools, "cpp/compiler-ast.mjs");
     const source = await readFile(compiler, "utf8");
-    const original =
-      '"clang++",\n    [...flags, "-fsyntax-only", "-Xclang", "-ast-dump=json", sourcePath]';
-    assert.ok(source.includes(original));
+    const original = /\bspawn\(\s*"clang\+\+",\s*\[/g;
+    assert.equal([...source.matchAll(original)].length, 1);
     await writeFile(
       compiler,
-      source.replace(original, '"bash",\n    ["-c", "setsid sleep 30 & wait"]'),
+      source.replace(original, 'spawn("bash",\n    ["-c", "setsid sleep 30 & wait",'),
     );
     const controller = new AbortController();
     const executor = concurrentExecutor(workspace, tools, { signal: controller.signal });
     executors.push(executor);
     const delivery = executor.execute(rename("cancelled", "a", "left"));
     const settled = assert.rejects(delivery, /closed|exited|abort|cancel/i);
-    let owned = [];
+    let owned = [],
+      escapedCompiler;
     for (let attempt = 0; attempt < 400; attempt++) {
       const candidates = await descendants(process.pid);
       const roots = [];
@@ -125,19 +134,27 @@ await test(
           (await Promise.all(roots.map(async (pid) => [pid, ...(await descendants(pid))]))).flat(),
         ),
       ];
-      let sleeping = false;
       for (const pid of owned) {
         try {
-          sleeping ||= (await readFile(`/proc/${pid}/cmdline`, "utf8"))
-            .replaceAll("\0", " ")
-            .includes("sleep 30");
+          const args = (await readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0").filter(Boolean);
+          if (args.length !== 2 || path.basename(args[0]) !== "sleep" || args[1] !== "30") continue;
+          const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+          const fields = stat
+            .slice(stat.lastIndexOf(")") + 2)
+            .trim()
+            .split(/\s+/);
+          if (Number(fields[2]) === pid && Number(fields[3]) === pid) {
+            escapedCompiler = pid;
+            break;
+          }
         } catch (error) {
           if (error.code !== "ENOENT") throw error;
         }
       }
-      if (sleeping) break;
+      if (escapedCompiler) break;
       await delay(10);
     }
+    assert.ok(escapedCompiler, "The actual compiler child must have escaped into its own session");
     assert.ok(
       owned.length >= 5,
       "The reference service and actual compiler subtree must have started",

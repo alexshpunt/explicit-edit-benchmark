@@ -4,13 +4,14 @@ import { runAtomicStream } from "../../src/suites/explicit-edit-multi-agent/exec
 
 const node = (id, dependencies = []) => ({ id, dependencies });
 
-test("cancellation closes an observed case only after its writer has settled", async () => {
+test("cancellation closes a delivery observation only after its writer settles", async () => {
   const events = [];
   const entered = Promise.withResolvers();
   const controller = new AbortController();
   let closed = false;
   const run = runAtomicStream([node("cancelled")], {
     agents: 1,
+    batchSize: 1,
     signal: controller.signal,
     onCase: (event) => events.push(event),
     execute: async (_item, _agent, signal) => {
@@ -26,67 +27,30 @@ test("cancellation closes an observed case only after its writer has settled", a
         entered.resolve();
       });
     },
-    verify: async () => assert.fail("Cancelled writer cannot receive credit"),
   });
   await entered.promise;
   controller.abort(Error("case deadline"));
-  await assert.rejects(run, /case deadline/);
+  await assert.rejects(run, (error) => error === controller.signal.reason);
   assert.equal(closed, true);
   assert.deepEqual(events, [
-    { event: "case-start", id: "cancelled", phase: "atomic" },
-    { event: "case-end", id: "cancelled", phase: "atomic", status: "error" },
+    { event: "case-start", id: "cancelled", phase: "delivery" },
+    { event: "case-end", id: "cancelled", phase: "delivery", status: "cancelled" },
   ]);
 });
 
-test("case lifetimes span deferred input and output checks instead of resetting on retries", async () => {
+test("case observations record deliveries without inventing per-edit acceptance", async () => {
   const events = [];
-  const releasePeer = Promise.withResolvers();
-  let inputs = 0;
-  let outputs = 0;
-  const result = await runAtomicStream([node("first"), node("peer")], {
+  const result = await runAtomicStream([node("first"), node("second", ["first"])], {
     agents: 2,
+    batchSize: 1,
     onCase: (event) => events.push(event),
-    checkInputs: async (item) => (item.id === "first" && ++inputs === 1 ? "pending" : true),
-    execute: async (item) => {
-      if (item.id === "peer") await releasePeer.promise;
-    },
-    verify: async (item) => {
-      if (item.id === "first" && ++outputs === 1) {
-        setImmediate(() => releasePeer.resolve());
-        return "pending";
-      }
-      return true;
-    },
+    execute: async () => {},
   });
-  assert.equal(result.status, "pass");
-  assert.ok(inputs >= 2 && outputs >= 2);
-  for (const id of ["first", "peer"]) {
-    assert.deepEqual(
-      events.filter((event) => event.id === id),
-      [
-        { event: "case-start", id, phase: "atomic" },
-        { event: "case-end", id, phase: "atomic", status: "pass" },
-      ],
-    );
-  }
-});
-
-test("case observers do not invent starts for retained work or blocked successors", async () => {
-  const events = [];
-  const result = await runAtomicStream(
-    [node("retained"), node("rejected"), node("dependent", ["rejected"])],
-    {
-      agents: 2,
-      completed: new Set(["retained"]),
-      onCase: (event) => events.push(event),
-      checkInputs: async () => false,
-      execute: async () => assert.fail("Rejected input cannot dispatch"),
-      verify: async () => true,
-    },
-  );
-  assert.equal(result.status, "blocked");
+  assert.equal(result.status, "drained");
   assert.deepEqual(events, [
-    { event: "case-start", id: "rejected", phase: "atomic" },
-    { event: "case-end", id: "rejected", phase: "atomic", status: "fail" },
+    { event: "case-start", id: "first", phase: "delivery" },
+    { event: "case-end", id: "first", phase: "delivery", status: "settled" },
+    { event: "case-start", id: "second", phase: "delivery" },
+    { event: "case-end", id: "second", phase: "delivery", status: "settled" },
   ]);
 });

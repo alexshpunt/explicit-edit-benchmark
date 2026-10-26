@@ -4,13 +4,17 @@ import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import * as protocol from "../../scripts/normalized-team-protocol.mjs";
-import { runMultiAgentBatch } from "../../scripts/run-multi-agent-batch.mjs";
+import { runMultiAgentBatch, suiteVerifier } from "../../scripts/run-multi-agent-batch.mjs";
 import {
   MULTI_AGENT_PROTOCOL,
   MULTI_AGENT_POLICY,
 } from "../../src/suites/explicit-edit-multi-agent/results.mjs";
 import { tempDirectory } from "../helpers/temp.mjs";
 import { atomicIdentity } from "../helpers/atomic-identity.mjs";
+import {
+  REFERENCE_EXECUTION_POLICY,
+  referenceFirstPass,
+} from "../../src/suites/explicit-edit-multi-agent/reference/execution-proof.mjs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -19,7 +23,7 @@ test("atomic identities allow only the current dispatch contract and safe comple
   assert.equal(typeof protocol.validateAtomicIdentity, "function");
   protocol.validateAtomicIdentity(identity);
   for (const [key, value] of Object.entries({
-    version: "renderer-atomic-stream-v2",
+    version: "renderer-atomic-stream-v1",
     workloadSha256: "private file content",
     batchesSha256: "",
     dispatchPolicySha256: "a".repeat(64),
@@ -54,6 +58,11 @@ test("normalized readers keep coarse diagnostics readable and validate an option
   const policy = { oracleRecoveries: 5, retryFailures: 0, concurrency: 15, timeoutMs: null };
   protocol.validateTeamSuite(suite, MULTI_AGENT_PROTOCOL, policy);
   protocol.validateTeamSuite({ ...suite, atomic: atomicIdentity() }, MULTI_AGENT_PROTOCOL, policy);
+  protocol.validateTeamSuite({ ...suite, batchSize: 75 }, MULTI_AGENT_PROTOCOL, policy);
+  for (const batchSize of [0, -1, 1.5, "50", null])
+    assert.throws(() =>
+      protocol.validateTeamSuite({ ...suite, batchSize }, MULTI_AGENT_PROTOCOL, policy),
+    );
   assert.throws(
     () =>
       protocol.validateTeamSuite(
@@ -95,7 +104,39 @@ await test("the common batch binds its atomic proof and artifacts before creatin
     protocol: MULTI_AGENT_PROTOCOL,
     policy: MULTI_AGENT_POLICY,
     agents: 15,
+    batchSize: 50,
     acceptedAtomicEdits: 71,
+    acceptedRounds: 1,
+    repairs: 0,
+    referenceFirstPass: referenceFirstPass({
+      acceptedRounds: 1,
+      totalRounds: 1,
+      repairs: 0,
+      atomic: { edits: 71 },
+      atomicBarriers: [{ round: "fixture-round", attempt: 1, status: "accepted" }],
+      checks: [
+        { contractId: "initial", status: "pass" },
+        { contractId: "fixture-round", status: "pass" },
+      ],
+      executions: [
+        {
+          attempt: 1,
+          status: "settled",
+          atomicIds: Array.from({ length: 71 }, (_, i) => `fixture-atom-${i}`),
+        },
+      ],
+    }),
+    referenceExecution: REFERENCE_EXECUTION_POLICY,
+    referenceSourceSha256: await suiteVerifier(),
+    referenceConcurrency: {
+      executors: 15,
+      maxWorking: 15,
+      maxPlanning: 15,
+      maxPublishing: 2,
+      workIntervals: 71,
+      planningIntervals: 71,
+      publicationIntervals: 71,
+    },
     atomic,
     scheduleSha256: hash("schedule"),
   };
@@ -127,7 +168,18 @@ await test("the common batch binds its atomic proof and artifacts before creatin
     ["missing", { ...manifest, atomic: undefined }, { ...proof, atomic: undefined }],
     ["unmatched", manifest, { ...proof, atomic: { ...atomic, workloadSha256: hash("wrong") } }],
     ["budget", manifest, { ...proof, acceptedAtomicEdits: 70 }],
+    ["reference-source", manifest, { ...proof, referenceSourceSha256: hash("obsolete source") }],
+    [
+      "protected-reference",
+      manifest,
+      {
+        ...proof,
+        referenceExecution: { ...REFERENCE_EXECUTION_POLICY, publication: "locked-CAS" },
+      },
+    ],
     ["agents", manifest, { ...proof, agents: 14 }],
+    ["delivery-size", manifest, { ...proof, batchSize: 75 }],
+    ["missing-delivery-size", manifest, { ...proof, batchSize: undefined }],
     [
       "dispatch",
       { ...manifest, atomic: { ...atomic, dispatchPolicySha256: hash("wrong") } },

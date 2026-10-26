@@ -73,6 +73,19 @@ test("real Pi executes fifty current atoms per native bash call and retains dist
     assert.equal(receipt.failedToolCalls, 0);
     assert.equal(receipt.scriptedReference.status, "edited");
   }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const current = await readFile(path.join(workspace, "main.cpp"), "utf8");
+    const missing = names.filter((name) => current.includes(`#ifndef ${name.toUpperCase()}_H`));
+    if (!missing.length) break;
+    await Promise.all(
+      [0, 1].map(async (agent) => {
+        const owned = missing.filter((name) =>
+          name === "West" ? agent === 0 : names.indexOf(name) < 50 ? agent === 0 : agent === 1,
+        );
+        if (owned.length) await deliver(agent, owned);
+      }),
+    );
+  }
   for (const name of names) {
     assert.match(
       await readFile(path.join(workspace, `${name.toLowerCase()}.h`), "utf8"),

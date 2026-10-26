@@ -29,8 +29,9 @@ Multi Edit ([Explicit Edit — Multi-Agent](docs/multi-agent.md),
 `explicit-edit-multi-agent`) tests whether agents can make precise, atomic edits
 and leave the product working, even while other agents change the same code.
 Each requested edit is feasible and checked with a scripted reference engine.
-A dependency graph determines which edits are independent and can run together;
-not every task can start at once, and not all 15 agents are busy at every round.
+A dependency graph fixes the 28 barriers. Within each barrier, atomic edits are
+split evenly across the team, with dependent chains kept together. Small barriers
+use fewer agents; barriers are not merged just to fill the team.
 
 ### Methodology
 
@@ -42,14 +43,18 @@ monolith into working headers and implementation files and restore the names.
 They must preserve function bodies, literals, macros, inactive branches and
 previously accepted edits. See the [source provenance and licenses](fixtures/explicit-edit-multi-agent/PROVENANCE.md).
 
-The 15 agents share one live workspace, with separate histories and rotating
-assignments. A scripted reference engine proves the full parallel schedule
-before measured agents start. After each round, the verifier checks the combined
-edits, builds a fresh project and renders two scenes twice. Every image must
-match the original pixels exactly.
+The 15 agents share one live workspace and keep separate histories. Each gets a
+queue of bounded messages. A scripted reference engine must pass the full parallel schedule on the first
+check of every barrier before measured agents start. Reference runs stop at the
+first failed barrier and cannot use correction passes. Verification runs only at barriers:
+Clang 18 symbol identities and protected source must match the expected snapshot,
+a fresh build must pass, and two scenes rendered twice must match the original
+pixels exactly. Function and declaration order within a file does not matter.
 
-A failed round allows three corrections without resetting the source or agent
-histories. **Score is the percentage of all 71 tasks jointly accepted.** Local
+A failed round allows five corrections without resetting the source or agent
+histories. Corrections describe current problems using compiler facts and
+already-public requirements, not replayed tasks. They are split across the whole
+team without executor attribution. **Score is the percentage of all 71 tasks jointly accepted.** Local
 runs have no overall or per-delivery deadline. Preparation is model-free but
 CPU-heavy; read the [run guide](docs/multi-agent.md) before starting.
 
@@ -171,7 +176,9 @@ Thank you to everyone who shares benchmark observations. Your work makes this pu
 - Bubblewrap (`bwrap`)
 - the agent CLI you want to test, installed and logged in
 - access to the model you want to test
-- for Multi-Agent: Linux x64 or x64 WSL2, Clang 18 as `clang++`, Clangd, and the C++17 standard library
+- for Multi-Agent: Linux x64 or x64 WSL2, Clang 18 as `clang++`, Clangd,
+  libclang 18 with its official Python bindings (`python3-clang-18` on Ubuntu),
+  and the C++17 standard library
 - a free [Hugging Face account](https://huggingface.co/join) to submit the result
 
 Clone the repository, then install it and the Hugging Face CLI:
@@ -229,7 +236,7 @@ npm run benchmark -- run --local --suite explicit-edit-multi-agent \
 Each selected configuration first passes a one-task model/auth smoke check.
 The original suite then runs independent trials. Multi-Agent also prepares the
 renderer and proves the parallel schedule with scripted editors before measured
-agents start. It allows three corrections per failed barrier, keeps failed edits
+agents start. It allows five corrections per failed barrier, keeps failed edits
 and histories, and stops when those corrections are exhausted. Legitimate early
 stops retain the accepted prefix; they are results, not runs to hide.
 

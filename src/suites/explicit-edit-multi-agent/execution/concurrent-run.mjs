@@ -7,6 +7,10 @@ import { readTree, writeTree, treeIdentity } from "../generation/generator.mjs";
 import { rotatingSchedule, dependencyGraph } from "../tasks/concurrent-schedule.mjs";
 import { checkpointContracts } from "../grading/concurrent-contracts.mjs";
 import { evaluateCoherentContract } from "../grading/coherent-grade.mjs";
+import {
+  prepareBarrierSymbolMap,
+  evaluateBarrierSymbolMap,
+} from "../grading/barrier-symbol-map.mjs";
 import { buildCoherentCandidate } from "../grading/coherent-build.mjs";
 import { GradeFailure } from "../grading/failure.mjs";
 import {
@@ -15,7 +19,14 @@ import {
 } from "../reference/concurrent-executor.mjs";
 import { startBaseline, finalizedUsage } from "./pi-baseline.mjs";
 import { readSharedSource } from "../reference/concurrent-commit.mjs";
-import { REFERENCE_PLANNER_SLOTS } from "../reference/concurrent-planners.mjs";
+import {
+  REFERENCE_EXECUTION_POLICY,
+  referenceConcurrency,
+  referenceFirstPass,
+  validateReferenceExecution,
+  validateCurrentReferenceExecution,
+} from "../reference/execution-proof.mjs";
+import { suiteVerifier } from "../source-identity.mjs";
 import { ATOMIC_DISPATCH_POLICY, runAtomicStream } from "./atomic-stream.mjs";
 import { atomicOrder } from "../tasks/atomic-effects.mjs";
 import { atomicCheckpoints } from "../tasks/atomic-bundle.mjs";
@@ -23,7 +34,7 @@ import { sourceFilesAfter } from "../tasks/task-constraints.mjs";
 import {
   taskDiagnostics,
   compilerDiagnostics,
-  attributeDiagnostics,
+  barrierRepairNodes,
 } from "../grading/repair-diagnostics.mjs";
 import {
   MULTI_AGENT_BENCHMARK,
@@ -34,20 +45,21 @@ import {
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-/** Stream up to fifty ready atomic edits per delivery to each free persistent participant.
- * Verified effects unlock dependencies; drained parent-task barriers alone grant
+/** Divide each barrier into balanced participant queues and check only the drained team.
+ * Ordered dependency chains stay on one participant; parent barriers alone grant
  * Score credit after cumulative structure, build and repeated-pixel checks.
  * Corrections retain edits/history and share the fixed barrier-level budget.
- * Every correction goes to its task's original executor with only that task's
- * diagnostics. Unattributed barrier errors stop as controller infrastructure
- * failures, never as a request to a random participant or the whole team.
+ * Corrections are balanced across the whole team by file, without writer attribution.
  * Live trials require a matching atomic scripted proof before drivers open.
- * Reference CAS conflicts are observed; live counts remain unknown unless supplied
+ * Ordinary reference merge conflicts are observed; live counts remain unknown unless supplied
  * by the harness. Private plans, gates and future tasks are never agent mounts.
  * createDriver(workspace, state, agent) returns execute(prompt, { signal, round,
- * attempt, atomicId, atomicIds, diagnostics }), async close() and a closed getter.
- * atomicId names the first member for native artifact paths; atomicIds lists all
- * members. One receipt belongs to the delivery, while every member has its own gate.
+ * attempt, batchSize, atomicId, atomicIds, deliveryKind?, repairTasks?, diagnostics }),
+ * async close() and a closed getter. atomicId identifies the first work item for
+ * native artifact paths. Initial atomicIds name original atoms; fresh barrier
+ * repairs use atomicIds: [] and public repairTasks: [{ id, operations }].
+ * Private compiler bindings never enter driver metadata. One receipt belongs
+ * to the delivery; it is not source acceptance.
  * Optional synchronous onCase(event) forwards atomic case lifetimes with their
  * round and attempt for private external watchdogs. It does not set model limits
  * or fabricate observations for retained work.
@@ -55,11 +67,25 @@ const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export async function runConcurrent(
   preparationPath,
   outputPath,
-  { agents, configPath, createDriver, signal: externalSignal, log = console.log, onCase } = {},
+  {
+    agents,
+    configPath,
+    createDriver,
+    reference = false,
+    batchSize = ATOMIC_DISPATCH_POLICY.defaultBatchSize,
+    signal: externalSignal,
+    log = console.log,
+    onCase,
+  } = {},
 ) {
   const started = performance.now();
+  assert.ok(Number.isSafeInteger(batchSize) && batchSize > 0, "Invalid atomic batch size");
   assert.ok(onCase === undefined || typeof onCase === "function", "Invalid case observer");
+  assert.equal(typeof reference, "boolean", "Invalid reference execution purpose");
+  assert.ok(!(reference && configPath), "Scripted reference cannot use paid configuration");
   const live = Boolean(configPath || createDriver);
+  const referenceRun = !live || reference;
+  const maxAttempts = referenceRun ? 1 : MULTI_AGENT_MAX_ATTEMPTS;
   assert.ok(
     !(configPath && createDriver),
     "Choose a private baseline config or the common harness driver",
@@ -168,7 +194,7 @@ export async function runConcurrent(
     const contractHashes = Object.fromEntries(
       [...contracts].map(([id, contract]) => [id, digest(JSON.stringify(contract))]),
     );
-    if (live) {
+    if (live && !referenceRun) {
       const proof = await json(path.join(preparation, `verification-${agents}.json`));
       assert.deepEqual(
         proof.atomic,
@@ -176,7 +202,9 @@ export async function runConcurrent(
         "Concurrent live runs need a matched atomic stream proof",
       );
       assert.equal(proof.status, "pass", "Concurrent live runs need a matched scripted proof");
+      await validateCurrentReferenceExecution(proof, agents);
       assert.equal(proof.agents, agents, "Atomic proof participant count differs");
+      assert.equal(proof.batchSize, batchSize, "Atomic proof message size differs");
       assert.equal(
         proof.acceptedAtomicEdits,
         manifest.atomic.edits,
@@ -188,7 +216,8 @@ export async function runConcurrent(
       assert.equal(proof.scheduleSha256, scheduleSha256);
       assert.deepEqual(proof.contractHashes, contractHashes);
       assert.equal(proof.initial, manifest.initial);
-      assert.equal(proof.final, manifest.final);
+      assert.equal(proof.expectedFinal, manifest.final);
+      assert.match(proof.final, /^[a-f0-9]{64}$/);
       assert.equal(proof.acceptedRounds, schedule.length);
       assert.equal(proof.acceptedTasks, manifest.tasks);
     }
@@ -202,8 +231,9 @@ export async function runConcurrent(
       protocol: MULTI_AGENT_PROTOCOL,
       runtime: null,
       status: "running",
-      mode: live ? "live" : "scripted",
+      mode: referenceRun ? "scripted" : "live",
       agents,
+      batchSize,
       workloadSha256: manifest.workloadSha256,
       graphSha256: manifest.graphSha256,
       graphWidth: graph.width,
@@ -214,6 +244,7 @@ export async function runConcurrent(
       atomic: manifest.atomic,
       atomicBarriers: [],
       initial: manifest.initial,
+      expectedFinal: manifest.final,
       totalRounds: schedule.length,
       totalTasks: manifest.tasks,
       acceptedRounds: 0,
@@ -223,7 +254,9 @@ export async function runConcurrent(
       checks: [],
       executions: [],
       conflicts: live ? null : 0,
-      referencePlannerSlots: live ? null : REFERENCE_PLANNER_SLOTS,
+      referencePlannerSlots: live ? null : agents,
+      referenceExecution: referenceRun ? REFERENCE_EXECUTION_POLICY : null,
+      referenceSourceSha256: referenceRun ? await suiteVerifier() : null,
       regressedAcceptedObligations: [],
       overwrittenPeerChanges: null,
       usage: null,
@@ -240,7 +273,8 @@ export async function runConcurrent(
       return saving;
     };
     let acceptedIds = new Set();
-    async function grade(label, id, { atomicBlocked = false } = {}) {
+    const symbolMaps = new Map();
+    async function grade(label, id) {
       signal.throwIfAborted();
       const directory = path.join(output, "checks", label);
       await mkdir(directory, { recursive: true });
@@ -252,7 +286,8 @@ export async function runConcurrent(
       };
       report.checks.push(item);
       await save();
-      let tree;
+      let tree,
+        repairBindings = [];
       try {
         try {
           tree = await readSharedSource(workspace);
@@ -261,7 +296,30 @@ export async function runConcurrent(
         }
         item.identity = treeIdentity(tree);
         await writeTree(path.join(directory, "source"), tree);
-        const ledger = evaluateCoherentContract(tree, contracts.get(id));
+        if (!symbolMaps.has(id)) {
+          const expected = id === "initial" ? initial : atomicIntervals.rounds.get(id).expectedTree;
+          symbolMaps.set(
+            id,
+            await prepareBarrierSymbolMap(expected, {
+              signal,
+              evidence: path.join(output, "symbol-maps", id),
+            }),
+          );
+        }
+        const lexical = evaluateCoherentContract(tree, contracts.get(id));
+        const semantic = await evaluateBarrierSymbolMap(tree, symbolMaps.get(id), {
+          signal,
+          evidence: path.join(directory, "symbol-map"),
+        });
+        repairBindings = semantic.bindings ?? [];
+        const obligations = [...lexical.obligations, ...semantic.obligations];
+        const passed = obligations.filter((entry) => entry.status === "pass").length;
+        const ledger = {
+          status: lexical.status === "pass" && semantic.status === "pass" ? "pass" : "fail",
+          passed,
+          total: obligations.length,
+          obligations,
+        };
         await writeFile(path.join(directory, "obligations.json"), JSON.stringify(ledger) + "\n");
         item.obligations = { passed: ledger.passed, total: ledger.total };
         item.regressions = ledger.obligations
@@ -272,12 +330,10 @@ export async function runConcurrent(
         if (ledger.status !== "pass") {
           const error = new GradeFailure("structure", "Round editing obligations are not met");
           error.diagnostics = taskDiagnostics(ledger);
+          error.compilerDiagnostics = semantic.compilerDiagnostics;
+          error.repairBindings = repairBindings;
           throw error;
         }
-        if (atomicBlocked)
-          throw Error(
-            "Atomic gates contradicted a passing full contract; retained for investigation",
-          );
         log(
           `BUILD ${label}: cumulative obligations ${ledger.passed}/${ledger.total}; fresh build and two repeated scenes`,
         );
@@ -297,6 +353,8 @@ export async function runConcurrent(
         await rm(path.join(directory, "verification/build/renderer"));
         log(`PASS ${label}`);
       } catch (error) {
+        // Candidate compiler facts stay private to diagnostic planning.
+        error.repairBindings = repairBindings;
         if (error.category === "build")
           error.diagnostics = compilerDiagnostics(error.cause?.stderr, tree);
         item.diagnostics = error.diagnostics ?? [];
@@ -344,250 +402,141 @@ export async function runConcurrent(
             : concurrentExecutor(workspace, path.join(output, "executor"), { signal }),
       );
     }
+    // Startup readiness only: no participant waits here once editing begins.
+    await Promise.all(drivers.map((driver) => driver.ready));
     let rotation = 0;
     let lastProgressSave = performance.now();
-    const decision = (result) =>
-      result.status === "pass" ? true : result.status === "pending" ? "pending" : false;
+    const publicPrefix = [];
     for (const round of schedule) {
       signal.throwIfAborted();
-      const { nodes, checkpoint } = atomicIntervals.rounds.get(round.id);
-      // Only this local interval owns warm inventories through its corrections.
-      atomicIntervals.rounds.delete(round.id);
+      const interval = atomicIntervals.rounds.get(round.id);
+      const { nodes } = interval;
+      publicPrefix.push(...nodes);
       const parentTasks = round.assignments.map((assignment) => assignment.task);
-      let completed = new Set();
-      let startedAtoms = new Set();
-      const owners = new Map();
-      let diagnostics = new Map();
-      let barrierTargets = new Set();
+      let corrections;
       let failure;
-      for (let attempt = 1; attempt <= MULTI_AGENT_MAX_ATTEMPTS; attempt++) {
-        log(
-          `EDIT ${round.id}: ${agents} persistent agents, attempt ${attempt}/${MULTI_AGENT_MAX_ATTEMPTS}`,
-        );
-        const retained = checkpoint.revalidate(await readSharedSource(workspace), {
-          completed,
-          started: startedAtoms,
-        });
-        completed = retained.completed;
-        const state = {
-          round: round.id,
-          attempt,
-          retained: [...completed],
-          invalidated: retained.invalidated,
-          inputChecks: [],
-          completed: null,
-          failed: [],
-        };
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        log(`EDIT ${round.id}: ${agents} persistent agents, attempt ${attempt}/${maxAttempts}`);
+        const state = { round: round.id, attempt, dispatched: [], status: "delivering" };
         report.atomicBarriers.push(state);
-        const executions = new Map();
-        async function deliver(members, agent, deliverySignal, context) {
-          const abortDelivery = () => controller.abort(deliverySignal.reason);
-          deliverySignal.addEventListener("abort", abortDelivery, { once: true });
-          const item = {
-            round: round.id,
-            attempt,
-            agent,
-            tasks: [...new Set(members.map((node) => node.taskId))],
-            atomicId: members[0].id,
-            atomicIds: members.map((node) => node.id),
-            atomicChecks: {},
-            diagnostics: Object.fromEntries(
-              members
-                .filter((node) => diagnostics.has(node.id))
-                .map((node) => [node.id, diagnostics.get(node.id)]),
-            ),
-            status: "running",
-            startedMs: performance.now() - started,
-          };
-          report.executions.push(item);
-          for (const node of members) {
-            assert.ok(
-              !owners.has(node.id) || owners.get(node.id) === agent,
-              "Repair changed task executor",
-            );
-            owners.set(node.id, agent);
-            startedAtoms.add(node.id);
-            executions.set(node.id, item);
-          }
-          report.deliveries++;
-          if (attempt > 1) report.repairs++;
-          const current = members
-            .map((node) => {
-              const task =
-                members.length === 1 ? node.prompt : `Atomic edit ${node.id}\n\n${node.prompt}`;
-              const detail = diagnostics.get(node.id);
-              return detail?.length
-                ? task + `\n\nDiagnostics for atomic edit ${node.id}:\n${JSON.stringify(detail)}`
-                : task;
-            })
-            .join("\n\n---\n\n");
-          const environment = `\n\nYou are one of ${agents} persistent agents sharing this writable project. Other agents may edit the same files concurrently. Each agent has a separate retained conversation history. At this dispatch, ${context.activeDeliveries} editing deliveries are active, including yours.`;
-          const prompt = current + environment;
-          try {
-            if (live) {
-              item.receipt = await drivers[agent].execute(prompt, {
-                signal: deliverySignal,
-                round: round.id,
-                attempt,
-                atomicId: members[0].id,
-                atomicIds: members.map((node) => node.id),
-                diagnostics: item.diagnostics,
-              });
-            } else {
-              if (attempt > 1)
-                throw Error("Reference editor has no repair policy; failed state retained");
-              item.receipts = [];
-              for (const node of members) {
-                const receipt = await drivers[agent].execute(node);
-                item.receipts.push(receipt);
-                report.conflicts += receipt.conflicts;
-              }
-            }
-            item.status = "settled";
-            return item.receipt;
-          } catch (error) {
-            Object.assign(item, {
-              status: "error",
-              category: error.category ?? "infrastructure",
-              message: error.message,
-            });
-            if (error.receipt) item.receipt = error.receipt;
-            controller.abort(error);
-            throw error;
-          } finally {
-            deliverySignal.removeEventListener("abort", abortDelivery);
-            item.elapsedMs = performance.now() - started - item.startedMs;
-            // Bound progress I/O independently of the number of tiny deliveries.
-            // Full state is saved at each drained barrier and on every exit.
-            if (performance.now() - lastProgressSave >= 5000) {
-              lastProgressSave = performance.now();
-              await save();
-            }
-          }
-        }
-        const readSource = () => readSharedSource(workspace);
-        let stream;
-        await save();
-        const barrierOnly = barrierTargets.size > 0 && completed.size === nodes.length;
-        const dispatchNodes = barrierOnly
-          ? nodes
-              .filter((node) => barrierTargets.has(node.id))
-              .map((node) => ({ ...node, dependencies: [] }))
-          : nodes;
-        const dispatchIds = new Set(dispatchNodes.map((node) => node.id));
-        const fullContext = (context) =>
-          barrierOnly
-            ? {
-                get activeDeliveries() {
-                  return context.activeDeliveries;
-                },
-                get activeWrites() {
-                  return context.activeWrites;
-                },
-                get writers() {
-                  return context.writers;
-                },
-                get completed() {
-                  return new Set([...completed, ...context.completed]);
-                },
-                get started() {
-                  return new Set([...startedAtoms, ...context.started]);
-                },
-                get settled() {
-                  return new Set([...startedAtoms, ...context.settled]);
-                },
-              }
-            : context;
-        stream = await runAtomicStream(dispatchNodes, {
-          batchSize: ATOMIC_DISPATCH_POLICY.maxBatchSize,
+        const repairId = (id) => `repair-${round.id}-attempt-${attempt}-${id}`;
+        const dispatchNodes =
+          attempt === 1
+            ? nodes
+            : corrections.map((node) => ({
+                ...node,
+                id: repairId(node.id),
+                dependencies: node.dependencies.map(repairId),
+              }));
+        const stream = await runAtomicStream(dispatchNodes, {
+          batchSize,
           agents,
-          onCase: onCase ? (event) => onCase({ ...event, round: round.id, attempt }) : undefined,
-          completed: barrierOnly ? new Set() : completed,
-          started: new Set([...startedAtoms].filter((id) => dispatchIds.has(id))),
-          owners: new Map([...owners].filter(([id]) => dispatchIds.has(id))),
           rotation,
           signal,
-          checkInputs: async (node, deliverySignal, context) => {
-            // Keep readiness evidence private and separate from verified
-            // outputs or native deliveries; a continuation is only a waiver.
-            const trace = {
-              atomicId: node.id,
+          onCase: onCase ? (event) => onCase({ ...event, round: round.id, attempt }) : undefined,
+          executeBatch: async (members, agent, deliverySignal, context) => {
+            const repair = attempt > 1;
+            const editingTasks = repair
+              ? members.map((node) => ({
+                  id: node.id,
+                  operations: node.operations,
+                }))
+              : members;
+            const atomicIds = repair ? [] : members.map((node) => node.id);
+            const repairIds = repair ? editingTasks.map((node) => node.id) : [];
+            // A repair is fresh problem work, never another original atom delivery.
+            const deliveryId = repair ? repairIds[0] : members[0].id;
+            const diagnostics =
+              attempt === 1
+                ? []
+                : [
+                    ...new Map(
+                      members
+                        .flatMap((node) => node.diagnostics ?? [])
+                        .map((entry) => [JSON.stringify(entry), entry]),
+                    ).values(),
+                  ];
+            const item = {
+              round: round.id,
+              attempt,
+              agent,
+              tasks: repair ? [] : [...new Set(members.map((node) => node.taskId))],
+              atomicId: deliveryId,
+              atomicIds,
+              ...(attempt > 1
+                ? {
+                    deliveryKind: "barrier-repair",
+                    repairIds,
+                    repairFiles: [...new Set(members.flatMap((node) => node.repairFiles ?? []))],
+                  }
+                : {}),
+              diagnostics,
+              status: "running",
               startedMs: performance.now() - started,
-              decision: "checking",
-              observations: [],
             };
-            state.inputChecks.push(trace);
-            const observed = (atomicId, mode, checked) => {
-              trace.observations.push({
-                atomicId,
-                mode,
-                status: checked.status,
-                reason: checked.reason ?? null,
-              });
-            };
-            const finish = (value) => {
-              trace.decision = value === true ? "pass" : value === false ? "fail" : "pending";
-              return value;
-            };
+            report.executions.push(item);
+            state.dispatched.push(...members.map((node) => node.id));
+            report.deliveries++;
+            if (attempt > 1) report.repairs++;
+            const current =
+              members.map((node) => node.prompt).join("\n\n---\n\n") +
+              (diagnostics.length
+                ? `\n\nCandidate compiler diagnostics:\n${JSON.stringify(diagnostics)}`
+                : "");
+            const prompt =
+              current +
+              `\n\nYou are one of ${agents} persistent agents sharing this writable project. Other agents may edit the same files concurrently. Each agent has a separate retained conversation history. In this barrier, ${context.assignedParticipants} agents have assignments. At this dispatch, ${context.activeDeliveries} editing deliveries are active, including yours.`;
             try {
-              // Prerequisites, continuation waiver and own input/output fallback
-              // share one stable source span, rather than yielding between
-              // individually valid checks while peers advance the frontier.
-              const checked = await checkpoint.observeInputs(
-                readSource,
-                node.id,
-                fullContext(context),
-                {
+              if (live) {
+                item.receipt = await drivers[agent].execute(prompt, {
                   signal: deliverySignal,
-                  onObservation: observed,
-                },
-              );
-              return finish(decision(checked));
+                  round: round.id,
+                  attempt,
+                  batchSize,
+                  atomicId: deliveryId,
+                  atomicIds,
+                  ...(repair ? { deliveryKind: "barrier-repair", repairTasks: editingTasks } : {}),
+                  diagnostics,
+                });
+              } else {
+                if (drivers[agent].executeBatch)
+                  item.receipts = await drivers[agent].executeBatch(editingTasks);
+                else {
+                  item.receipts = [];
+                  for (const node of editingTasks)
+                    item.receipts.push(await drivers[agent].execute(node));
+                }
+                for (const receipt of item.receipts) report.conflicts += receipt.conflicts;
+              }
+              item.status = "settled";
             } catch (error) {
-              trace.decision = deliverySignal.aborted ? "aborted" : "error";
+              Object.assign(item, {
+                status: "error",
+                category: error.category ?? "infrastructure",
+                message: error.message,
+              });
+              if (error.receipt) item.receipt = error.receipt;
+              controller.abort(error);
               throw error;
             } finally {
-              trace.elapsedMs = performance.now() - started - trace.startedMs;
+              item.elapsedMs = performance.now() - started - item.startedMs;
+              if (performance.now() - lastProgressSave >= 5000) {
+                lastProgressSave = performance.now();
+                await save();
+              }
             }
           },
-          executeBatch: (members, agent, deliverySignal, context) =>
-            deliver(members, agent, deliverySignal, context),
-          verify: async (node, deliverySignal, _receipt, context) => {
-            const checked = await checkpoint.observe(readSource, node.id, fullContext(context), {
-              signal: deliverySignal,
-            });
-            const item = executions.get(node.id);
-            const observation = {
-              status: checked.status,
-              reason: checked.reason ?? null,
-              diagnostics: taskDiagnostics(checked),
-            };
-            item.atomicChecks[node.id] = observation;
-            if (item.atomicIds.length === 1) item.atomicCheck = observation;
-            return decision(checked);
-          },
         });
-        if (barrierOnly) {
-          for (const node of dispatchNodes)
-            if (!stream.completed.has(node.id)) completed.delete(node.id);
-        } else {
-          completed = stream.completed;
-          startedAtoms = stream.started;
-        }
-        for (const [id, agent] of stream.owners) owners.set(id, agent);
         rotation = stream.rotation;
-        state.owners = Object.fromEntries(owners);
-        state.completed = [...completed];
-        state.failed = stream.failed;
+        state.queues = stream.queues;
+        state.status = "drained";
         await save();
         signal.throwIfAborted();
-        if (!report.executions.some((item) => item.round === round.id && item.attempt === attempt))
-          throw Error("Atomic inputs could not be observed before any delivery opportunity");
         try {
-          await grade(`${round.id}-attempt-${attempt}`, round.id, {
-            atomicBlocked: stream.status !== "pass",
-          });
+          await grade(`${round.id}-attempt-${attempt}`, round.id);
           failure = null;
+          state.status = "accepted";
+          state.accepted = nodes.map((node) => node.id);
           report.acceptedRounds++;
           report.acceptedTasks += parentTasks.length;
           await save();
@@ -595,45 +544,21 @@ export async function runConcurrent(
         } catch (error) {
           if (!["structure", "build", "behavior"].includes(error.category)) throw error;
           failure = error;
-          const tree = await readSource();
-          const context = {
-            completed,
-            started: startedAtoms,
-            settled: startedAtoms,
-            writers: new Set(),
-          };
-          diagnostics = new Map();
-          for (const node of nodes) {
-            if (!owners.has(node.id) || completed.has(node.id)) continue;
-            const checked = checkpoint.check(tree, node.id, context);
-            const detail = taskDiagnostics(checked);
-            if (detail.length) diagnostics.set(node.id, detail);
+          state.status = "failed";
+          if (attempt < maxAttempts) {
+            corrections = await barrierRepairNodes({
+              category: error.category,
+              diagnostics: error.diagnostics ?? [],
+              compiler: error.compilerDiagnostics ?? [],
+              nodes: publicPrefix,
+              tree: await readSharedSource(workspace),
+              bindings: error.repairBindings ?? [],
+            });
+            state.repairFiles = [...new Set(corrections.flatMap((node) => node.repairFiles))];
           }
-          barrierTargets = new Set();
-          if (completed.size === nodes.length) {
-            const routed = attributeDiagnostics(
-              error.diagnostics ?? [],
-              checkpoint.diagnosticScopes(context),
-            );
-            state.unattributedDiagnostics = routed.unassigned;
-            const isError = (entry) =>
-              entry.category !== "build" || ["error", "fatal error"].includes(entry.severity);
-            const actionable = [...routed.assigned].filter(([, detail]) => detail.some(isError));
-            if (routed.unassigned.some(isError) || !actionable.length)
-              throw new GradeFailure(
-                "infrastructure",
-                "Barrier diagnostics cannot be attributed to a unique delivered task",
-              );
-            diagnostics = new Map(routed.assigned);
-            barrierTargets = new Set(actionable.map(([id]) => id));
-          }
-          state.repairDiagnostics = Object.fromEntries(diagnostics);
-          state.repairTargets = [...barrierTargets];
           await save();
-          log(
-            `FAIL ${round.id}: attempt ${attempt}/${MULTI_AGENT_MAX_ATTEMPTS} [${error.category}]`,
-          );
-          if (attempt === MULTI_AGENT_MAX_ATTEMPTS) {
+          log(`FAIL ${round.id}: attempt ${attempt}/${maxAttempts} [${error.category}]`);
+          if (attempt === maxAttempts) {
             report.status = "blocked";
             report.terminal = {
               id: round.id,
@@ -643,9 +568,19 @@ export async function runConcurrent(
           }
         }
       }
+      atomicIntervals.rounds.delete(round.id);
+      symbolMaps.delete(round.id);
+      globalThis.gc?.();
       if (failure) break;
     }
-    if (report.acceptedRounds === schedule.length) report.status = "pass";
+    if (report.acceptedRounds === schedule.length) {
+      if (referenceRun) {
+        report.referenceFirstPass = referenceFirstPass(report);
+        report.referenceConcurrency = referenceConcurrency(report.executions);
+        await validateCurrentReferenceExecution(report, agents);
+      }
+      report.status = "pass";
+    }
   } catch (error) {
     if (!report) throw error;
     report.status = externalSignal?.aborted ? "cancelled" : (error.category ?? "infrastructure");
@@ -685,7 +620,7 @@ export async function runConcurrent(
     }
     externalSignal?.removeEventListener("abort", abort);
   }
-  if (!live && report.status === "pass") {
+  if (referenceRun && report.status === "pass") {
     const acceptedAtomicEdits = new Set(report.executions.flatMap((item) => item.atomicIds)).size;
     assert.equal(
       acceptedAtomicEdits,
@@ -696,42 +631,55 @@ export async function runConcurrent(
       status: "pass",
       protocol: report.protocol,
       policy: report.policy,
+      referenceExecution: REFERENCE_EXECUTION_POLICY,
+      referenceSourceSha256: report.referenceSourceSha256,
+      referenceConcurrency: referenceConcurrency(report.executions),
+      referenceFirstPass: report.referenceFirstPass,
+      repairs: report.repairs,
       atomic: report.atomic,
       acceptedAtomicEdits,
       agents,
+      batchSize,
       workloadSha256: report.workloadSha256,
       scheduleSha256: report.scheduleSha256,
       contractHashes: report.contractHashes,
       initial: report.initial,
       final: report.final,
+      expectedFinal: report.expectedFinal,
       acceptedRounds: report.acceptedRounds,
       acceptedTasks: report.acceptedTasks,
     };
+    validateReferenceExecution(proof, agents);
     await writeFile(path.join(output, "verification.json"), JSON.stringify(proof) + "\n", {
       flag: "wx",
     });
-    const proofFile = path.join(preparation, `verification-${agents}.json`);
-    try {
-      await writeFile(proofFile, JSON.stringify(proof) + "\n", { flag: "wx" });
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      assert.deepEqual(await json(proofFile), proof);
+    // Native scripted validation keeps its own proof. It must not replace the
+    // Node prerequisite, whose observed concurrency is a different execution.
+    if (!live) {
+      const proofFile = path.join(preparation, `verification-${agents}.json`);
+      try {
+        await writeFile(proofFile, JSON.stringify(proof) + "\n", { flag: "wx" });
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        assert.deepEqual(await json(proofFile), proof);
+      }
     }
   }
   return report;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [preparation, output, count = "auto", configPath] = process.argv.slice(2);
+  const [preparation, output, count = "auto", configPath, size] = process.argv.slice(2);
   assert.ok(
     preparation && output,
-    "Usage: concurrent-run.mjs PREPARATION OUTPUT [auto|AGENT_COUNT] [PRIVATE_CONFIG]",
+    "Usage: concurrent-run.mjs PREPARATION OUTPUT [auto|AGENT_COUNT] [PRIVATE_CONFIG] [BATCH_SIZE]",
   );
   const controller = new AbortController();
   process.once("SIGTERM", () => controller.abort());
   process.once("SIGINT", () => controller.abort());
   const report = await runConcurrent(preparation, output, {
     agents: count === "auto" ? undefined : Number(count),
+    batchSize: size === undefined ? undefined : Number(size),
     configPath,
     signal: controller.signal,
   });

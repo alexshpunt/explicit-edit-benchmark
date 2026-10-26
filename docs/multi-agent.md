@@ -13,9 +13,18 @@ rendered output unchanged.
 ## Run policy and Score
 
 A scored run always uses **15 agents and all 71 tasks**. The dependency graph has
-width 15 and the schedule has 28 barriers. Only agents assigned ready tasks work
-at a barrier; the others wait. Assignments rotate between agents. Every assignment
-and correction discloses the total team size and the number currently assigned.
+width 15 and fixes a schedule of 28 barriers. At each barrier its atomic edits are
+split as evenly as their dependencies permit across the team. A dependency chain
+stays with one agent, in dependency order. All agents receive work when the
+barrier has enough independent edits; a smaller barrier uses fewer agents. The
+28 barriers are not merged to fill the team.
+
+Each agent receives a queue of messages. The configurable delivery size defaults
+to 50 atoms per message; this is an experimental value, not a required workload
+size. An agent receives its next message when the harness returns control at the
+end of its turn. The controller does not read the reply text or treat a turn end
+as proof that edits succeeded. Every assignment and correction discloses the total
+team size and the number currently assigned.
 
 The graph follows code dependencies and selector readiness, not task numbering.
 Independent monolith extractions can run together even when they edit the same
@@ -26,15 +35,44 @@ see the current assignment, not future tasks, private contracts, reference sourc
 or expected pixels. Existing harness adapters own their native continuation.
 The benchmark does not replace a selected harness with Baseline Agent.
 
-After assigned agents settle, the verifier checks cumulative obligations, builds
-a fresh isolated project and renders two scenes twice. All four outputs must
-match the pinned pixels. Earlier accepted edits remain obligations, and source
-must not change after the barrier.
+Verification starts only after every agent has exhausted its queue and returned
+control. No input or output gate checks individual atoms or intermediate source.
+At the barrier, the verifier compares the candidate with the trusted expected
+snapshot through a per-file symbol map. Clang 18's libclang supplies declaration
+USRs and referenced symbol USRs; declaration and body tokens preserve exact names
+and code. File-internal declaration order and reopened namespaces are allowed.
+Macros, inactive preprocessor branches and locals retain lexical protection.
+Earlier accepted edits remain obligations.
 
-A failed barrier allows three corrections with coarse feedback: requirements not
-met, build failed, or images differ. Failed edits and histories remain. There is
-no reset or fresh retry. Exhausting corrections stops the accepted prefix.
-Provider, driver, infrastructure and cancellation stops are recorded separately.
+A fresh isolated build and two scenes rendered twice must also pass. All four
+outputs must match the pinned pixels, and source must not change after the
+barrier. A passing build or an agent's claim of completion alone earns no credit.
+
+The scripted reference must pass every barrier on its first check, with no
+correction deliveries. A failed reference check stops the proof. Its participants
+plan in parallel and apply file patches atomically using ordinary Bash-accessible
+filesystem primitives. This is their editing strategy; the benchmark does not
+force measured agents through a shared editor or protect arbitrary writes.
+
+For measured agents, a failed barrier allows five corrections, for six attempts in total. Corrections
+are grouped by file and split as evenly as possible across the whole team. One
+file goes to one agent; the controller does not use the original executor.
+Feedback follows this priority:
+
+1. Symbol-map or protected-source mismatches produce fresh current problems:
+   wrong declaration names, wrong physical owners, missing module setup or
+   unresolved compiler uses. The planner uses actual candidate compiler facts
+   and requirements already public through this barrier. Satisfied work is not
+   reassigned, and historical atom prompts are never replayed. Remaining
+   non-mechanical source problems receive an inspection item.
+2. When the map is clean, compiler errors are grouped by file.
+3. When the map and build pass, a pixel mismatch produces one general
+   "rendered images differ" item.
+
+Agents never receive private contract tokens, USRs, reference source or expected
+pixels. Failed edits and histories remain, with no reset or fresh retry.
+Exhausting corrections stops the accepted prefix. Provider, driver,
+infrastructure and cancellation stops are recorded separately.
 
 **Score is jointly accepted tasks / 71.** A partly completed failed barrier earns
 no task credit. There is no individual-agent score. Duration, cost and correction
@@ -48,7 +86,8 @@ subject to GitHub's six-hour platform limit, not a benchmark task deadline.
 ## Requirements
 
 - Linux x64 or x64 WSL2, Node.js 24 or newer, Python 3 and Bubblewrap.
-- Clang 18 available as `clang++`, Clangd and the normal C++17 standard library.
+- Clang 18 available as `clang++`, Clangd, libclang 18 with its official Python
+  bindings (`python3-clang-18` on Ubuntu), and the normal C++17 standard library.
 - Locked repository dependencies: `npm ci`.
 - For model runs, the selected agent CLI, model access and explicit credentials,
   using the same configuration rules as the original suite.
@@ -104,6 +143,9 @@ npm run benchmark:multi-agent -- prepare .tmp/multi-agent-input
 npm run benchmark:multi-agent -- verify \
   .tmp/multi-agent-input/preparation .tmp/multi-agent-reference
 ```
+
+`verify` and `run` accept `--batch-size N`. A live team must use the same delivery
+size as its scripted proof; a different size requires a new proof.
 
 These are developer/reference commands, not a second model-result protocol.
 `prepare` generates the named, shuffled monolith, proves the full restoration
@@ -162,7 +204,7 @@ identity at its root, with these clusters:
 | `tasks/`      | Goals, current selectors, dependencies and schedules  |
 | `execution/`  | Participants, corrections and cancellation            |
 | `grading/`    | Cumulative obligations, fresh builds and exact pixels |
-| `reference/`  | Isolated scripted editors and compare-and-commit      |
+| `reference/`  | Independent scripted editors and ordinary file edits  |
 | `cpp/`        | Tokens, structure, compiler AST and binding helpers   |
 
 Input files are in `fixtures/explicit-edit-multi-agent/`. The original suite
@@ -172,6 +214,6 @@ The full and coherent reference routes remain preparation dependencies. Workers
 receive an explicit editing-code allowlist, never the whole trusted suite.
 
 [Calibration observations](multi-agent-calibration.md) are historical evidence,
-not relabelled common-protocol submissions. The reference editor's locking
-technique is described in [rotating concurrent editing](renderer-concurrent.md);
-measured agents are not required to use that technique.
+not relabelled common-protocol submissions. The independent reference editors
+and their shared-file behavior are described in
+[rotating concurrent editing](renderer-concurrent.md).

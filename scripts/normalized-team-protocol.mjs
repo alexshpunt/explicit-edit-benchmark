@@ -7,6 +7,7 @@ import {
   MULTI_AGENT_POLICY,
   MULTI_AGENT_MAX_ATTEMPTS,
   atomicDeliveryIds,
+  streamDeliveryWorkIds,
   latestStreamDeliveries,
   validateAtomicParents,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
@@ -52,7 +53,9 @@ export function teamDeliveryDirectory(round, attempt, atomicId) {
   assert.ok(Number.isInteger(attempt) && attempt >= 1 && attempt <= MULTI_AGENT_MAX_ATTEMPTS);
   if (atomicId === undefined) return `${round}-attempt-${attempt}`;
   assert.ok(typeof atomicId === "string");
-  assert.match(atomicId, /^task-\d{3}[-_:][A-Za-z0-9][A-Za-z0-9._:-]*$/);
+  assert.match(atomicId, /^(?:task-\d{3}[-_:]|repair-round-\d{3}-)[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+  if (atomicId.startsWith("repair-"))
+    assert.ok(atomicId.startsWith(`repair-${round}-`), "Repair artifact has another barrier");
   return `${round}-${atomicId}-attempt-${attempt}`;
 }
 
@@ -74,9 +77,9 @@ export function validateAtomicDelivery(atomicId, taskIds, barrierTasks) {
   );
 }
 
-/** Bind one task-scoped atomic delivery to its barrier. */
-export function validateStreamDelivery(delivery, taskIds, barrierTasks) {
-  validateAtomicParents(delivery, taskIds, barrierTasks);
+/** Bind current work or a retained-state correction to disclosed public tasks. */
+export function validateStreamDelivery(delivery, taskIds, barrierTasks, options) {
+  validateAtomicParents(delivery, taskIds, barrierTasks, options);
 }
 
 function failedNativeReceipt(delivery) {
@@ -100,7 +103,13 @@ export function validateTeamSuite(suite, contract, policy) {
     "schedule",
     "observations",
     ...(Object.hasOwn(suite, "atomic") ? ["atomic"] : []),
+    ...(Object.hasOwn(suite, "batchSize") ? ["batchSize"] : []),
   ]);
+  if (Object.hasOwn(suite, "batchSize"))
+    assert.ok(
+      Number.isSafeInteger(suite.batchSize) && suite.batchSize > 0,
+      "Invalid delivery size",
+    );
   if (Object.hasOwn(suite, "atomic")) validateAtomicIdentity(suite.atomic);
   assert.equal(suite.id, MULTI_AGENT_BENCHMARK);
   assert.equal(suite.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent protocol");
@@ -171,7 +180,10 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
     suite.observations.map((item) => item.profileId).sort(),
     profiles.map((item) => item.profileId).sort(),
   );
+  const batchSize = suite.batchSize ?? ATOMIC_DISPATCH_POLICY.defaultBatchSize;
+  assert.ok(Number.isSafeInteger(batchSize) && batchSize > 0, "Invalid delivery size");
   for (const observation of suite.observations) {
+    const availableParents = [];
     const selected = trials.filter((trial) => trial.profileId === observation.profileId);
     assert.equal(selected.length, suite.schedule.length, "Incomplete team barrier table");
     let stopped = false;
@@ -185,8 +197,8 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
       );
       const deliveries = rounds.filter((item) => item.trialId === trial.trialId);
       if (stopped) assert.equal(deliveries.length, 0, "Team continued after an unaccepted barrier");
+      availableParents.push(...trial.taskIds);
       const attempts = new Map();
-      const owners = new Map();
       for (const delivery of deliveries) {
         assert.ok(
           Number.isInteger(delivery.barrierAttempt) &&
@@ -198,11 +210,16 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
           "Participant outside team pool",
         );
         if (atomic) {
-          validateStreamDelivery(delivery, delivery.taskIds, trial.taskIds);
-          for (const id of atomicDeliveryIds(delivery)) {
-            if (owners.has(id))
-              assert.equal(owners.get(id), delivery.agent, "Repair changed task executor");
-            else owners.set(id, delivery.agent);
+          validateStreamDelivery(delivery, delivery.taskIds, trial.taskIds, {
+            availableParents,
+            batchSize,
+          });
+          if (delivery.deliveryKind) {
+            assert.ok(delivery.barrierAttempt > 0, "Initial delivery cannot be a barrier repair");
+            assert.ok(
+              delivery.atomicId.startsWith(`repair-${barrier.id}-`),
+              "Repair artifact has another barrier",
+            );
           }
         } else {
           const assigned = barrier.assignments
@@ -216,7 +233,10 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
         assert.ok(
           !group.some((item) =>
             atomic
-              ? atomicDeliveryIds(item).some((id) => atomicDeliveryIds(delivery).includes(id))
+              ? item.atomicId === delivery.atomicId ||
+                streamDeliveryWorkIds(item).some((id) =>
+                  streamDeliveryWorkIds(delivery).includes(id),
+                )
               : item.agent === delivery.agent,
           ),
           "Duplicate participant delivery",
@@ -253,14 +273,16 @@ export function validateTeamTables(suite, profiles, trials, rounds) {
           const latest = latestStreamDeliveries(deliveries);
           assert.ok(
             trial.taskIds.every((task) =>
-              deliveries.some(
-                (item) => Object.hasOwn(item, "atomicId") && item.taskIds.includes(task),
+              deliveries.some((item) =>
+                atomicDeliveryIds(item).some((id) => id.slice(0, 8) === task),
               ),
             ),
             "Joint accepted barrier lacks parent task deliveries",
           );
           assert.ok(
-            [...latest.values()].every((item) => !failedNativeReceipt(item)),
+            [...latest.values(), ...(attempts.get(ordered.at(-1)) ?? [])].every(
+              (item) => !failedNativeReceipt(item),
+            ),
             "Joint accepted barrier has failed native receipts",
           );
         }

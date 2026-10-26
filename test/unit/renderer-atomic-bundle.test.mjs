@@ -9,6 +9,7 @@ import { coherentNamingPlans } from "../../src/suites/explicit-edit-multi-agent/
 import { prepareCoherentContract } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
 import { applyCoherentStructure } from "../../src/suites/explicit-edit-multi-agent/reference/coherent-edit.mjs";
 import { treeIdentity } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
+import { barrierRepairNodes } from "../../src/suites/explicit-edit-multi-agent/grading/repair-diagnostics.mjs";
 
 function fixture() {
   const initial = {
@@ -159,10 +160,12 @@ test("atomic intervals retain original drained barriers and never expose future 
   assert.deepEqual(result.tree, value.final);
   const first = result.rounds.get("round-0");
   assert.ok(first.nodes.every((node) => node.taskId === "task-001"));
-  assert.throws(
-    () => first.checkpoint.expected(new Set([bundle.workload.nodes.at(-1).id])),
-    /Unknown/,
+  assert.equal(Object.hasOwn(first, "checkpoint"), false);
+  assert.equal(first.expectedTree["sum.h"].includes("left"), false);
+  assert.ok(
+    [...first.repairScopes.keys()].every((id) => first.nodes.some((node) => node.id === id)),
   );
+  assert.equal(result.rounds.get("round-1").expectedTree["sum.h"], value.final["sum.h"]);
   assert.equal(result.rounds.get("round-1").nodes.length, 2);
   assert.throws(
     () =>
@@ -260,6 +263,178 @@ test("every coarse endpoint needs its exact cumulative contract", () => {
   const extra = fixture();
   extra.namingPlans.set("unknown", extra.namingPlans.get("task-002"));
   assert.throws(() => assemble(extra), /unknown|unexpected/i);
+});
+
+function structuralInterval(initial, operations) {
+  const nodes = operations.map((operation, index) => {
+    const taskId = `task-${String(index + 1).padStart(3, "0")}`;
+    return {
+      id: `${taskId}-edit-00001`,
+      taskId,
+      dependencies: [],
+      operations: [operation],
+      prompt: taskId,
+    };
+  });
+  const expected = operations.reduce(applyCoherentStructure, initial);
+  const round = {
+    id: "round-001",
+    assignments: nodes.map((node, agent) => ({ agent, task: node.taskId })),
+  };
+  const replay = atomicCheckpoints(
+    initial,
+    { version: "renderer-atomic-workload-v1", nodes },
+    [],
+    [round],
+    new Map([[round.id, prepareCoherentContract(expected)]]),
+  );
+  assert.deepEqual(replay.tree, expected);
+  return replay.rounds.get(round.id);
+}
+
+function repairsFor(interval, tree, file, scope, selector, bindings = []) {
+  const nodes = barrierRepairNodes({
+    category: "structure",
+    diagnostics: [{ file, scope, selector }],
+    nodes: interval.nodes,
+    tree,
+    bindings,
+  });
+  assert.ok(
+    nodes.every((node) => !Object.hasOwn(node, "original") && !Object.hasOwn(node, "taskId")),
+  );
+  assert.ok(nodes.every((node) => !interval.nodes.some((original) => original.id === node.id)));
+  assert.ok(
+    nodes.every(
+      (node) => !interval.nodes.some((original) => node.prompt.includes(original.prompt)),
+    ),
+  );
+  return nodes.flatMap((node) => node.operations);
+}
+
+test("a damaged current implementation gets a located inspection, not a replayed satisfied move", () => {
+  const initial = {
+    "main.cpp":
+      '#include "api.h"\nnamespace sample { int first(int value) { return value + 1; } int second(int value) { return value + 2; } }\n',
+    "api.h": "#pragma once\nnamespace sample { int first(int); int second(int); }\n",
+  };
+  const interval = structuralInterval(
+    initial,
+    ["first", "second"].map((name) => ({
+      phase: "structure",
+      action: "implementation",
+      file: "shared.cpp",
+      includes: [{ file: "api.h", quoted: true }],
+      targets: [
+        { selector: { scope: "sample", declarator: `int${name}(intvalue)`, definition: true } },
+      ],
+    })),
+  );
+  for (const [index, name] of ["first", "second"].entries()) {
+    const file = "shared.cpp";
+    const tree = {
+      ...interval.expectedTree,
+      [file]: interval.expectedTree[file].replace(
+        `return value + ${index + 1};`,
+        "return value + 9;",
+      ),
+    };
+    const start = tree[file].indexOf(name + "(");
+    assert.ok(start >= 0);
+    const prefix = tree[file].slice(0, start);
+    const bindings = [
+      {
+        id: "PRIVATE_CURRENT_ID",
+        file,
+        offset: Buffer.byteLength(prefix),
+        name,
+        role: "function",
+        scope: `sample::${name}`,
+        declaringScope: "sample",
+        definition: true,
+        owner: { scope: `sample::${name}`, signature: "int (int)", definition: true },
+        files: [file],
+        line: prefix.split("\n").length,
+        column: start - tree[file].lastIndexOf("\n", start - 1),
+      },
+    ];
+    const operations = repairsFor(interval, tree, file, "sample", `int${name}(intvalue)`, bindings);
+    assert.equal(operations.length, 1);
+    assert.equal(operations[0].action, "inspect");
+    assert.equal(operations[0].target.file, file);
+    assert.equal(operations[0].target.scope, `sample::${name}`);
+    assert.equal(JSON.stringify(operations).includes("PRIVATE_"), false);
+    assert.equal(JSON.stringify(operations).includes("return value"), false);
+  }
+});
+
+test("a damaged extracted header is current inspection work and never a repeated extraction or peer repair", () => {
+  const initial = {
+    "main.cpp":
+      "#ifndef A_H\n#define A_H\nnamespace sample { struct A { int value; }; }\n#endif\n#ifndef B_H\n#define B_H\nnamespace sample { struct B { int value; }; }\n#endif\n",
+  };
+  const interval = structuralInterval(
+    initial,
+    ["A", "B"].map((name) => ({
+      phase: "structure",
+      action: "header",
+      file: `${name}.h`,
+      guard: `${name}_H`,
+      includes: [],
+    })),
+  );
+  for (const name of ["A", "B"]) {
+    const file = `${name}.h`;
+    const tree = {
+      ...interval.expectedTree,
+      [file]: interval.expectedTree[file].replace("int value;", "int broken;"),
+    };
+    const operations = repairsFor(interval, tree, file, "sample", `struct${name}`);
+    assert.equal(operations.length, 1);
+    assert.equal(operations[0].action, "inspect");
+    assert.deepEqual(operations[0].files, [file]);
+    assert.equal(operations[0].target.file, file);
+  }
+});
+
+test("a damaged vendor declaration or implementation does not resend the completed header move", () => {
+  const declarations = "#ifndef VENDOR_H\n#define VENDOR_H\nint vendor_decl();\n#endif\n";
+  const implementation = "#ifdef VENDOR_IMPL\nint vendor_impl() { return 3; }\n#endif\n";
+  const initial = {
+    "main.cpp":
+      declarations +
+      implementation +
+      "#define VENDOR_IMPL\n" +
+      declarations +
+      implementation +
+      "#ifndef PEER_H\n#define PEER_H\nstruct Peer {};\n#endif\n",
+  };
+  const file = "support/stb_image/stb_image_resize.h";
+  const interval = structuralInterval(initial, [
+    {
+      phase: "structure",
+      action: "vendor-header",
+      file,
+      guard: "VENDOR_H",
+      macro: "VENDOR_IMPL",
+      declarationsCopy: 1,
+      implementationCopy: 2,
+    },
+    { phase: "structure", action: "header", file: "peer.h", guard: "PEER_H", includes: [] },
+  ]);
+  for (const selector of ["intvendor_decl()", "intvendor_impl()"]) {
+    const tree = {
+      ...interval.expectedTree,
+      [file]: interval.expectedTree[file]
+        .replace("int vendor_decl();", "float vendor_decl();")
+        .replace("return 3;", "return 9;"),
+    };
+    const operations = repairsFor(interval, tree, file, "", selector);
+    assert.equal(operations.length, 1);
+    assert.equal(operations[0].action, "inspect");
+    assert.equal(operations[0].target.file, file);
+    assert.deepEqual(operations[0].files, [file]);
+  }
 });
 
 test("independent guarded structural moves do not acquire context-only dependencies", () => {

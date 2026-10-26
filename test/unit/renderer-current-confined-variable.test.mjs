@@ -63,7 +63,9 @@ test("a confined global view retains current owner signatures and errors in its 
   const wrong = request();
   wrong.operations[0].selectors[0].owner.signature = "long (int)";
   wrong.operations[0].selectors = [wrong.operations[0].selectors[0]];
-  await assert.rejects(planner.plan(input, wrong), /Missing current owner\/signature binding/);
+  // Isolate owner selection from the deliberately broken unrelated translation unit.
+  const valid = { ...input, "peer.cpp": input["peer.cpp"].replace("moved_helper()", "0") };
+  await assert.rejects(planner.plan(valid, wrong), /Missing current owner\/signature binding/);
   await assert.rejects(
     planner.plan({ ...input, "api.h": input["api.h"] + "MissingType broken;\n" }, request()),
     /Compiler AST failed:/,

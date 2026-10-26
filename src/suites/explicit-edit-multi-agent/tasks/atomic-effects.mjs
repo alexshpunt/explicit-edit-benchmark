@@ -35,7 +35,7 @@ export function atomicOrder(nodes) {
 }
 
 function core(record) {
-  // Guard/macro context is still checked by gates and full barriers. It is not
+  // Guard/macro context is checked by full barriers. It is not
   // ownership of every otherwise unchanged body following an extracted header.
   return JSON.stringify([
     record.file,
@@ -59,11 +59,11 @@ function family(record) {
   ]);
 }
 
-function writtenFamilies(gate) {
+function writtenFamilies(effect) {
   const counts = new Map();
   for (const [records, sign] of [
-    [gate.remove, -1],
-    [gate.add, 1],
+    [effect.remove, -1],
+    [effect.add, 1],
   ])
     for (const record of records) {
       const key = core(record);
@@ -79,8 +79,8 @@ function writtenFamilies(gate) {
  * Naming plans share the group's compiler snapshot. Disjoint binding positions
  * commute even inside the same owner; overlapping plans require certification as
  * one binding, not a fabricated dependency. Public selector dependencies remain.
- * Context-only deltas do not serialize independent header moves. Dynamic binding
- * projections and drained full barriers, not fixed whole-owner gates, verify runs.
+ * Context-only deltas do not serialize independent header moves. Only drained
+ * cumulative barriers verify candidate edits.
  */
 export function atomicEffectGraph(nodes, effects) {
   atomicOrder(nodes);
@@ -90,7 +90,7 @@ export function atomicEffectGraph(nodes, effects) {
   const writers = new Map();
   const dependencies = new Map(nodes.map((node) => [node.id, new Set(node.dependencies)]));
   const bindingWrites = new Map();
-  for (const { id, gate, plan } of effects) {
+  for (const { id, effect, plan } of effects) {
     const node = byId.get(id);
     assert.ok(node && !seen.has(id), "Repeated or unknown atomic effect");
     assert.ok(
@@ -112,7 +112,7 @@ export function atomicEffectGraph(nodes, effects) {
         bindingWrites.get(edit.file).push({ start: edit.start, end: edit.start + edit.old.length });
       }
     } else {
-      for (const resource of writtenFamilies(gate)) {
+      for (const resource of writtenFamilies(effect)) {
         const previous = writers.get(resource);
         if (previous) dependencies.get(id).add(previous);
         writers.set(resource, id);

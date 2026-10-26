@@ -59,8 +59,10 @@ test("same-spelling parameters in unrelated files do not make a definition depen
 
 test("a scoped local view still requires the actual current owner signature and valid owner includes", async (t) => {
   const planner = await fixture(t);
+  // Isolate owner selection from the deliberately broken unrelated translation unit.
+  const valid = { ...input, "main.cpp": input["main.cpp"].replace("moved_helper()", "0") };
   await assert.rejects(
-    planner.plan(input, request("long (int)")),
+    planner.plan(valid, request("long (int)")),
     /Missing current owner\/signature binding/,
   );
   await assert.rejects(

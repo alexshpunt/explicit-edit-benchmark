@@ -1,14 +1,21 @@
 import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline";
 import path from "node:path";
 
 /** Current-task JSON transport into the explicit reference editing allowlist.
  * Closing targets the namespace init and awaits Bubblewrap's reaping, including
  * nested compiler sessions. No control socket or planner data enters candidate
- * source. The only optional RPC is a dispatched worker's current naming task.
+ * source. Each channel communicates only with its own independent editor.
  */
-export function referenceChannel(workspace, tools, entry, { signal, naming } = {}) {
+export function referenceChannel(workspace, tools, entry, { signal } = {}) {
   signal?.throwIfAborted();
+  // Distinct private disk-backed state, outside both shared source and the
+  // readonly code mount visible to other participants.
+  const stateDirectory = mkdtempSync(
+    path.join(path.dirname(path.resolve(tools)), ".reference-state-"),
+  );
+  mkdirSync(path.join(stateDirectory, "tmp"), { mode: 0o700 });
   const child = spawn(
     "/usr/bin/bwrap",
     [
@@ -23,7 +30,10 @@ export function referenceChannel(workspace, tools, entry, { signal, naming } = {
       "/usr/bin:/bin",
       "--setenv",
       "HOME",
-      "/tmp",
+      "/state",
+      "--setenv",
+      "TMPDIR",
+      "/state/tmp",
       "--ro-bind",
       "/usr",
       "/usr",
@@ -48,17 +58,23 @@ export function referenceChannel(workspace, tools, entry, { signal, naming } = {
       "--bind",
       path.resolve(workspace),
       "/workspace",
+      "--bind",
+      stateDirectory,
+      "/state",
       "--chdir",
       "/workspace",
       "--ro-bind",
       process.execPath,
       "/renderer-node",
       "/renderer-node",
+      "--expose-gc",
       `/executor/reference/${entry}`,
       "/workspace",
     ],
     { env: {}, stdio: ["pipe", "pipe", "pipe", "pipe"] },
   );
+  const readiness = Promise.withResolvers();
+  readiness.promise.catch(() => {});
   let pending,
     closing = false,
     namespace,
@@ -74,8 +90,10 @@ export function referenceChannel(workspace, tools, entry, { signal, naming } = {
     }
   };
   const close = () => {
-    closing = true;
-    terminate();
+    if (!closing) {
+      closing = true;
+      terminate();
+    }
     return closed;
   };
   const abort = () => {
@@ -114,39 +132,8 @@ export function referenceChannel(workspace, tools, entry, { signal, naming } = {
       void close();
       return;
     }
-    if (result.type === "name-request") {
-      if (
-        !pending ||
-        !naming ||
-        pending.namingRequested ||
-        JSON.stringify(result.task) !== pending.task
-      ) {
-        failure = Error("Unexpected reference naming request");
-        void close();
-        return;
-      }
-      pending.namingRequested = true;
-      Promise.resolve()
-        .then(() => naming(result.task))
-        .then(
-          (receipt) => {
-            if (!closing)
-              child.stdin.write(
-                JSON.stringify({ type: "name-result", requestId: result.requestId, receipt }) +
-                  "\n",
-              );
-          },
-          (error) => {
-            if (!closing)
-              child.stdin.write(
-                JSON.stringify({
-                  type: "name-result",
-                  requestId: result.requestId,
-                  error: error.message,
-                }) + "\n",
-              );
-          },
-        );
+    if (result.type === "ready") {
+      readiness.resolve();
       return;
     }
     const receipt = pending;
@@ -156,7 +143,8 @@ export function referenceChannel(workspace, tools, entry, { signal, naming } = {
       void close();
       return;
     }
-    if (result.status !== "edited") receipt.reject(Error(result.error ?? "Isolated edit failed"));
+    if (!["edited", "conflict"].includes(result.status))
+      receipt.reject(Error(`${result.id}: ${result.error ?? "Isolated edit failed"}`));
     else receipt.resolve(result);
   });
   const closed = new Promise((resolve) =>
@@ -164,24 +152,27 @@ export function referenceChannel(workspace, tools, entry, { signal, naming } = {
       signal?.removeEventListener("abort", abort);
       lines.close();
       closing = true;
+      readiness.reject(failure ?? Error("Reference editor closed before readiness"));
       pending?.reject(
         signal?.aborted
           ? signal.reason
           : (failure ?? Error(stderr || `Isolated reference exited ${code}`)),
       );
       pending = undefined;
+      rmSync(stateDirectory, { recursive: true, force: true });
       resolve();
     }),
   );
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   return {
+    ready: readiness.promise,
     deliver(task) {
       if (closing || pending) throw Error("Reference channel closed or concurrent delivery");
       signal?.throwIfAborted();
       const serialized = JSON.stringify(task);
       return new Promise((resolve, reject) => {
-        pending = { resolve, reject, task: serialized, namingRequested: false };
+        pending = { resolve, reject };
         child.stdin.write(serialized + "\n");
       });
     },

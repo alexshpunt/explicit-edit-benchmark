@@ -16,6 +16,14 @@ await test("the separate CLI is discoverable without runtime, credentials, prepa
   assert.ok(result.stdout.includes("--allow-model-calls"));
 });
 
+await test("delivery sizes must be positive integers before any preparation is read", () => {
+  for (const size of ["0", "-1", "1.5", "not-a-number", "9007199254740992"]) {
+    const result = command("verify", "missing-preparation", "missing-output", "--batch-size", size);
+    assert.equal(result.status, 1);
+    assert.ok(!result.stderr.includes("ENOENT"));
+  }
+});
+
 await test("live calls need explicit permission and scripted mode rejects private provider configuration", () => {
   for (const args of [
     ["run", "missing-preparation", "missing-output", "--config", "private-config.json"],

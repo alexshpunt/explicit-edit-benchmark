@@ -1,16 +1,26 @@
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import path from "node:path";
 
 // Keep one parsed translation unit alive for all rename requests. Each request
 // sees the original document; edits are collected, not fed back into clangd.
 class Client {
-  constructor() {
-    this.child = spawn("clangd-18", [
-      "--background-index=false",
-      "--enable-config=false",
-      "--clang-tidy=false",
-      "--log=error",
-    ]);
+  constructor(sourcePath) {
+    this.child = spawn(
+      "clangd-18",
+      [
+        "--background-index=false",
+        "--enable-config=false",
+        "--clang-tidy=false",
+        "--pch-storage=disk",
+        "--log=error",
+      ],
+      {
+        // Keep disposable preambles beside this private compiler snapshot, so
+        // closing/retiring the snapshot can also remove them after server exit.
+        env: { ...process.env, TMPDIR: path.dirname(path.resolve(sourcePath)) },
+      },
+    );
     this.buffer = Buffer.alloc(0);
     this.pending = new Map();
     this.next = 1;
@@ -77,7 +87,7 @@ class Client {
  * The caller can deliver requests one at a time and must close the session after its batch.
  */
 export async function semanticSession(sourcePath, source, flags) {
-  const client = new Client();
+  const client = new Client(sourcePath);
   const uri = pathToFileURL(sourcePath).href;
   const starts = [0];
   for (let index = 0; index < source.length; index++)

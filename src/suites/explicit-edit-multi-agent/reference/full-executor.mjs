@@ -13,6 +13,8 @@ export async function prepareFullExecutor(directory) {
     "reference/full-worker.mjs",
     "reference/full-structure-edit.mjs",
     "reference/implementation-edit.mjs",
+    "reference/problem-edit.mjs",
+    "cpp/repair-identity.mjs",
     "cpp/cpp-structure.mjs",
     "cpp/cpp-tokens.mjs",
     "cpp/cpp-offsets.mjs",

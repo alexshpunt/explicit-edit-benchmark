@@ -54,12 +54,14 @@ test("a nested lambda parameter uses its physical enclosing definition during un
 
 test("a nested local view still requires its exact compiler owner, nested scope and includes", async (t) => {
   const planner = await fixture(t);
+  // Isolate owner selection from the deliberately broken unrelated translation unit.
+  const valid = { ...input, "main.cpp": input["main.cpp"].replace("moved_helper()", "0") };
   const wrong = request();
   wrong.operations[0].selectors[0].scope = "api::refine::missing::PPos";
-  await assert.rejects(planner.plan(input, wrong), /Missing current owner\/signature binding/);
+  await assert.rejects(planner.plan(valid, wrong), /Missing current owner\/signature binding/);
   const wrongOwner = request();
   wrongOwner.operations[0].selectors[0].owner.signature = "long (int)";
-  await assert.rejects(planner.plan(input, wrongOwner), /Missing current owner\/signature binding/);
+  await assert.rejects(planner.plan(valid, wrongOwner), /Missing current owner\/signature binding/);
   await assert.rejects(
     planner.plan({ ...input, "api.h": input["api.h"] + "MissingType broken;\n" }, request()),
     /Compiler AST failed:/,

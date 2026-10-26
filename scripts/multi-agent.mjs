@@ -13,8 +13,8 @@ const help = `Explicit Edit — Multi-Agent (candidate)
 Separate from the existing 226-task benchmark and its Score.
 
   prepare NEW_OUTPUT [--from-coherent AUDITED_COHERENT_PREPARATION]
-  verify PREPARATION NEW_OUTPUT [--agents auto|N]
-  run PREPARATION NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls [--agents auto|N]
+  verify PREPARATION NEW_OUTPUT [--agents auto|N] [--batch-size N]
+  run PREPARATION NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls [--agents auto|N] [--batch-size N]
   export RUN_DIRECTORY NEW_RESULT_JSON
   validate RESULT_JSON
 
@@ -36,9 +36,10 @@ export async function multiAgentMain(args) {
   const [command, ...rest] = args;
   const options = {
     prepare: { "from-coherent": { type: "string" } },
-    verify: { agents: { type: "string", default: "auto" } },
+    verify: { agents: { type: "string", default: "auto" }, "batch-size": { type: "string" } },
     run: {
       agents: { type: "string", default: "auto" },
+      "batch-size": { type: "string" },
       config: { type: "string" },
       "allow-model-calls": { type: "boolean", default: false },
     },
@@ -99,6 +100,11 @@ export async function multiAgentMain(args) {
     agents === undefined || (Number.isSafeInteger(agents) && agents > 0),
     "--agents must be auto or a positive integer",
   );
+  const batchSize = values["batch-size"] === undefined ? undefined : Number(values["batch-size"]);
+  assert.ok(
+    batchSize === undefined || (Number.isSafeInteger(batchSize) && batchSize > 0),
+    "--batch-size must be a positive integer",
+  );
   const { runConcurrent } =
     await import("../src/suites/explicit-edit-multi-agent/execution/concurrent-run.mjs");
   const controller = new AbortController();
@@ -108,6 +114,7 @@ export async function multiAgentMain(args) {
   try {
     const report = await runConcurrent(...positionals, {
       agents,
+      batchSize,
       configPath: command === "run" ? values.config : undefined,
       signal: controller.signal,
     });

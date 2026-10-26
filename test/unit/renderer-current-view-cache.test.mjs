@@ -29,10 +29,10 @@ const request = (owner, from, to) => ({
     },
   ],
 });
-async function fixture(t) {
+async function fixture(t, options = {}) {
   await mkdir(".tmp", { recursive: true });
   const directory = await mkdtemp(path.resolve(".tmp/current-view-cache-"));
-  const planner = currentNamingPlanner(directory);
+  const planner = currentNamingPlanner(directory, options);
   t.after(async () => {
     planner.close();
     await rm(directory, { recursive: true, force: true });
@@ -119,6 +119,19 @@ test("retention is bounded to three recent views and evicts the least recently u
     current["south.cpp"],
     input["south.cpp"].replaceAll("first", "south_left").replaceAll("second", "south_right"),
   );
+});
+test("a private one-view budget evicts another translation unit without changing its edits", async (t) => {
+  const planner = await fixture(t, { maxViews: 1 });
+  const north = await commit(planner, input, request("north", "first", "left"));
+  const south = await commit(planner, north.after, request("south", "first", "south_left"));
+  const returned = await commit(planner, south.after, request("north", "second", "right"));
+  assert.equal(returned.statistics.snapshotAttempts, 3);
+  assert.equal(returned.statistics.cacheHits, 0);
+  assert.deepEqual(returned.after, {
+    ...input,
+    "north.cpp": input["north.cpp"].replaceAll("first", "left").replaceAll("second", "right"),
+    "south.cpp": input["south.cpp"].replaceAll("first", "south_left"),
+  });
 });
 test("a consumed but unacknowledged plan cannot enter the retained-view cache", async (t) => {
   const planner = await fixture(t);
