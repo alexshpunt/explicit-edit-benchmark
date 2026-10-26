@@ -194,6 +194,55 @@ test("atomic intervals retain original drained barriers and never expose future 
     /contract/i,
   );
 });
+test("opt-in round credit seals trusted structural provenance and private endpoint naming batches", () => {
+  const value = fixture();
+  const bundle = assemble(value);
+  const schedule = value.tasks.map((task, index) => ({
+    id: `round-${index}`,
+    assignments: [{ agent: index, task: task.id }],
+  }));
+  const contracts = new Map(
+    schedule.map((round, index) => [round.id, value.contracts.get(value.tasks[index].id)]),
+  );
+  const untouched = structuredClone({
+    initial: value.initial,
+    workload: bundle.workload,
+    batches: bundle.batches,
+  });
+  const result = atomicCheckpoints(
+    value.initial,
+    bundle.workload,
+    bundle.batches,
+    schedule,
+    contracts,
+    { roundCredit: true },
+  );
+  const first = result.rounds.get("round-0"),
+    second = result.rounds.get("round-1");
+  assert.deepEqual(first.credit.beforeTree, value.initial);
+  assert.equal(first.credit.structuralFootprints.version, "renderer-round-footprints-v1");
+  assert.deepEqual(
+    first.credit.structuralFootprints.atoms.map(({ id }) => id),
+    first.nodes.map(({ id }) => id),
+  );
+  assert.deepEqual(first.credit.namingBatches, []);
+  assert.deepEqual(second.credit.beforeTree, first.expectedTree);
+  assert.equal(second.credit.structuralFootprints, undefined);
+  assert.deepEqual(second.credit.namingBatches, [bundle.batches[0].batch]);
+  assert.deepEqual(
+    { initial: value.initial, workload: bundle.workload, batches: bundle.batches },
+    untouched,
+  );
+  const legacy = atomicCheckpoints(
+    value.initial,
+    bundle.workload,
+    bundle.batches,
+    schedule,
+    contracts,
+  );
+  assert.equal(Object.hasOwn(legacy.rounds.get("round-0"), "credit"), false);
+  assert.equal(Object.hasOwn(legacy.rounds.get("round-1"), "credit"), false);
+});
 test("uncertified, stale and changed coarse operations fail before a bundle is returned", () => {
   const mutations = [
     (value) => value.namingPlans.clear(),

@@ -116,6 +116,7 @@ async function runPersistentHarness(
       child,
       current: null,
       closing: false,
+      terminal: null,
       closed: new Promise((resolve, reject) => {
         child.once("error", reject);
         child.once("close", (code, signal) => resolve({ code, signal }));
@@ -138,17 +139,29 @@ async function runPersistentHarness(
     child.stderr.on("data", (chunk) => process.current?.errors.write(chunk));
     process.closed.then(
       ({ code, signal }) => {
-        if (!process.closing) {
-          process.current?.reject(
-            new Error(`Persistent harness exited before turn completion (${code ?? signal})`),
-          );
-        }
+        process.terminal ??= new Error(
+          `Persistent harness exited before turn completion (${code ?? signal})`,
+        );
+        if (!process.closing) process.current?.reject(process.terminal);
       },
-      (error) => process.current?.reject(error),
+      (error) => {
+        process.terminal ??= error;
+        process.current?.reject(process.terminal);
+      },
     );
-    child.stdin.on("error", () => {});
+    child.stdin.on("error", (error) => {
+      process.terminal ??= error;
+      process.current?.reject(process.terminal);
+    });
     persistentHarnesses.set(key, process);
   }
+  if (
+    process.terminal ||
+    process.closing ||
+    process.child.exitCode !== null ||
+    process.child.signalCode !== null
+  )
+    throw process.terminal ?? new Error("Persistent harness is closed");
   if (process.current) throw Error("Persistent harness already has an active turn");
   const output = createWriteStream(path.join(artifacts, "stdout.jsonl"));
   const errors = createWriteStream(path.join(artifacts, "stderr.log"));
@@ -162,7 +175,6 @@ async function runPersistentHarness(
     timedOut = expired;
     stopping.requested = true;
     process.closing = true;
-    persistentHarnesses.delete(key);
     terminateHarness(process.child);
     process.current?.resolve();
   });

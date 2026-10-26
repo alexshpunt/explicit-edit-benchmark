@@ -209,7 +209,7 @@ function inventory(tree) {
  * This is not arbitrary C++ namespace equivalence: aliases, broad namespace
  * directives and conditional imports remain physical requirements.
  */
-export function standardUsingContext(tree, record, omitOwn = false) {
+export function standardUsingContext(tree, record, omitOwn = false, { consumer } = {}) {
   if (record.kind !== "using" || record.conditions.length) return false;
   const spelling = record.tokens.join("");
   const literalNamespace = spelling === "usingnamespacestd::string_literals;";
@@ -308,6 +308,7 @@ export function standardUsingContext(tree, record, omitOwn = false) {
     }
     return false;
   }
+  let matchedConsumer = consumer === undefined;
   function consumers(source, scope = "", conditions = [], offset = 0) {
     if (literalNamespace && !cppTokens(source).some(literalUse)) return true;
     for (const unit of structure(source).units) {
@@ -325,6 +326,14 @@ export function standardUsingContext(tree, record, omitOwn = false) {
           )
             return false;
       } else if (unit.kind !== "using" && containsScope(record.scope, owner)) {
+        if (
+          consumer &&
+          (consumer.scope !== owner ||
+            JSON.stringify(consumer.conditions) !== JSON.stringify(conditions) ||
+            JSON.stringify(consumer.tokens) !== JSON.stringify(tokens(text)))
+        )
+          continue;
+        matchedConsumer = true;
         const uses = cppTokens(text).some((token, index, all) =>
           literalNamespace
             ? literalUse(token, index, all)
@@ -350,7 +359,7 @@ export function standardUsingContext(tree, record, omitOwn = false) {
     return true;
   }
   try {
-    return consumers(tree[record.file]);
+    return consumers(tree[record.file]) && matchedConsumer;
   } catch {
     // Unsupported lexical contexts never grant a preservation exception.
     return false;

@@ -312,3 +312,14 @@ export function cppStructure(source, { expandNamespaceConditionals = false } = {
   scope(0, [], []);
   return { units, namespaces, directives };
 }
+
+/** Namespace shells removed by the structural cleanup action. Keep this exact
+ * predicate shared by trusted editing and final-candidate cleanup measurement.
+ */
+export function emptyNamespaceSpans(structure) {
+  return structure.namespaces.filter((namespace) =>
+    structure.units
+      .filter((unit) => namespace.start < unit.start && unit.end < namespace.end)
+      .every((unit) => unit.kind === "using"),
+  );
+}

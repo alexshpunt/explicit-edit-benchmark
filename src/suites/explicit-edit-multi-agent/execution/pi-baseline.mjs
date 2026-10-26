@@ -369,6 +369,26 @@ export async function startBaseline(
     await exited;
     fail(new ExecutionFailure("driver_exit", "Pi closed"));
   };
+  const idleState = async () => {
+    if (terminal || stopped || child.exitCode !== null || child.signalCode !== null)
+      throw terminal ?? new ExecutionFailure("driver_exit", "Pi is closed");
+    const current = await command("get_state");
+    if (
+      current.sessionId !== expected.sessionId ||
+      observation.lifetime !== expected.lifetime ||
+      observation.agentPid !== expected.agentPid ||
+      `${current.model?.provider}/${current.model?.id}` !== config.model ||
+      current.thinkingLevel !== config.thinking ||
+      current.isStreaming !== false ||
+      current.isCompacting !== false ||
+      current.pendingMessageCount !== 0
+    ) {
+      const error = new ExecutionFailure("driver_exit", "Baseline identity or idle state changed");
+      fail(error);
+      throw error;
+    }
+    return current;
+  };
   const abortStartup = () => {
     fail(signal.reason);
     kill();
@@ -388,6 +408,19 @@ export async function startBaseline(
       },
       events,
       close,
+      /** Inspect the existing process with RPC only; never prompt or replace it. */
+      async assertIdle() {
+        if (active)
+          throw new ExecutionFailure("driver_exit", "Baseline still has an active delivery");
+        const current = await idleState();
+        return {
+          ...expected,
+          version,
+          model: config.model,
+          thinking: config.thinking,
+          messageCount: current.messageCount,
+        };
+      },
       async execute(prompt, { signal } = {}) {
         if (active) throw Error("Overlapping Baseline requests are forbidden");
         if (terminal || stopped)
@@ -449,9 +482,7 @@ export async function startBaseline(
             observation.systemEmpty,
             "No observed model call under the empty system prompt",
           );
-          const stateNow = await command("get_state");
-          assert.equal(stateNow.sessionId, expected.sessionId, "Session changed");
-          assert.equal(stateNow.isStreaming, false);
+          const stateNow = await idleState();
           return { ...result(), messageCount: stateNow.messageCount };
         } catch (error) {
           error.execution = result();

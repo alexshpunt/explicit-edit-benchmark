@@ -7,6 +7,9 @@ import { prepareAtomicNamingBatch, applyAtomicNamingBatch } from "./atomic-namin
 import { prepareCoherentContract, evaluateCoherentContract } from "../grading/coherent-grade.mjs";
 import { treeIdentity } from "../generation/generator.mjs";
 import { applyCoherentStructure } from "../reference/coherent-edit.mjs";
+import { prepareAtomicEffect } from "./atomic-structural-effects.mjs";
+import { prepareAtomicRoundFootprints } from "../grading/round-footprints.mjs";
+import { cppStructure, emptyNamespaceSpans } from "../cpp/cpp-structure.mjs";
 
 function originalOperation(operation) {
   const { bindingGroups: _groups, bindingCertification: _certification, ...original } = operation;
@@ -189,7 +192,15 @@ function structuralRepairScopes(before, after, operation) {
 /** Replay trusted effects only at the original barrier boundaries. No candidate
  * source enters this calculation; it creates no intermediate acceptance gates.
  */
-export function atomicCheckpoints(initialTree, workload, batches, schedule, contracts) {
+export function atomicCheckpoints(
+  initialTree,
+  workload,
+  batches,
+  schedule,
+  contracts,
+  { roundCredit = false } = {},
+) {
+  assert.equal(typeof roundCredit, "boolean", "Invalid round credit preparation mode");
   assert.equal(workload.version, "renderer-atomic-workload-v1");
   atomicOrder(workload.nodes);
   const parents = new Set(workload.nodes.map((node) => node.taskId));
@@ -211,6 +222,8 @@ export function atomicCheckpoints(initialTree, workload, batches, schedule, cont
   let tree = initialTree;
   for (const round of schedule) {
     const selected = new Set(round.assignments.map((assignment) => assignment.task));
+    const beforeTree = tree;
+    const effects = [];
     const nodes = workload.nodes
       .filter((node) => selected.has(node.taskId))
       .map((node) => ({
@@ -222,12 +235,34 @@ export function atomicCheckpoints(initialTree, workload, batches, schedule, cont
       item.operations.every((operation) => operation.phase === "structure"),
     )) {
       const before = tree;
-      tree = node.operations.reduce(applyCoherentStructure, tree);
+      const cleanupScopes = [];
+      tree = node.operations.reduce((current, operation) => {
+        if (roundCredit && operation.action === "cleanup-empty-namespaces")
+          cleanupScopes.push(
+            ...emptyNamespaceSpans(cppStructure(current["main.cpp"])).map(({ scope }) => ({
+              file: "main.cpp",
+              scope,
+            })),
+          );
+        return applyCoherentStructure(current, operation);
+      }, tree);
+      if (roundCredit)
+        effects.push({
+          id: node.id,
+          effect: prepareAtomicEffect(before, tree),
+          filesBefore: Object.keys(before).sort(),
+          filesAfter: Object.keys(tree).sort(),
+          cleanupScopes,
+        });
       scopes.set(
         node.id,
         node.operations.flatMap((operation) => structuralRepairScopes(before, tree, operation)),
       );
     }
+    const structuralFootprints =
+      roundCredit && effects.length
+        ? prepareAtomicRoundFootprints(beforeTree, effects, tree)
+        : undefined;
     for (const entry of batches.filter((item) => selected.has(item.taskId))) {
       const result = applyAtomicNamingBatch(tree, entry.batch, entry.batch.ids);
       tree = result.tree;
@@ -245,7 +280,22 @@ export function atomicCheckpoints(initialTree, workload, batches, schedule, cont
       "pass",
       "Trusted replay differs from its full barrier contract",
     );
-    rounds.set(round.id, { nodes, expectedTree: tree, repairScopes: new Map(scopes) });
+    rounds.set(round.id, {
+      nodes,
+      expectedTree: tree,
+      repairScopes: new Map(scopes),
+      ...(roundCredit
+        ? {
+            credit: {
+              beforeTree,
+              structuralFootprints,
+              namingBatches: batches
+                .filter((item) => selected.has(item.taskId))
+                .map(({ batch }) => batch),
+            },
+          }
+        : {}),
+    });
     for (const node of nodes) previous.add(node.id);
   }
   return { rounds, tree };

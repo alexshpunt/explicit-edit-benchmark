@@ -1,4 +1,4 @@
-import { cppStructure, unitDeclarator } from "../cpp/cpp-structure.mjs";
+import { cppStructure, unitDeclarator, emptyNamespaceSpans } from "../cpp/cpp-structure.mjs";
 import { locateImplementation, moveImplementation } from "./implementation-edit.mjs";
 import { applyRequest } from "./scripted-worker.mjs";
 import { compactBlankLines } from "../generation/generator.mjs";
@@ -119,11 +119,7 @@ export function applyFullStructure(tree, request) {
   }
   if (request.action === "cleanup-empty-namespaces") {
     const structure = cppStructure(source);
-    const empty = structure.namespaces.filter((namespace) =>
-      structure.units
-        .filter((unit) => namespace.start < unit.start && unit.end < namespace.end)
-        .every((unit) => unit.kind === "using"),
-    );
+    const empty = emptyNamespaceSpans(structure);
     const spans = empty
       .filter(
         (namespace) =>

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { constants } from "node:fs";
@@ -15,6 +16,54 @@ const exec = promisify(execFile);
  * are never agent input.
  */
 export async function buildCoherentCandidate(source, evidence, tree, { signal } = {}) {
+  return buildAndRender(source, evidence, tree, { signal });
+}
+
+/** Preserve independent build/output evidence without turning verifier failures
+ * or cancellation into model editing outcomes. Failure objects and their compiler
+ * causes are private diagnostic evidence, not safe standalone result payloads.
+ */
+export async function measureCoherentCandidate(
+  source,
+  evidence,
+  tree,
+  { expectedPixels, signal } = {},
+) {
+  assert.ok(
+    Array.isArray(expectedPixels) &&
+      expectedPixels.length === 2 &&
+      Array.from(expectedPixels).every(
+        (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
+      ),
+    "Two expected scene pixel hashes are required",
+  );
+  signal?.throwIfAborted();
+  let buildPassed = false;
+  try {
+    const pixels = await buildAndRender(source, evidence, tree, {
+      signal,
+      onBuild: () => {
+        buildPassed = true;
+      },
+    });
+    const resultMatched = JSON.stringify(pixels) === JSON.stringify(expectedPixels);
+    return {
+      buildPassed,
+      resultMatched,
+      pixels,
+      ...(!resultMatched
+        ? { failure: new GradeFailure("behavior", "Rendered pixels differ") }
+        : {}),
+    };
+  } catch (failure) {
+    signal?.throwIfAborted();
+    if (!(failure instanceof GradeFailure) || !["build", "behavior"].includes(failure.category))
+      throw failure;
+    return { buildPassed, resultMatched: false, failure };
+  }
+}
+
+async function buildAndRender(source, evidence, tree, { signal, onBuild }) {
   await mkdir(evidence);
   const build = path.join(evidence, "build");
   await mkdir(build);
@@ -114,6 +163,7 @@ export async function buildCoherentCandidate(source, evidence, tree, { signal } 
     "compile.log",
     300000,
   );
+  onBuild?.();
   const passes = [];
   for (const pass of ["scene", "repeat"]) {
     const render = path.join(evidence, pass);

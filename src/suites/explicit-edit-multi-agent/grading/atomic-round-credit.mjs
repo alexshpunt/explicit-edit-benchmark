@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { atomicOwnerFrames } from "../tasks/atomic-naming-replay.mjs";
-import { prepareCoherentContract, evaluateCoherentContract } from "./coherent-grade.mjs";
+import {
+  prepareCoherentContract,
+  evaluateCoherentContract,
+  standardUsingContext,
+} from "./coherent-grade.mjs";
+import {
+  prepareStructuralCredit,
+  physicalRecordKey,
+  structuralRecordOwners,
+} from "./structural-credit.mjs";
+import { namespaceShellCounts } from "./round-footprints.mjs";
 
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const identifier = (text) => /^[A-Za-z_]\w*$/.test(text);
@@ -42,7 +52,8 @@ export function prepareAtomicRoundCredit({
   beforeTree,
   expectedTree,
   nodes,
-  namingBatches,
+  namingBatches = [],
+  structuralFootprints,
   expectedSymbols,
 }) {
   assert.ok(beforeTree && expectedTree, "Missing trusted round trees");
@@ -51,7 +62,11 @@ export function prepareAtomicRoundCredit({
     "Invalid round atom identities",
   );
   assert.ok(
-    nodes.every((node) => node.operations.every(({ phase }) => phase === "names")),
+    nodes.every(
+      (node) =>
+        node.operations.length > 0 &&
+        node.operations.every(({ phase }) => ["names", "structure"].includes(phase)),
+    ),
     "Unsupported endpoint atom kind",
   );
   assert.equal(expectedSymbols?.status, "pass", "Invalid trusted compiler endpoint");
@@ -65,6 +80,9 @@ export function prepareAtomicRoundCredit({
     ...frame,
     slots: new Map(),
     ids: new Set(),
+    structuralIds: new Set(),
+    contextIds: new Set(),
+    requiredIds: new Set(),
   }));
   const byOrigin = new Map();
   for (const frame of frames) append(byOrigin, originKey(frame), frame);
@@ -90,7 +108,18 @@ export function prepareAtomicRoundCredit({
       }
     }
   }
-  for (const id of ids) assert.ok(covered.has(id), "Atom has no certified endpoint slots");
+  for (const node of nodes.filter((node) => node.operations[0].phase === "names"))
+    assert.ok(covered.has(node.id), "Atom has no certified endpoint slots");
+  const contract = prepareCoherentContract(expectedTree);
+  const structural = prepareStructuralCredit({
+    beforeTree,
+    frames,
+    contract,
+    nodes,
+    namingBatches,
+    footprints: structuralFootprints,
+    expectedSymbols,
+  });
   const copies = new Map();
   for (const frame of frames) {
     frame.key = digest([...shape(frame), masked(frame.tokens, frame.slots)]);
@@ -102,7 +131,8 @@ export function prepareAtomicRoundCredit({
     frames,
     expectedTree,
     expectedSymbols,
-    contract: prepareCoherentContract(expectedTree),
+    contract,
+    structural,
     copies,
     compiler: compilerView(expectedSymbols, frames, (frame) => frame.key),
   };
@@ -268,18 +298,38 @@ function lexicalProjection(tree, expected, matches) {
 export function evaluateAtomicRoundCredit(tree, prepared, { candidateSymbols }) {
   assert.equal(prepared.version, "renderer-atomic-round-credit-v1", "Invalid endpoint preparation");
   const { frames: actual, invalid } = frameRecords(tree);
-  const { frames: expected } = prepared;
+  const { frames: expected, structural } = prepared;
   const { matches, reverse } = matchFrames(actual, expected);
   const failures = new Map(prepared.nodes.map(({ id }) => [id, []]));
   const preservationFailures = [];
-  const fail = (frame, category) => {
-    for (const id of frame.ids) failures.get(id).push({ category, file: frame.file });
-    // A failed TU cannot prove an unchanged owner's binding integrity, but it
-    // also cannot prove collateral corruption. Only affected atom certification
-    // is denied; direct lexical or successful-TU binding violations veto integrity.
-    if (!frame.ids.size && category !== "compiler-context")
-      preservationFailures.push({ category, file: frame.file });
+  const counts = (records) => {
+    const result = new Map();
+    for (const record of records) {
+      const key = physicalRecordKey(record);
+      result.set(key, (result.get(key) ?? 0) + (record.count ?? 1));
+    }
+    return result;
   };
+  const expectedFrames = counts(expected),
+    actualFrames = counts(actual);
+  const samePhysicalFrame = (frame) => {
+    const key = physicalRecordKey(frame);
+    return expectedFrames.get(key) === actualFrames.get(key);
+  };
+  const frameOwners = (frame) =>
+    new Set([
+      ...frame.ids,
+      ...frame.requiredIds,
+      ...(samePhysicalFrame(frame) ? frame.contextIds : []),
+    ]);
+  const charge = (ids, category, file, unknown = false) => {
+    for (const id of ids) failures.get(id).push({ category, file });
+    // Missing successful compiler evidence denies certification but is not proof
+    // of collateral damage to a physically unchanged, unassigned owner.
+    if (!ids.size && !unknown) preservationFailures.push({ category, file });
+  };
+  const fail = (frame, category) =>
+    charge(frameOwners(frame), category, frame.file, category === "compiler-context");
   const expectedView = prepared.compiler;
   const actualView = compilerView(candidateSymbols, actual, (frame) => {
     const candidates = reverse.get(frame) ?? [];
@@ -289,15 +339,14 @@ export function evaluateAtomicRoundCredit(tree, prepared, { candidateSymbols }) 
   });
   for (const frame of expected) {
     const candidates = matches.get(frame);
-    const copies = prepared.copies.get(frame.key);
-    if (candidates.length !== copies) {
+    if (candidates.length !== prepared.copies.get(frame.key)) {
       fail(frame, "protected-owner");
       continue;
     }
     for (const other of candidates) {
       for (const [index, site] of frame.slots)
         if (other.tokens[index] !== site.to)
-          failures.get(site.nodeId).push({ category: "requested-name", file: frame.file });
+          charge(new Set([site.nodeId]), "requested-name", frame.file);
       const units = [...expectedView.units.values()].filter((unit) =>
         unit.files.includes(frame.file),
       );
@@ -313,14 +362,14 @@ export function evaluateAtomicRoundCredit(tree, prepared, { candidateSymbols }) 
         )) {
           const site = frame.slots.get(index);
           if (site)
-            failures.get(site.nodeId).push({ category: "compiler-binding", file: frame.file });
+            charge(new Set([site.nodeId, ...frame.structuralIds]), "compiler-binding", frame.file);
           else fail(frame, "compiler-binding");
         }
       }
     }
   }
-  // A failed matching owner may still be recognized by its protected declaration
-  // header. This is attribution only: it can never establish successful credit.
+  // Recognizing an old or damaged assigned declaration is attribution only. It
+  // does not establish credit for the required canonical destination.
   const attributed = (frame) => {
     const exact = reverse.get(frame) ?? [];
     if (exact.length) return exact;
@@ -332,32 +381,56 @@ export function evaluateAtomicRoundCredit(tree, prepared, { candidateSymbols }) 
     );
   };
   for (const frame of actual) {
-    if (!reverse.has(frame) && !attributed(frame).length)
-      preservationFailures.push({ category: "unexpected-owner", file: frame.file });
+    if (reverse.has(frame)) continue;
+    const owners = new Set(attributed(frame).flatMap((other) => [...frameOwners(other)]));
+    for (const id of structuralRecordOwners(frame, structural)) owners.add(id);
+    charge(owners, "unexpected-owner", frame.file);
   }
   const projected = lexicalProjection(tree, expected, matches);
   const lexical = evaluateCoherentContract(projected, prepared.contract);
-  const records = new Map(prepared.contract.obligations.map((record) => [record.id, record]));
+  let actualContract;
   try {
-    for (const record of prepareCoherentContract(projected).obligations)
-      records.set(record.id, record);
+    actualContract = prepareCoherentContract(projected);
   } catch {
-    // Missing trustworthy lexical coverage is an explicit integrity failure.
+    preservationFailures.push({ category: "lexical-coverage" });
   }
+  const expectedCounts = counts(prepared.contract.obligations);
+  const actualCounts = counts(actualContract?.obligations ?? []);
+  const samePhysicalRecord = (record) => {
+    const key = physicalRecordKey(record);
+    return expectedCounts.get(key) === actualCounts.get(key);
+  };
+  const records = new Map(
+    [...prepared.contract.obligations, ...(actualContract?.obligations ?? [])].map((record) => [
+      record.id,
+      record,
+    ]),
+  );
   for (const obligation of lexical.obligations.filter(({ status }) => status === "fail")) {
     if (obligation.kind === "files") {
       for (const file of new Set([...prepared.contract.files, ...Object.keys(tree)])) {
         if (prepared.contract.files.includes(file) === Object.hasOwn(tree, file)) continue;
-        const owners = expected.filter((frame) => frame.file === file);
-        if (!owners.length || owners.some((frame) => !frame.ids.size))
-          preservationFailures.push({ category: "physical-file", file });
+        const owners = new Set(
+          structural.fileGoals.filter((goal) => goal.file === file).map(({ id }) => id),
+        );
+        for (const frame of expected.filter((frame) => frame.file === file))
+          for (const id of frameOwners(frame)) owners.add(id);
+        charge(owners, "physical-file", file);
       }
       continue;
     }
     const record = records.get(obligation.id);
-    const relevant =
-      record &&
-      [...expected, ...actual].filter(
+    const owners = new Set();
+    if (record) {
+      const roles = structural.recordOwners.get(record.id);
+      for (const id of [
+        ...(roles?.physical ?? []),
+        ...(roles?.required ?? []),
+        ...(samePhysicalRecord(record) ? (roles?.context ?? []) : []),
+      ])
+        owners.add(id);
+      for (const id of structuralRecordOwners(record, structural)) owners.add(id);
+      for (const frame of [...expected, ...actual].filter(
         (frame) =>
           frame.file === record.file &&
           (record.kind === "comment"
@@ -366,17 +439,46 @@ export function evaluateAtomicRoundCredit(tree, prepared, { candidateSymbols }) 
               frame.kind === record.kind &&
               same(frame.conditions, record.conditions) &&
               same(frame.tokens, record.tokens)),
-      );
-    const owners =
-      relevant?.flatMap((frame) => (expected.includes(frame) ? [frame] : attributed(frame))) ?? [];
-    if (owners.length && owners.every((frame) => frame.ids.size)) {
-      for (const frame of owners) fail(frame, "protected-context");
-    } else {
-      preservationFailures.push({
-        category: "protected-context",
-        file: obligation.file,
-        kind: obligation.kind,
-      });
+      )) {
+        for (const owner of expected.includes(frame) ? [frame] : attributed(frame))
+          for (const id of frameOwners(owner)) owners.add(id);
+      }
+    }
+    charge(owners, "protected-context", obligation.file);
+  }
+  for (const { id, record, count } of structural.countGoals) {
+    if ((actualCounts.get(physicalRecordKey(record)) ?? 0) !== count)
+      charge(new Set([id]), "physical-count", record.file);
+  }
+  for (const { id, file, present } of structural.fileGoals) {
+    if (Object.hasOwn(tree, file) !== present) charge(new Set([id]), "physical-file", file);
+  }
+  const shellsByFile = new Map();
+  for (const { id, file, scope, count } of structural.namespaceGoals) {
+    if (!shellsByFile.has(file)) {
+      try {
+        shellsByFile.set(
+          file,
+          namespaceShellCounts(Object.hasOwn(tree, file) ? { [file]: tree[file] } : {}),
+        );
+      } catch {
+        shellsByFile.set(file, undefined);
+      }
+    }
+    const shells = shellsByFile.get(file);
+    if (!shells || (shells.get(JSON.stringify([file, scope])) ?? 0) !== count)
+      charge(new Set([id]), "namespace-cleanup", file);
+  }
+  for (const record of structural.imports) {
+    for (const frame of structural.dependencies.get(record.id) ?? []) {
+      for (const consumer of matches.get(frame)) {
+        if (
+          !standardUsingContext(tree, { ...record, file: consumer.file, conditions: [] }, false, {
+            consumer,
+          })
+        )
+          charge(frameOwners(frame), "required-import", consumer.file);
+      }
     }
   }
   for (const { file } of invalid) preservationFailures.push({ category: "lexical-coverage", file });

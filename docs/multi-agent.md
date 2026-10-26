@@ -93,6 +93,15 @@ subject to GitHub's six-hour platform limit, not a benchmark task deadline.
 This is the intended round-score methodology. The runner and CLI integration are
 not yet complete; the commands below still use the accepted-prefix protocol.
 
+The grading core supports naming and structural endpoints, including final
+physical destinations, old-copy absence, declaration counts and explicit empty
+namespace cleanup. Trusted provenance follows later moves and inline conversion.
+Context-only changes do not grant permission to damage unchanged bodies. Required
+standard imports are checked for each selected consumer, including inactive code.
+Build and repeated-image outcomes are measured independently. Persistent Pi
+participants expose an idle-state check that does not request inference; a dead
+participant cannot silently restart.
+
 The workload remains all 71 tasks and their 11,178 original atomic edits. The
 configured team size is a maximum, not a required number of occupied agents.
 Ready dependencies determine assignments, and different maxima may produce
