@@ -341,7 +341,13 @@ def main():
             # header. Its caller's source position is not part of its identity.
             location = list(binding_location(target))
             location[1] = stable_usr(location[1])
-            return "local:" + json.dumps([*location, target.spelling], separators=(",", ":"))
+            name = target.spelling
+            if (target.kind in (cindex.CursorKind.CONSTRUCTOR, cindex.CursorKind.DESTRUCTOR)
+                    and name.lstrip("~").startswith("(")):
+                # Synthesized anonymous-type names embed physical line/column
+                # coordinates. Kind and relative declaration token identify them.
+                name = "<anonymous>"
+            return "local:" + json.dumps([*location, name], separators=(",", ":"))
 
         def visit(cursor, owner=None, physical=None):
             physical_file = project_file(cursor.location)

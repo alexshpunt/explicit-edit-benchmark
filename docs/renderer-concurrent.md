@@ -55,9 +55,25 @@ Only after all queues and harness turns have drained does the verifier check the
 combined source. Intermediate states and individual atoms are not graded. A
 per-file symbol map from Clang 18's libclang compares declaration USRs, declaration
 and body tokens, and referenced USRs against the expected snapshot. Declaration
-order within a file and reopened namespaces do not matter. Macros, inactive
-branches and locals remain lexically protected. Earlier accepted work is part of
-every later check.
+order within a file and reopened namespaces do not matter. Synthesized local
+constructor/destructor names use their owner, kind and relative declaration token,
+not Clang's location-bearing anonymous-type label. Distinct local types remain
+distinct. Macros, inactive branches and locals remain lexically protected. Earlier
+accepted work is part of every later check.
+
+Accepted barriers publish immutable `checkpoints/<round-id>` directories containing
+the source snapshot, accepted-prefix progress, queue rotation and workload/schedule
+bindings. A checkpoint marker is published last; an interrupted write is not a
+usable checkpoint. Conversation histories and credentials are not checkpointed.
+
+For recovery from a verified benchmark or runtime defect, the runner API accepts
+`resumeFrom` (a checkpoint directory) and an explicit `recoveryReason`. It verifies
+the snapshot and rechecks cumulative structure, compilation and repeated pixels
+before opening fresh participant sessions. Earlier accepted atoms are not
+redelivered. A recovered run is diagnostic-only and unscored, with its parent report
+hash retained; original evidence is never rewritten. Delivery, repair, usage and
+elapsed metrics describe the new segment, while accepted progress includes the
+revalidated prefix. Recovery must not reset attempts after a genuine model failure.
 
 A fresh build and two scenes rendered twice must pass with exact pinned pixels.
 The verifier also checks that source did not change after the barrier. A returned

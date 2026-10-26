@@ -27,6 +27,7 @@ import {
   validateCurrentReferenceExecution,
 } from "../reference/execution-proof.mjs";
 import { suiteVerifier } from "../source-identity.mjs";
+import { readConcurrentCheckpoint, writeConcurrentCheckpoint } from "./concurrent-checkpoint.mjs";
 import { ATOMIC_DISPATCH_POLICY, runAtomicStream } from "./atomic-stream.mjs";
 import { atomicOrder } from "../tasks/atomic-effects.mjs";
 import { atomicCheckpoints } from "../tasks/atomic-bundle.mjs";
@@ -60,6 +61,11 @@ const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
  * repairs use atomicIds: [] and public repairTasks: [{ id, operations }].
  * Private compiler bindings never enter driver metadata. One receipt belongs
  * to the delivery; it is not source acceptance.
+ * Accepted barriers publish immutable checkpoints/<round> snapshots. resumeFrom
+ * selects one checkpoint; recoveryReason records the verified infrastructure fault.
+ * Recovery strictly regrades its source before opening fresh sessions. It is always
+ * diagnostic/unscored, retains prefix credit and leaves the new barrier budget fixed.
+ * It must not be used to grant more attempts after a genuine model failure.
  * Optional synchronous onCase(event) forwards atomic case lifetimes with their
  * round and attempt for private external watchdogs. It does not set model limits
  * or fabricate observations for retained work.
@@ -72,6 +78,8 @@ export async function runConcurrent(
     configPath,
     createDriver,
     reference = false,
+    resumeFrom,
+    recoveryReason,
     batchSize = ATOMIC_DISPATCH_POLICY.defaultBatchSize,
     signal: externalSignal,
     log = console.log,
@@ -85,6 +93,14 @@ export async function runConcurrent(
   assert.ok(!(reference && configPath), "Scripted reference cannot use paid configuration");
   const live = Boolean(configPath || createDriver);
   const referenceRun = !live || reference;
+  assert.ok(
+    !resumeFrom || (live && !referenceRun),
+    "Checkpoint recovery is live diagnostic work only",
+  );
+  assert.ok(
+    !resumeFrom || (typeof recoveryReason === "string" && recoveryReason.trim().length > 0),
+    "Checkpoint recovery requires an explicit infrastructure/verifier defect reason",
+  );
   const maxAttempts = referenceRun ? 1 : MULTI_AGENT_MAX_ATTEMPTS;
   assert.ok(
     !(configPath && createDriver),
@@ -194,7 +210,7 @@ export async function runConcurrent(
     const contractHashes = Object.fromEntries(
       [...contracts].map(([id, contract]) => [id, digest(JSON.stringify(contract))]),
     );
-    if (live && !referenceRun) {
+    if (live && !referenceRun && !resumeFrom) {
       const proof = await json(path.join(preparation, `verification-${agents}.json`));
       assert.deepEqual(
         proof.atomic,
@@ -224,11 +240,12 @@ export async function runConcurrent(
     signal.throwIfAborted();
     await mkdir(output, { mode: 0o700 });
     workspace = path.join(output, "workspace");
-    await writeTree(workspace, initial);
     report = {
       version: "renderer-concurrent-run-v1",
       benchmark: MULTI_AGENT_BENCHMARK,
-      protocol: MULTI_AGENT_PROTOCOL,
+      protocol: resumeFrom ? "renderer-checkpoint-diagnostic-v1" : MULTI_AGENT_PROTOCOL,
+      ...(resumeFrom ? { diagnosticOnly: true, referenceProofMatched: false, score: null } : {}),
+      verifierSha256: await suiteVerifier(),
       runtime: null,
       status: "running",
       mode: referenceRun ? "scripted" : "live",
@@ -261,6 +278,21 @@ export async function runConcurrent(
       overwrittenPeerChanges: null,
       usage: null,
     };
+    const restored = resumeFrom ? await readConcurrentCheckpoint(resumeFrom, report) : null;
+    if (restored) {
+      report.resume = {
+        roundId: restored.roundId,
+        sourceIdentity: restored.sourceIdentity,
+        sourceReportSha256: restored.sourceReportSha256,
+        completedRounds: restored.completedRounds,
+        acceptedTasks: restored.acceptedTasks,
+        rotation: restored.rotation,
+        recoveryReason,
+        conversation: "fresh",
+        revalidated: false,
+      };
+    }
+    await writeTree(workspace, restored?.source ?? initial);
     let saving = Promise.resolve();
     const save = () => {
       saving = saving.then(async () => {
@@ -369,7 +401,13 @@ export async function runConcurrent(
         await save();
       }
     }
-    await grade("initial", "initial");
+    if (restored) {
+      await grade(`resume-${restored.roundId}`, restored.roundId);
+      report.acceptedRounds = restored.completedRounds;
+      report.acceptedTasks = restored.acceptedTasks;
+      report.resume.revalidated = true;
+      await save();
+    } else await grade("initial", "initial");
     let config;
     if (configPath) {
       config = await json(configPath);
@@ -404,14 +442,18 @@ export async function runConcurrent(
     }
     // Startup readiness only: no participant waits here once editing begins.
     await Promise.all(drivers.map((driver) => driver.ready));
-    let rotation = 0;
+    let rotation = restored?.rotation ?? 0;
     let lastProgressSave = performance.now();
     const publicPrefix = [];
-    for (const round of schedule) {
+    for (const [roundIndex, round] of schedule.entries()) {
       signal.throwIfAborted();
       const interval = atomicIntervals.rounds.get(round.id);
       const { nodes } = interval;
       publicPrefix.push(...nodes);
+      if (roundIndex < (restored?.completedRounds ?? 0)) {
+        atomicIntervals.rounds.delete(round.id);
+        continue;
+      }
       const parentTasks = round.assignments.map((assignment) => assignment.task);
       let corrections;
       let failure;
@@ -539,6 +581,15 @@ export async function runConcurrent(
           state.accepted = nodes.map((node) => node.id);
           report.acceptedRounds++;
           report.acceptedTasks += parentTasks.length;
+          const checkpointRoot = path.join(output, "checkpoints");
+          await mkdir(checkpointRoot, { recursive: true, mode: 0o700 });
+          await writeConcurrentCheckpoint(path.join(checkpointRoot, round.id), {
+            report,
+            roundId: round.id,
+            source: await readTree(
+              path.join(output, "checks", `${round.id}-attempt-${attempt}`, "source"),
+            ),
+          });
           await save();
           break;
         } catch (error) {
