@@ -12,6 +12,11 @@ rendered output unchanged.
 
 ## Run policy and Score
 
+The accepted-prefix protocol below remains the interpretation of existing observations.
+The round-score protocol is a separate methodology; it never changes historical scores.
+
+### Accepted-prefix protocol
+
 A scored run always uses **15 agents and all 71 tasks**. The dependency graph has
 width 15 and fixes a schedule of 28 barriers. At each barrier its atomic edits are
 split as evenly as their dependencies permit across the team. A dependency chain
@@ -82,6 +87,70 @@ counts do not weight Score. The original suite keeps its existing Score.
 indefinitely and spend model credit. Cancel with Ctrl+C or SIGTERM. Owned agent
 processes close and private evidence remains. Official GitHub-hosted jobs are
 subject to GitHub's six-hour platform limit, not a benchmark task deadline.
+
+### Round-score protocol
+
+This is the intended round-score methodology. The runner and CLI integration are
+not yet complete; the commands below still use the accepted-prefix protocol.
+
+The workload remains all 71 tasks and their 11,178 original atomic edits. The
+configured team size is a maximum, not a required number of occupied agents.
+Ready dependencies determine assignments, and different maxima may produce
+schedules with different numbers of rounds. Idle participants create neither
+failed edits nor additional denominator entries.
+
+A round is measured only after all assignment queues, native turns and writes
+have drained. Each original atom receives binary credit from that final shared
+source. Repairs never become new original atoms. Independent correct bindings
+can receive credit when a sibling edit is incomplete, including when both edits
+share a declaration. Required declaration/use bindings, physical ownership,
+protected code, macros and inactive branches remain obligations. Build success
+alone cannot establish edit credit.
+
+A destructive edit invalidates the atoms whose required source or bindings it
+breaks. Corruption of protected code outside those attributable footprints is a
+separate integrity violation: **the entire round scores zero**, even if all
+requested names, the build and rendered images otherwise pass. The report keeps
+raw atom outcomes alongside this veto.
+
+For round `r`, let `q[r]` be successful original atoms divided by assigned original
+atoms. Let `wBuild` and `wResult` be finite weights at least 1, defaulting to 2 and 4:
+
+- `buildFactor[r]` is 1 after a successful fresh build, otherwise `1 / wBuild`.
+- `resultFactor[r]` is 1 when that build and all repeated scene comparisons pass,
+  otherwise `1 / wResult`.
+- `integrity[r]` is 1 when preservation passes, otherwise 0.
+
+With `R` equal to the full planned number of rounds:
+
+```text
+Score = (100 / R) * sum(q[r] * buildFactor[r] * resultFactor[r] * integrity[r])
+```
+
+Every round has the same maximum contribution, irrespective of its atom count.
+Unobserved rounds contribute zero; an interrupted run is not averaged over only
+its completed rounds. Build and result failures reduce credit rather than
+multiplying it by zero. The verifier attempts their evidence collection even
+when some structural edits fail. Outputs cannot pass without a successful build.
+
+The first attempt and up to five corrections share one candidate and persistent
+histories. The final attempt determines the primary round score; first-attempt
+and final evidence are both retained. After recording the measured candidate,
+the controller restores the exact trusted **end of that round**, on success as
+well as failure. Restoration removes extra files and repairs missing or damaged
+ones. It grants no credit and never exposes later rounds' source.
+
+The same participant processes, mounted workspace and separate histories survive
+restoration. All participants are informed before their next assignments, and
+queue rotation continues. No model call or write may overlap restoration. A
+failed restore is an infrastructure stop, not an editing outcome. Ordinary edit
+failure after six attempts does not prevent the next round. Provider, auth,
+runtime, cancellation and infrastructure stops remain distinct.
+
+Canonical restoration is not the accepted-prefix diagnostic recovery mechanism:
+it does not open fresh sessions, reset attempts or retroactively accept a failed
+candidate. Historical observations and reference proofs retain their original
+protocol and source identities. The original 226-task suite is unchanged.
 
 ## Requirements
 

@@ -36,6 +36,8 @@ def main():
     index = cindex.Index.create()
     records = {}
     diagnostics = []
+    credit_units = []
+    credit_anchors = {}
     function_kinds = {
         cindex.CursorKind.FUNCTION_DECL, cindex.CursorKind.CXX_METHOD,
         cindex.CursorKind.CONSTRUCTOR, cindex.CursorKind.DESTRUCTOR,
@@ -124,6 +126,56 @@ def main():
             definition = cursor.get_definition() or cursor
             return digest(["internal", project_file(definition.location) or physical, raw])
         return digest(["external", raw])
+
+    def credit_target(cursor):
+        physical = project_file(cursor.location)
+        raw = cursor.get_usr()
+        result = {"kind": cursor.kind.name}
+        if physical:
+            result.update({"file": physical, "offset": cursor.location.offset,
+                           "id": private_binding_id(cursor) or digest([
+                               "project-anchor", physical, cursor.location.offset,
+                               cursor.kind.name, raw, cursor.type.spelling])})
+        else:
+            location = cursor.location
+            physical = os.path.normpath(location.file.name) if location.file else None
+            result.update({"external": True, "id": digest([
+                "external-anchor", raw, cursor.kind.name, physical,
+                location.offset if physical else None, cursor.type.spelling])})
+            if raw:
+                result["usr"] = raw
+            if physical:
+                result.update({"file": physical, "offset": location.offset})
+        return result
+
+    def credit_add(row):
+        key = json.dumps(row, sort_keys=True, separators=(",", ":"))
+        credit_anchors[key] = row
+
+    def credit_declaration(cursor, translation_unit):
+        if not cursor.kind.is_declaration() or not project_file(cursor.location):
+            return
+        target = credit_target(cursor)
+        credit_add({"file": target["file"], "offset": target["offset"],
+                    "kind": target["kind"], "id": target["id"],
+                    "role": "declaration", "translationUnit": translation_unit,
+                    "definition": cursor.is_definition()})
+
+    def credit_fact(cursor, translation_unit):
+        physical = project_file(cursor.location)
+        if not physical:
+            return
+        if cursor.kind.is_declaration():
+            credit_declaration(cursor, translation_unit)
+        target = cursor.referenced
+        if target and target != cursor:
+            selected = credit_target(target)
+            credit_add({"file": physical, "offset": cursor.location.offset,
+                        "kind": cursor.kind.name, "role": "reference",
+                        "translationUnit": translation_unit, "target": selected})
+            # Implicit constructors and local declarations need not occur among
+            # child cursors. Their referenced declaration remains a real anchor.
+            credit_declaration(target, translation_unit)
 
     def candidate_fact(cursor, translation_unit, function_owner=None, anonymous=False, recovered=False):
         physical = project_file(cursor.location)
@@ -225,6 +277,13 @@ def main():
             continue
         unit = index.parse(file, args=["--driver-mode=g++", "--gcc-toolchain=/usr", "-std=c++17", "-O0", "-ferror-limit=0", "-ffp-contract=off", "-pthread", "-I", "support", "-I", "."])
         errors = [str(item) for item in unit.diagnostics if item.severity >= cindex.Diagnostic.Error]
+        included = {file}
+        for inclusion in unit.get_includes():
+            name = os.path.relpath(inclusion.include.name)
+            if name in known:
+                included.add(name)
+        credit_units.append({"file": file, "status": "fail" if errors else "pass",
+                             "files": sorted(included)})
         if errors:
             diagnostics.extend(errors)
             for child in unit.cursor.get_children():
@@ -273,6 +332,7 @@ def main():
         def collect_anonymous(cursor, function_owner=None, anonymous=False):
             if not project_file(cursor.location):
                 return
+            credit_fact(cursor, file)
             function_owner, anonymous = candidate_fact(cursor, file, function_owner, anonymous)
             if cursor.kind in (cindex.CursorKind.STRUCT_DECL, cindex.CursorKind.CLASS_DECL,
                                cindex.CursorKind.UNION_DECL, cindex.CursorKind.ENUM_DECL,
@@ -416,6 +476,9 @@ def main():
     print(json.dumps({"version": "renderer-barrier-symbol-map-v1", "compiler": version,
                       "status": "fail" if diagnostics else "pass", "files": files,
                       "symbols": symbols, "bindings": bindings, "diagnostics": diagnostics,
+                      "credit": {"version": "renderer-binding-anchors-v1",
+                                 "translationUnits": credit_units,
+                                 "anchors": [credit_anchors[key] for key in sorted(credit_anchors)]},
                       "metrics": {"elapsedMs": (time.monotonic() - started) * 1000,
                                   "maxRssKiB": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}}, separators=(",", ":")))
 

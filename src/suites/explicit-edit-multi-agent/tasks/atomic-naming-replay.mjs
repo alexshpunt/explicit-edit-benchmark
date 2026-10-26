@@ -137,6 +137,43 @@ function contractKind(unit) {
 function contractConditions(unit) {
   return unit.conditions.map((condition) => texts(contractTokens(condition.join(" "))));
 }
+/** Private endpoint frames share the certified batch's lexer and token indexes.
+ * Compiler locations use UTF-8 bytes; replay edits use UTF-16 string offsets.
+ * Build the conversion once per file, including non-BMP protected literals.
+ */
+export function atomicOwnerFrames(tree) {
+  return Object.entries(tree).flatMap(([file, source]) => {
+    const bytes = new Uint32Array(source.length + 1);
+    let offset = 0;
+    for (let index = 0; index < source.length;) {
+      const point = source.codePointAt(index);
+      const width = point > 0xffff ? 2 : 1;
+      bytes[index] = offset;
+      offset += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+      index += width;
+      bytes[index] = offset;
+    }
+    return owners(file, source).map((unit) => {
+      const tokens = contractTokens(source.slice(unit.start, unit.end));
+      return {
+        file,
+        scope: unit.scope,
+        conditions: contractConditions(unit),
+        originConditions: unit.conditions,
+        kind: contractKind(unit),
+        syntaxKind: unit.kind,
+        opaque: unit.opaque,
+        start: bytes[unit.start],
+        end: bytes[unit.end],
+        tokens: texts(tokens),
+        positions: tokens.map((token) => ({
+          start: bytes[unit.start + token.start],
+          end: bytes[unit.start + token.end],
+        })),
+      };
+    });
+  });
+}
 function batchFingerprint(frame) {
   return createHash("sha256")
     .update(JSON.stringify([frame.scope, frame.kind, frame.opaque, frame.tokens]))

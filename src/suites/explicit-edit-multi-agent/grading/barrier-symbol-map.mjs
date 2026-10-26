@@ -112,6 +112,10 @@ async function indexTree(tree, { evidence, signal } = {}) {
   return result;
 }
 
+// Private endpoint scoring can reuse complete successful-TU facts from a map
+// whose other translation units failed. Legacy strict grading is unchanged.
+export { indexTree as indexBarrierSymbolMap };
+
 export async function prepareBarrierSymbolMap(tree, options) {
   const map = await indexTree(tree, options);
   assert.equal(map.status, "pass", `Invalid trusted barrier source: ${map.diagnostics.join("\n")}`);
@@ -177,5 +181,7 @@ export async function evaluateBarrierSymbolMap(tree, expected, options) {
     // Only actual candidate facts may drive fresh diagnostics. Expected bindings
     // remain private verifier evidence and are never used as a repair payload.
     bindings: actual.bindings,
+    // Private evidence only; never project anchors or compiler IDs into prompts.
+    symbolMap: actual,
   };
 }
