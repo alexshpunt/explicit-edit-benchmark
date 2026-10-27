@@ -90,8 +90,9 @@ subject to GitHub's six-hour platform limit, not a benchmark task deadline.
 
 ### Round-score protocol
 
-This is the intended round-score methodology. The runner and CLI integration are
-not yet complete; the commands below still use the accepted-prefix protocol.
+`shared-project-restoring-v2` has separate native Baseline entry points, currently
+under integration verification. The common run and submission commands below
+remain accepted-prefix commands; they do not select restoration implicitly.
 
 The grading core supports naming and structural endpoints, including final
 physical destinations, old-copy absence, declaration counts and explicit empty
@@ -161,6 +162,86 @@ it does not open fresh sessions, reset attempts or retroactively accept a failed
 candidate. Historical observations and reference proofs retain their original
 protocol and source identities. The original 226-task suite is unchanged.
 
+### Native restoring entry points
+
+Use the installed, approved Pi 1.3.0 runtime. Baseline keeps one actual process per
+participant, with Bash only and an empty system prompt. A fresh process with a
+continued session is not a persistent participant. Idle checks request no
+inference and reject live tool descendants before measurement or restoration.
+A detached background writer is a runtime/infrastructure violation, not another
+editing attempt.
+
+Reuse an audited full preparation. Generate a separate, model-free proof with the
+same maximum occupancy, batch size and weights as the intended observation:
+
+```sh
+node scripts/multi-agent.mjs verify-restoring PRIVATE_PREPARATION \
+  .tmp/restoring-proof --agents 2 --batch-size 1 \
+  --build-weight 2 --result-weight 4
+```
+
+Maximum occupancy 2 yields 38 planned rounds for the full workload. Every planned
+round must pass its first reference check. A failed reference candidate is
+preserved without restoration, then verification stops as ineligible. Reference
+verification cannot use five corrections to manufacture a passing proof.
+
+An authorizing proof requires clean, committed source. It binds the exact commit,
+verifier, execution code, dependency lockfile, immutable workload and graph,
+every original atom and canonical endpoint, schedule and grading policy.
+Historical preparation proofs do not authorize this protocol. A changed commit,
+dirty source, different batch or changed weight requires a new matching proof.
+Dirty source is rejected before reference execution begins.
+
+Keep native configuration private and outside the shared candidate. Use absolute
+paths for the approved runtime root and existing credential files:
+
+```json
+{
+  "runtime": "ABSOLUTE_APPROVED_PI_RUNTIME_ROOT",
+  "model": "PROVIDER/MODEL",
+  "thinking": "high",
+  "authFile": "ABSOLUTE_PRIVATE_AUTH_FILE"
+}
+```
+
+`runtime` names the root containing `node_modules`, not the CLI executable.
+`modelsFile` can name an existing private model registry for the same route.
+`envFile` accepts only explicit provider-credential environment keys. This native
+configuration is distinct from the common harness-adapter configuration. Do not
+silently discard adapter arguments or provider environment when converting it.
+Use approved access-only credentials when refresh is not authorized. Stop on missing or expired
+access rather than logging in, refreshing credentials or switching accounts during preparation.
+
+Only after the proof and free gates match, and model calls are authorized:
+
+```sh
+node scripts/multi-agent.mjs run-restoring PRIVATE_PREPARATION \
+  .tmp/restoring-observation --agents 2 --batch-size 1 \
+  --build-weight 2 --result-weight 4 \
+  --config PRIVATE_NATIVE_CONFIG.json \
+  --proof .tmp/restoring-proof/verification.json --allow-model-calls
+```
+
+Both commands keep private raw evidence in fresh output directories. Every
+candidate is captured before interpretation, including malformed bytes,
+non-UTF-8 names and symlinks. Lexical byte views never replace compiler input.
+Successful original translation units can certify independent atoms when another
+TU fails. A special entry that cannot be mirrored prevents original compiler
+certification and is recorded explicitly. Missing compiler evidence alone does
+not prove collateral protected-source corruption.
+
+First and final attempt evidence remain separate. Only a completed canonical
+restoration adds an observed round; an interrupted, unrestored round contributes
+zero in the full planned denominator. Failed editing rounds can coexist with a
+complete run and a score below 100. Source changes after a drained boundary,
+failed shutdown or source-code drift make the run operationally ineligible.
+
+`export RUN_DIRECTORY NEW_RESULT_JSON` produces a safe local result, and
+`validate RESULT_JSON` rechecks its evidence-derived score. Neither command
+publishes or submits it. Restoring results have a separate result version and
+comparison identity. Official publication requires separately reviewed release
+evidence; a historical release approval is insufficient.
+
 ## Requirements
 
 - Linux x64 or x64 WSL2, Node.js 24 or newer, Python 3 and Bubblewrap.
@@ -178,6 +259,10 @@ The bundled fixture has its own [provenance and licenses](../fixtures/explicit-e
 Keep generated `notices/` when distributing generated code.
 
 ## Common run and submission
+
+These common commands retain the historical `shared-project-rotating-v1` protocol.
+Use the native restoring entry points above for `shared-project-restoring-v2`.
+An explicit restoring selection cannot fall through to the historical runner.
 
 The following command **calls a model and submits the result**. Confirm that
 both actions are intended before running it:

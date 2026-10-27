@@ -102,6 +102,28 @@ test("six ordinary editing failures keep one candidate, retain first and final e
   );
 });
 
+test("a failed first-check reference stops without treating one failure as editing exhaustion", async (t) => {
+  const options = await fixture(t);
+  await assert.rejects(
+    runRestoringRound({
+      ...options,
+      round: "round-001",
+      interval,
+      maxAttempts: 1,
+      executeAttempt: async () =>
+        writeFile(path.join(options.workspace, "main.cpp"), "int failed;\n"),
+      measureCandidate: async () => measured(0),
+    }),
+    { code: "RESTORING_ATTEMPTS_INCOMPLETE", category: "infrastructure" },
+  );
+  assert.equal(await readFile(path.join(options.workspace, "main.cpp"), "utf8"), "int failed;\n");
+  const outcome = JSON.parse(
+    await readFile(path.join(options.output, "checks/round-001-attempt-1/outcome.json"), "utf8"),
+  );
+  assert.equal(outcome.passedAtoms, 0);
+  assert.deepEqual(options.notices, [[], []]);
+  await assert.rejects(stat(path.join(options.output, "restorations")), { code: "ENOENT" });
+});
 test("a successful candidate is preserved and then canonicalized without granting extra credit", async (t) => {
   const options = await fixture(t);
   const canonical = { nodes: [{ id: "one" }], expectedTree: { "main.cpp": "int a;\nint b;\n" } };

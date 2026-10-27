@@ -22,6 +22,10 @@ import {
   validateAtomicIdentity,
 } from "./normalized-team-protocol.mjs";
 
+import {
+  RESTORING_MULTI_AGENT_PROTOCOL,
+  restoringMultiAgentResult,
+} from "../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
 export const NORMALIZED_SCHEMA_VERSION = 2;
 
 const COMMAND_FEATURES = [
@@ -262,6 +266,77 @@ function safeProfile(profileId, adapter, configuration) {
   };
 }
 
+function normalizeRestoringTeamReport(report, profile, fixtureSha256) {
+  const result = restoringMultiAgentResult(report);
+  const trials = [],
+    rounds = [];
+  for (const barrier of report.schedule) {
+    const measured = result.rounds.find((item) => item.round === barrier.id);
+    const trialId = `${barrier.id}__${profile.profileId}`;
+    const deliveries = report.executions.filter((item) => item.round === barrier.id);
+    const firstPassed = measured?.first.normalized === 1;
+    const finalPassed = measured?.final.normalized === 1;
+    trials.push({
+      trialId,
+      taskId: barrier.id,
+      taskIds: barrier.assignments.map((item) => item.task),
+      profileId: profile.profileId,
+      modelId: profile.modelId,
+      harnessId: profile.harnessId,
+      fixtureSha256,
+      firstExactPassed: firstPassed,
+      finalExactPassed: finalPassed,
+      firstScore: measured?.first.score ?? 0,
+      finalScore: measured?.final.score ?? 0,
+      rounds: deliveries.length,
+      infrastructureFailure: deliveries.length ? null : "not-reached",
+    });
+    for (const [ordinal, item] of deliveries.entries()) {
+      const receipt = item.receipt ?? {};
+      const exactPassed = finalPassed && item.attempt === measured.attempts;
+      const tokenFields = [
+        "inputTokens",
+        "outputTokens",
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "totalTokens",
+      ];
+      const tokensObserved = tokenFields.every(
+        (field) => receipt[field] !== null && receipt[field] !== undefined,
+      );
+      rounds.push({
+        roundId: `${trialId}::${ordinal}`,
+        trialId,
+        round: ordinal,
+        agent: item.agent,
+        barrierAttempt: item.attempt - 1,
+        atomicId: item.atomicId,
+        ...(item.atomicIds ? { atomicIds: [...item.atomicIds] } : {}),
+        ...(item.deliveryKind ? { deliveryKind: item.deliveryKind } : {}),
+        ...(item.repairIds ? { repairIds: [...item.repairIds] } : {}),
+        taskIds: [...item.tasks],
+        exactPassed,
+        normalizedPassed: exactPassed,
+        difference: exactPassed ? "pass" : measured ? "other" : "unknown",
+        timedOut: Boolean(receipt.timedOut),
+        providerFailure: receipt.providerFailure ?? null,
+        exitCode: receipt.exitCode ?? null,
+        seconds: receipt.processSeconds ?? null,
+        toolCallCount: receipt.toolCalls ?? null,
+        modelRoundCount: receipt.modelRounds ?? null,
+        eventErrors: receipt.eventErrors ?? null,
+        toolCallsObserved: receipt.toolCallsObserved ?? false,
+        costUsd: receipt.costUsd ?? null,
+        ...Object.fromEntries(
+          tokenFields.map((field) => [field, tokensObserved ? receipt[field] : null]),
+        ),
+        failedToolCalls: receipt.failedToolCalls ?? null,
+        invalidToolCalls: receipt.invalidToolCalls ?? null,
+      });
+    }
+  }
+  return { trials, rounds };
+}
 function settledStreamDelivery(delivery) {
   const receipt = delivery.receipt ?? {};
   return (
@@ -279,6 +354,8 @@ function settledStreamDelivery(delivery) {
  * Unreached barriers remain visible without claiming inference or editing failures.
  */
 export function normalizeTeamReport(report, profile, fixtureSha256) {
+  if (report.protocol === RESTORING_MULTI_AGENT_PROTOCOL)
+    return normalizeRestoringTeamReport(report, profile, fixtureSha256);
   const trials = [];
   const rounds = [];
   const scheduledTasks = new Set();
@@ -481,7 +558,8 @@ export async function exportNormalizedRun(rootDirectory, outputDirectory, option
       adapter.provider ?? null,
     );
   const team = manifest.suite?.id === MULTI_AGENT_BENCHMARK;
-  const schemaVersion = team ? 3 : NORMALIZED_SCHEMA_VERSION;
+  const restoring = team && manifest.suite.protocol === RESTORING_MULTI_AGENT_PROTOCOL;
+  const schemaVersion = restoring ? 4 : team ? 3 : NORMALIZED_SCHEMA_VERSION;
   const observedProfiles = new Set(summary.results.map((result) => result.profile));
   if (team && observedProfiles.size !== summary.results.length)
     throw Error("Duplicate team profile result");
@@ -500,7 +578,25 @@ export async function exportNormalizedRun(rootDirectory, outputDirectory, option
   const toolCalls = [];
   let suite;
   if (team) {
-    suite = { ...manifest.suite, schedule: null, observations: [] };
+    suite = restoring
+      ? {
+          ...Object.fromEntries(
+            [
+              "id",
+              "protocol",
+              "agents",
+              "graphWidth",
+              "workloadSha256",
+              "graphSha256",
+              "scheduleSha256",
+              "batchSize",
+              ...(manifest.suite.atomic ? ["atomic"] : []),
+            ].map((field) => [field, manifest.suite[field]]),
+          ),
+          schedule: null,
+          observations: [],
+        }
+      : { ...manifest.suite, schedule: null, observations: [] };
     for (const result of summary.results) {
       const profile = profiles.find((candidate) => candidate.profileId === result.profile);
       if (!profile) throw Error("Unknown team profile");
@@ -516,7 +612,7 @@ export async function exportNormalizedRun(rootDirectory, outputDirectory, option
         "scheduleSha256",
       ])
         if (report[field] !== suite[field]) throw Error(`Team report contradicts ${field}`);
-      if (report.totalTasks !== 71 || report.totalRounds !== 28)
+      if (!restoring && (report.totalTasks !== 71 || report.totalRounds !== 28))
         throw Error("Incomplete team workload");
       if (suite.schedule && JSON.stringify(suite.schedule) !== JSON.stringify(report.schedule))
         throw Error("Team profiles have different schedules");
@@ -533,12 +629,23 @@ export async function exportNormalizedRun(rootDirectory, outputDirectory, option
         throw Error("Team report contradicts delivery size");
       if (report.atomic) validateAtomicIdentity(report.atomic);
       suite.schedule = report.schedule;
-      suite.observations.push({
-        profileId: profile.profileId,
-        status: report.status,
-        elapsedMs: report.elapsedMs,
-        terminalCategory: report.terminal?.category ?? null,
-      });
+      if (restoring) {
+        const safeResult = restoringMultiAgentResult(report);
+        if (report.protocol !== suite.protocol || manifest.verifierSha256 !== report.verifierSha256)
+          throw Error("Restoring report contradicts source protocol");
+        for (const field of ["policy", "plannedAtoms"]) {
+          if (suite[field] && JSON.stringify(suite[field]) !== JSON.stringify(report[field]))
+            throw Error("Restoring profiles have different scoring plans");
+          suite[field] = safeResult[field];
+        }
+        suite.observations.push({ profileId: profile.profileId, result: safeResult });
+      } else
+        suite.observations.push({
+          profileId: profile.profileId,
+          status: report.status,
+          elapsedMs: report.elapsedMs,
+          terminalCategory: report.terminal?.category ?? null,
+        });
       const projected = normalizeTeamReport(report, profile, manifest.tasks[0].fixtureSha256);
       trials.push(...projected.trials);
       rounds.push(...projected.rounds);

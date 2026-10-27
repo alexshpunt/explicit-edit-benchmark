@@ -28,10 +28,12 @@ export async function runMultiAgentBatch({
   safeAdapters,
   configSha256,
   batchSize = ATOMIC_DISPATCH_POLICY.defaultBatchSize,
+  protocol = MULTI_AGENT_PROTOCOL,
   signal,
   log = console.log,
 }) {
   signal?.throwIfAborted();
+  assert.equal(protocol, MULTI_AGENT_PROTOCOL, "Restoring runs require the native restoring entry");
   assert.ok(Number.isSafeInteger(batchSize) && batchSize > 0, "Invalid delivery size");
   if (!preparation) {
     const input = path.join(root, "input");

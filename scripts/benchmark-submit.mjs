@@ -20,6 +20,11 @@ import {
   MULTI_AGENT_VERSION,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
+import {
+  RESTORING_MULTI_AGENT_PROTOCOL,
+  RESTORING_MULTI_AGENT_VERSION,
+} from "../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
+import { validateNormalizedRun } from "./validate-normalized-run.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const benchmark = path.join(root, "scripts", "benchmark.mjs");
 const prepare = path.join(root, "scripts", "prepare-benchmark.mjs");
@@ -193,8 +198,21 @@ export async function submissionMetadata(normalized, runId) {
   const trials = lines(await readFile(path.join(normalized, "trials.jsonl"), "utf8"));
   if (manifest.suite && manifest.suite.id !== MULTI_AGENT_BENCHMARK)
     throw Error("Unsupported benchmark suite");
-  if (manifest.suite && manifest.suite.protocol !== MULTI_AGENT_PROTOCOL)
+  const restoring = manifest.suite?.protocol === RESTORING_MULTI_AGENT_PROTOCOL;
+  if (
+    manifest.suite &&
+    ![MULTI_AGENT_PROTOCOL, RESTORING_MULTI_AGENT_PROTOCOL].includes(manifest.suite.protocol)
+  )
     throw Error("Unsupported Multi-Agent protocol");
+  if ((manifest.schemaVersion === 4) !== restoring)
+    throw Error("Normalized schema contradicts the selected Multi-Agent protocol");
+  if (manifest.suite && manifest.contract !== manifest.suite.protocol)
+    throw Error("Benchmark contract contradicts the selected Multi-Agent protocol");
+  if (manifest.suite && manifest.schemaVersion !== undefined) {
+    if (!restoring && manifest.schemaVersion !== 3)
+      throw Error("Historical Multi-Agent requires normalized schema three");
+    await validateNormalizedRun(normalized);
+  }
   return {
     clientRunId: runId,
     purpose: "exploratory",
@@ -202,7 +220,11 @@ export async function submissionMetadata(normalized, runId) {
       runner: { ...explicitEditRunner, version: explicitEditVersion },
       benchmark: {
         id: manifest.suite?.id ?? explicitEditBenchmarkId,
-        version: manifest.suite ? MULTI_AGENT_VERSION : explicitEditVersion,
+        version: restoring
+          ? RESTORING_MULTI_AGENT_VERSION
+          : manifest.suite
+            ? MULTI_AGENT_VERSION
+            : explicitEditVersion,
         contract: manifest.suite?.protocol ?? explicitEditContract,
         kind: "official",
         hash: manifest.taskSetSha256,

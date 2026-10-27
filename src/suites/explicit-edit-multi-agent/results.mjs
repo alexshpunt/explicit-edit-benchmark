@@ -3,6 +3,12 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ATOMIC_DISPATCH_POLICY } from "./execution/atomic-stream.mjs";
+import {
+  RESTORING_MULTI_AGENT_PROTOCOL,
+  RESTORING_MULTI_AGENT_RESULT_VERSION,
+  restoringMultiAgentResult,
+  validateRestoringMultiAgentResult,
+} from "./restoring-results.mjs";
 
 /** Public benchmark identity; never reuse the original Exact Edit identity. */
 export const MULTI_AGENT_BENCHMARK = "explicit-edit-multi-agent";
@@ -272,6 +278,11 @@ function validateStreamExecutions(raw, rounds) {
  * locally supplied evidence. Public results contain no free-form error messages,
  * commands, source, prompts, file paths or agent receipts. */
 export function validateMultiAgentResult(result) {
+  if (
+    result.schemaVersion === RESTORING_MULTI_AGENT_RESULT_VERSION ||
+    result.protocol === RESTORING_MULTI_AGENT_PROTOCOL
+  )
+    return validateRestoringMultiAgentResult(result);
   keys(result, [
     "schemaVersion",
     "benchmark",
@@ -393,6 +404,11 @@ export function validateMultiAgentResult(result) {
  * Old experimental reports without an explicit protocol label cannot be silently
  * relabelled as this candidate. Unknown raw fields are discarded. */
 export function multiAgentResult(raw) {
+  if (
+    raw.version === "renderer-concurrent-restoring-run-v2" ||
+    raw.protocol === RESTORING_MULTI_AGENT_PROTOCOL
+  )
+    return restoringMultiAgentResult(raw);
   assert.equal(raw.version, "renderer-concurrent-run-v1");
   assert.equal(raw.benchmark, MULTI_AGENT_BENCHMARK);
   assert.equal(raw.protocol, MULTI_AGENT_PROTOCOL);

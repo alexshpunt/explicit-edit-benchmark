@@ -1,3 +1,9 @@
+import { RESTORING_MULTI_AGENT_PROTOCOL } from "../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
+
+function restoringResult(run, profileId) {
+  if (run.suite?.protocol !== RESTORING_MULTI_AGENT_PROTOCOL) return null;
+  return run.suite.observations.find((item) => item.profileId === profileId)?.result ?? null;
+}
 const metricNames = ["duration", "cost", "tokens"];
 /** Per-trial sample fields for each observed metric. */
 const SAMPLE_FIELDS = { duration: "seconds", cost: "costUsd", tokens: "tokens" };
@@ -59,6 +65,9 @@ function exactIdentity(profile, run) {
     harnessVersion: profile.harnessVersion ?? null,
   };
   return {
+    ...(restoringResult(run, profile.profileId)
+      ? { restoringComparisonKey: restoringResult(run, profile.profileId).comparisonKey }
+      : {}),
     benchmarkId: benchmark?.id ?? run.contract,
     benchmarkVersion: benchmark?.version ?? null,
     contract: run.contract,
@@ -89,6 +98,9 @@ function exactIdentity(profile, run) {
 // task cells and contribute to one score.
 function comparisonIdentity(identity) {
   return {
+    ...(identity.restoringComparisonKey
+      ? { restoringComparisonKey: identity.restoringComparisonKey }
+      : {}),
     benchmarkId: identity.benchmarkId,
     benchmarkVersion: identity.benchmarkVersion,
     contract: identity.contract,
@@ -112,6 +124,9 @@ function comparisonIdentity(identity) {
 function benchmarkIdentity(run) {
   const benchmark = run.definitions?.benchmark;
   return JSON.stringify({
+    ...(run.suite?.protocol === RESTORING_MULTI_AGENT_PROTOCOL
+      ? { restoringScheduleSha256: run.suite.scheduleSha256 }
+      : {}),
     benchmarkId: benchmark?.id ?? run.contract,
     benchmarkVersion: benchmark?.version ?? null,
     contract: run.contract,
@@ -220,6 +235,9 @@ export function aggregateFamilyScore(rows, scoreField = "score") {
   const median = (field) =>
     describeDistribution(completeRows.map((row) => row[field]))?.median ?? null;
   return {
+    ...(rows.some((row) => row.restoringComparisonKey)
+      ? { firstScore: median("firstScore"), finalScore: median("finalScore") }
+      : {}),
     firstExactRate: median("firstExactRate"),
     finalExactRate: median("finalExactRate"),
     qualityScore: median("qualityScore"),
@@ -259,13 +277,26 @@ function configurationTaskCells(samples) {
       task.observations += 1;
       task.firstPasses += Number(sample.firstExactPassed);
       task.finalPasses += Number(sample.finalExactPassed);
+      if (sample.firstScore !== undefined) {
+        task.firstScore = (task.firstScore ?? 0) + sample.firstScore;
+        task.finalScore = (task.finalScore ?? 0) + sample.finalScore;
+      }
       tasks.set(taskId, task);
     }
   return [...tasks.values()].map((task) => ({
     taskId: task.taskId,
     observations: task.observations,
-    firstExactRate: task.firstPasses / task.observations,
-    finalExactRate: task.finalPasses / task.observations,
+    ...(task.firstScore !== undefined
+      ? {
+          firstScore: task.firstScore / task.observations,
+          finalScore: task.finalScore / task.observations,
+          firstExactRate: null,
+          finalExactRate: null,
+        }
+      : {
+          firstExactRate: task.firstPasses / task.observations,
+          finalExactRate: task.finalPasses / task.observations,
+        }),
   }));
 }
 
@@ -387,7 +418,10 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
   const runs = new Map(index.runs.map((run) => [run.runId, run]));
   const benchmarkTaskCounts = new Map();
   for (const run of index.runs) {
-    const declared = run.definitions?.taskSet?.taskIds?.length;
+    const declared =
+      run.suite?.protocol === RESTORING_MULTI_AGENT_PROTOCOL
+        ? run.suite.schedule.length
+        : run.definitions?.taskSet?.taskIds?.length;
     if (!Number.isInteger(declared) || declared < 1) continue;
     const key = benchmarkIdentity(run);
     benchmarkTaskCounts.set(key, Math.max(benchmarkTaskCounts.get(key) ?? 0, declared));
@@ -437,6 +471,7 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
 
     const family = taskFamily(trial.taskId);
     const identity = exactIdentity(profile, run);
+    const restoring = restoringResult(run, profile.profileId);
     if (!trialMatchesFilters(identity, family, filters)) continue;
 
     const key = JSON.stringify(comparisonIdentity(identity));
@@ -458,6 +493,7 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
       configurationHashes: new Set(),
       recoveryRounds: 0,
       wallClockObservations: new Set(),
+      restoringScores: new Map(),
       timeouts: 0,
       infrastructureFailures: 0,
       duration: metricState(),
@@ -466,7 +502,9 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
       cost: metricState(),
       tokens: metricState(),
     };
-    const taskIds = trial.taskIds ?? [trial.taskId];
+    const taskIds = restoring ? [trial.taskId] : (trial.taskIds ?? [trial.taskId]);
+    if (restoring)
+      group.restoringScores.set(`${trial.runId}::${profile.profileId}`, restoring.score);
     group.observations += taskIds.length;
     group.firstExactPasses += taskIds.length * Number(trial.firstExactPassed === true);
     group.finalExactPasses += taskIds.length * Number(trial.finalExactPassed === true);
@@ -502,15 +540,23 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
     const observationId = `${trial.runId}::${profile.profileId}`;
     if (observation && !group.wallClockObservations.has(observationId)) {
       group.wallClockObservations.add(observationId);
-      group.infrastructureFailures += Number(!["pass", "blocked"].includes(observation.status));
-      group.duration.total += observation.elapsedMs / 1000;
+      group.infrastructureFailures += Number(
+        restoring
+          ? restoring.status !== "complete"
+          : !["pass", "blocked"].includes(observation.status),
+      );
+      group.duration.total +=
+        (restoring ? restoring.execution.elapsedMs : observation.elapsedMs) / 1000;
       group.duration.observations += 1;
     }
 
     // One honest per-trial record: it explains pass rates, spread and efficiency.
     const sample = {
       taskId: trial.taskId,
-      ...(trial.taskIds ? { taskIds } : {}),
+      ...(trial.taskIds && !restoring ? { taskIds } : {}),
+      ...(restoring
+        ? { firstScore: trial.firstScore / 100, finalScore: trial.finalScore / 100 }
+        : {}),
       firstExactPassed: trial.firstExactPassed === true,
       finalExactPassed: trial.finalExactPassed === true,
       seconds: null,
@@ -540,12 +586,19 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
   return [...groups.values()]
     .map((group) => {
       const taskResults = [...group.tasks.values()];
-      const firstExactRate = mean(
-        taskResults.map((task) => task.firstExactPasses / task.observations),
-      );
-      const finalExactRate = mean(
-        taskResults.map((task) => task.finalExactPasses / task.observations),
-      );
+      const restoring = group.restoringScores.size > 0;
+      const firstScore = restoring
+        ? mean([...group.restoringScores.values()].map((item) => item.first.score / 100))
+        : null;
+      const finalScore = restoring
+        ? mean([...group.restoringScores.values()].map((item) => item.final.score / 100))
+        : null;
+      const firstExactRate = restoring
+        ? null
+        : mean(taskResults.map((task) => task.firstExactPasses / task.observations));
+      const finalExactRate = restoring
+        ? null
+        : mean(taskResults.map((task) => task.finalExactPasses / task.observations));
       const durationByTask = taskResults
         .filter((task) => task.duration.observations > 0)
         .map((task) => task.duration.total / task.duration.observations);
@@ -554,14 +607,17 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
       // never relative to the submitted subset. A one-task run is therefore 1/N evidence.
       const sampleRun = runs.get(group.runIds.values().next().value);
       const benchmarkTaskCount = benchmarkTaskCounts.get(benchmarkIdentity(sampleRun)) ?? taskCount;
-      const qualityScore =
-        firstExactRate == null || finalExactRate == null
+      const qualityScore = restoring
+        ? finalScore
+        : firstExactRate == null || finalExactRate == null
           ? null
           : 0.75 * firstExactRate + 0.25 * finalExactRate;
       const coverage = benchmarkTaskCount ? taskCount / benchmarkTaskCount : null;
       const ranking = providerFailureEligibility(group.observedTrials, group.providerFailureTrials);
+      const { restoringScores: _restoringScores, ...publicGroup } = group;
       return {
-        ...group,
+        ...publicGroup,
+        ...(restoring ? { firstScore, finalScore } : {}),
         tasks: undefined,
         wallClockObservations: undefined,
         taskSetSha256: group.taskSetSha256s.size === 1 ? [...group.taskSetSha256s][0] : null,
@@ -577,10 +633,17 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
         configurationHashes: [...group.configurationHashes].sort(),
         firstExactRate,
         finalExactRate,
-        recoveryGain:
-          firstExactRate == null || finalExactRate == null ? null : finalExactRate - firstExactRate,
+        recoveryGain: restoring
+          ? finalScore - firstScore
+          : firstExactRate == null || finalExactRate == null
+            ? null
+            : finalExactRate - firstExactRate,
         qualityScore,
-        score: qualityScore == null || coverage == null ? null : qualityScore * coverage,
+        score: restoring
+          ? finalScore
+          : qualityScore == null || coverage == null
+            ? null
+            : qualityScore * coverage,
         taskCount,
         benchmarkTaskCount,
         coverage,
@@ -655,6 +718,7 @@ export function aggregateExactConfigurations(index, profiles, trials, rounds, fi
 
 function rollupIdentity(row) {
   return {
+    ...(row.restoringComparisonKey ? { restoringComparisonKey: row.restoringComparisonKey } : {}),
     // Task selection and run policy are observation provenance. They do not create another
     // leaderboard configuration.
     verifierSha256: row.verifierSha256,
@@ -758,10 +822,29 @@ export function aggregateLeaderboard(index, profiles, trials, rounds, filters = 
     return {
       ...group,
       rows: undefined,
+      ...(group.restoringComparisonKey
+        ? {
+            firstScore: hierarchicalMean(families, (row) => row.firstScore),
+            finalScore: hierarchicalMean(families, (row) => row.finalScore),
+            infrastructureFailures: group.rows.reduce(
+              (total, row) => total + row.infrastructureFailures,
+              0,
+            ),
+          }
+        : {}),
       qualityScore,
-      score: qualityScore == null ? null : qualityScore * coverage,
-      firstExactRate: hierarchicalMean(families, (row) => row.firstExactRate),
-      finalExactRate: hierarchicalMean(families, (row) => row.finalExactRate),
+      score:
+        qualityScore == null
+          ? null
+          : group.restoringComparisonKey
+            ? qualityScore
+            : qualityScore * coverage,
+      firstExactRate: group.restoringComparisonKey
+        ? null
+        : hierarchicalMean(families, (row) => row.firstExactRate),
+      finalExactRate: group.restoringComparisonKey
+        ? null
+        : hierarchicalMean(families, (row) => row.finalExactRate),
       recoveryGain: hierarchicalMean(families, (row) => row.recoveryGain),
       observations,
       rankingEligible: eligibleRows.length > 0,

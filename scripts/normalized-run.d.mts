@@ -34,9 +34,30 @@ export interface NormalizedTeamSuite {
   }>;
 }
 
+/** Restoring scores retain full planned round maxima, first and final evidence. */
+export interface NormalizedRestoringTeamSuite extends Omit<
+  NormalizedTeamSuite,
+  "agents" | "graphWidth" | "observations"
+> {
+  agents: number;
+  graphWidth: number;
+  batchSize: number;
+  policy: Record<string, unknown>;
+  plannedAtoms: Array<{ round: string; totalAtoms: number }>;
+  observations: Array<{
+    profileId: string;
+    result: {
+      protocol: string;
+      status: "complete" | "driver_exit" | "infrastructure" | "cancelled";
+      identity: Record<string, string | null>;
+      score: { first: { score: number }; final: { score: number } };
+      [key: string]: unknown;
+    };
+  }>;
+}
 export interface NormalizedRunManifest {
-  schemaVersion: 1 | 2 | 3;
-  suite?: NormalizedTeamSuite;
+  schemaVersion: 1 | 2 | 3 | 4;
+  suite?: NormalizedTeamSuite | NormalizedRestoringTeamSuite;
   runId: string;
   contract: unknown;
   taskSetSha256: string;

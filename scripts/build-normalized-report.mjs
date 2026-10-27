@@ -30,6 +30,7 @@ export async function buildNormalizedReport(bundleDirectory, outputDirectory) {
     configurations.map((configuration) => [configuration.configurationHash, configuration]),
   );
   const byProfile = new Map();
+  const restoring = manifest.schemaVersion === 4;
   for (const profile of profiles)
     byProfile.set(profile.profileId, {
       profile,
@@ -38,6 +39,14 @@ export async function buildNormalizedReport(bundleDirectory, outputDirectory) {
       firstExact: 0,
       finalExact: 0,
       finalNormalized: 0,
+      firstScore: restoring
+        ? manifest.suite.observations.find((item) => item.profileId === profile.profileId).result
+            .score.first.score
+        : null,
+      finalScore: restoring
+        ? manifest.suite.observations.find((item) => item.profileId === profile.profileId).result
+            .score.final.score
+        : null,
       rounds: 0,
       calls: 0,
       categories: {},
@@ -46,7 +55,7 @@ export async function buildNormalizedReport(bundleDirectory, outputDirectory) {
   for (const trial of trials) {
     const row = byProfile.get(trial.profileId);
     if (!row) throw Error(`${trial.trialId}: unknown profile`);
-    const tasks = trial.taskIds?.length ?? 1;
+    const tasks = restoring ? 1 : (trial.taskIds?.length ?? 1);
     row.trials += tasks;
     row.firstExact += tasks * Number(trial.firstExactPassed);
     row.finalExact += tasks * Number(trial.finalExactPassed);
@@ -65,7 +74,9 @@ export async function buildNormalizedReport(bundleDirectory, outputDirectory) {
   for (const trial of trials) {
     const terminal = terminalByTrial.get(trial.trialId);
     if (terminal?.normalizedPassed)
-      byProfile.get(trial.profileId).finalNormalized += trial.taskIds?.length ?? 1;
+      byProfile.get(trial.profileId).finalNormalized += restoring
+        ? 1
+        : (trial.taskIds?.length ?? 1);
   }
   for (const call of calls) {
     const profileId = roundProfile.get(call.roundId);
@@ -80,7 +91,8 @@ export async function buildNormalizedReport(bundleDirectory, outputDirectory) {
   );
   const csv =
     [
-      "profile_id,configuration_id,agent_family,agent_version,model_family,model_version,harness_family,harness_version,trials,first_exact,final_exact,final_normalized,rounds,tool_calls",
+      "profile_id,configuration_id,agent_family,agent_version,model_family,model_version,harness_family,harness_version,trials,first_exact,final_exact,final_normalized,rounds,tool_calls" +
+        (restoring ? ",first_score,final_score" : ""),
       ...rows.map(
         ({
           profile,
@@ -89,6 +101,8 @@ export async function buildNormalizedReport(bundleDirectory, outputDirectory) {
           firstExact,
           finalExact,
           finalNormalized,
+          firstScore,
+          finalScore,
           rounds: roundCount,
           calls: callCount,
         }) =>
@@ -107,10 +121,11 @@ export async function buildNormalizedReport(bundleDirectory, outputDirectory) {
             finalNormalized,
             roundCount,
             callCount,
+            ...(restoring ? [firstScore, finalScore] : []),
           ].join(","),
       ),
     ].join("\n") + "\n";
-  const markdown = `# ${manifest.runId}\n\nGenerated from normalized schema v${manifest.schemaVersion}. Raw prompts, tool arguments, command text and command output are not part of this bundle.\n\n| Profile | Configuration | Agent | Model | Harness | First exact | Final exact | Final normalized | Rounds | Calls |\n| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |\n${rows
+  const markdown = `# ${manifest.runId}\n\nGenerated from normalized schema v${manifest.schemaVersion}. Raw prompts, tool arguments, command text and command output are not part of this bundle.\n\n| Profile | Configuration | Agent | Model | Harness | First exact | Final exact | Final normalized | Rounds | Calls |${restoring ? " First score | Final score |" : ""}\n| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |${restoring ? " ---: | ---: |" : ""}\n${rows
     .map(
       ({
         profile,
@@ -119,10 +134,12 @@ export async function buildNormalizedReport(bundleDirectory, outputDirectory) {
         firstExact,
         finalExact,
         finalNormalized,
+        firstScore,
+        finalScore,
         rounds: roundCount,
         calls: callCount,
       }) =>
-        `| ${profile.profileId} | ${configuration.configurationId} | ${profile.agentFamily} ${profile.agentVersion} | ${profile.modelFamily} ${profile.modelVersion} | ${profile.harnessFamily} ${profile.harnessVersion} | ${firstExact}/${count} (${percent(firstExact, count)}) | ${finalExact}/${count} (${percent(finalExact, count)}) | ${finalNormalized}/${count} (${percent(finalNormalized, count)}) | ${roundCount} | ${callCount} |`,
+        `| ${profile.profileId} | ${configuration.configurationId} | ${profile.agentFamily} ${profile.agentVersion} | ${profile.modelFamily} ${profile.modelVersion} | ${profile.harnessFamily} ${profile.harnessVersion} | ${firstExact}/${count} (${percent(firstExact, count)}) | ${finalExact}/${count} (${percent(finalExact, count)}) | ${finalNormalized}/${count} (${percent(finalNormalized, count)}) | ${roundCount} | ${callCount} |${restoring ? ` ${firstScore}% | ${finalScore}% |` : ""}`,
     )
     .join("\n")}\n\n## Tool categories\n\n| Profile | Categories |\n| --- | --- |\n${rows
     .map(

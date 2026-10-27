@@ -28,6 +28,8 @@ async function jsonLines(file) {
 export async function buildOfficialManifest(normalizedDirectory, options) {
   const root = path.resolve(normalizedDirectory);
   const normalized = await validateNormalizedRun(root);
+  if (normalized.schemaVersion === 4)
+    throw Error("Restoring Multi-Agent has no reviewed official release policy");
   const configurations = await jsonLines(path.join(root, "configurations.jsonl"));
   const trials = await jsonLines(path.join(root, "trials.jsonl"));
   const hashes = configurations.map((row) => row.configurationHash);

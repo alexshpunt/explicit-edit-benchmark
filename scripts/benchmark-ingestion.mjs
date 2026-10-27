@@ -8,6 +8,14 @@ import { fileURLToPath } from "node:url";
 import { validateNormalizedRun } from "./validate-normalized-run.mjs";
 import { hashApiKey, loadBenchmarkAccounts } from "./benchmark-accounts.mjs";
 
+import {
+  MULTI_AGENT_PROTOCOL,
+  MULTI_AGENT_VERSION,
+} from "../src/suites/explicit-edit-multi-agent/results.mjs";
+import {
+  RESTORING_MULTI_AGENT_PROTOCOL,
+  RESTORING_MULTI_AGENT_VERSION,
+} from "../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
 const TABLES = [
   "profiles.jsonl",
   "configurations.jsonl",
@@ -217,7 +225,16 @@ export async function ingestSubmission(storeDirectory, account, rawSubmission) {
       throw Error("task-set definition contradicts manifest");
     const trials = parseRows(submission.bundle.tables["trials.jsonl"]);
     const taskIds = new Set(submission.definitions.taskSet.taskIds);
-    if (manifest.schemaVersion === 3) {
+    if ([3, 4].includes(manifest.schemaVersion)) {
+      const [protocol, version] =
+        manifest.schemaVersion === 4
+          ? [RESTORING_MULTI_AGENT_PROTOCOL, RESTORING_MULTI_AGENT_VERSION]
+          : [MULTI_AGENT_PROTOCOL, MULTI_AGENT_VERSION];
+      if (
+        manifest.suite.protocol !== protocol ||
+        submission.definitions.benchmark.version !== version
+      )
+        throw Error("Team benchmark version contradicts normalized protocol");
       if (
         submission.definitions.benchmark.id !== manifest.suite.id ||
         submission.definitions.benchmark.hash !== manifest.taskSetSha256

@@ -12,6 +12,11 @@ import {
   validateAtomicParents,
 } from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
+import {
+  RESTORING_MULTI_AGENT_PROTOCOL,
+  RESTORING_MULTI_AGENT_POLICY,
+  validateRestoringMultiAgentResult,
+} from "../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
 const statuses = new Set([
   "pass",
   "blocked",
@@ -31,6 +36,164 @@ function keys(value, expected) {
   );
 }
 
+function validateRestoringSuite(suite, contract, policy) {
+  keys(suite, [
+    "id",
+    "protocol",
+    "agents",
+    "graphWidth",
+    "workloadSha256",
+    "graphSha256",
+    "scheduleSha256",
+    "batchSize",
+    "schedule",
+    "observations",
+    "policy",
+    "plannedAtoms",
+    ...(suite.atomic ? ["atomic"] : []),
+  ]);
+  assert.equal(suite.id, MULTI_AGENT_BENCHMARK);
+  assert.equal(contract, RESTORING_MULTI_AGENT_PROTOCOL);
+  for (const field of ["agents", "graphWidth", "batchSize"])
+    assert.ok(Number.isSafeInteger(suite[field]) && suite[field] > 0);
+  assert.deepEqual(policy, {
+    oracleRecoveries: RESTORING_MULTI_AGENT_POLICY.oracleRecoveries,
+    retryFailures: 0,
+    concurrency: suite.agents,
+    timeoutMs: null,
+  });
+  for (const field of ["workloadSha256", "graphSha256", "scheduleSha256"])
+    assert.match(suite[field], /^[a-f0-9]{64}$/);
+  assert.equal(digest(suite.schedule), suite.scheduleSha256);
+  if (suite.atomic) validateAtomicIdentity(suite.atomic);
+  assert.ok(Array.isArray(suite.schedule) && suite.schedule.length > 0);
+  assert.ok(
+    Array.isArray(suite.plannedAtoms) && suite.plannedAtoms.length === suite.schedule.length,
+  );
+  const tasks = new Set();
+  for (const [index, round] of suite.schedule.entries()) {
+    keys(round, ["id", "assignments"]);
+    assert.equal(round.id, `round-${String(index + 1).padStart(3, "0")}`);
+    assert.equal(round.id, suite.plannedAtoms[index].round);
+    assert.ok(Array.isArray(round.assignments) && round.assignments.length > 0);
+    for (const item of round.assignments) {
+      keys(item, [
+        "task",
+        "agent",
+        ...["zone", "slot"].filter((field) => Object.hasOwn(item, field)),
+      ]);
+      assert.match(item.task, /^task-\d{3,}$/);
+      assert.ok(!tasks.has(item.task));
+      tasks.add(item.task);
+      assert.ok(Number.isSafeInteger(item.agent) && item.agent >= 0 && item.agent < suite.agents);
+      if (Object.hasOwn(item, "slot"))
+        assert.ok(Number.isSafeInteger(item.slot) && item.slot >= 0 && item.slot < suite.agents);
+      if (Object.hasOwn(item, "zone")) assert.match(item.zone, /^[a-zA-Z0-9._/-]+$/);
+    }
+  }
+  assert.ok(Array.isArray(suite.observations) && suite.observations.length > 0);
+  const profiles = new Set();
+  let sourceIdentity;
+  for (const observation of suite.observations) {
+    keys(observation, ["profileId", "result"]);
+    assert.ok(typeof observation.profileId === "string" && !profiles.has(observation.profileId));
+    profiles.add(observation.profileId);
+    const result = validateRestoringMultiAgentResult(observation.result);
+    for (const field of ["agents", "graphWidth", "batchSize"])
+      assert.equal(result.configuration[field], suite[field]);
+    for (const field of ["workloadSha256", "graphSha256", "scheduleSha256"])
+      assert.equal(result.identity[field], suite[field]);
+    assert.deepEqual(result.policy, suite.policy);
+    assert.deepEqual(result.plannedAtoms, suite.plannedAtoms);
+    assert.equal(result.progress.totalTasks, tasks.size);
+    if (suite.atomic) assert.equal(result.progress.totalAtoms, suite.atomic.edits);
+    const { final: _candidate, ...identity } = result.identity;
+    if (sourceIdentity)
+      assert.deepEqual(identity, sourceIdentity, "Profiles have different source contracts");
+    sourceIdentity = identity;
+  }
+}
+
+function validateRestoringTables(suite, profiles, trials, rounds) {
+  assert.equal(profiles.length, suite.observations.length);
+  assert.equal(trials.length, profiles.length * suite.schedule.length);
+  for (const profile of profiles) {
+    const result = suite.observations.find((item) => item.profileId === profile.profileId)?.result;
+    assert.ok(result, "Missing restoring profile observation");
+    let deliveries = 0,
+      repairs = 0;
+    const originalAtoms = new Map();
+    for (const barrier of suite.schedule) {
+      const matching = trials.filter(
+        (item) => item.profileId === profile.profileId && item.taskId === barrier.id,
+      );
+      assert.equal(matching.length, 1);
+      const trial = matching[0];
+      assert.deepEqual(
+        trial.taskIds,
+        barrier.assignments.map((item) => item.task),
+      );
+      const measured = result.rounds.find((item) => item.round === barrier.id);
+      assert.equal(trial.firstScore, measured?.first.score ?? 0);
+      assert.equal(trial.finalScore, measured?.final.score ?? 0);
+      assert.equal(trial.firstExactPassed, measured?.first.normalized === 1);
+      assert.equal(trial.finalExactPassed, measured?.final.normalized === 1);
+      const participantRows = rounds.filter((item) => item.trialId === trial.trialId);
+      assert.equal(participantRows.length, trial.rounds);
+      const work = new Set();
+      const attempts = new Set();
+      let previous = 0;
+      for (const row of participantRows) {
+        assert.ok(row.agent < suite.agents);
+        const attempt = row.barrierAttempt + 1;
+        assert.ok(attempt >= previous && attempt <= 6);
+        previous = attempt;
+        attempts.add(attempt);
+        if (measured) assert.ok(attempt <= measured.attempts && !failedNativeReceipt(row));
+        const expectedPass = measured?.final.normalized === 1 && attempt === measured.attempts;
+        assert.equal(row.exactPassed, expectedPass);
+        assert.equal(row.normalizedPassed, expectedPass);
+        validateStreamDelivery(row, row.taskIds, trial.taskIds, {
+          batchSize: suite.batchSize,
+          availableParents: suite.schedule
+            .slice(0, suite.schedule.indexOf(barrier) + 1)
+            .flatMap((item) => item.assignments.map((entry) => entry.task)),
+        });
+        for (const id of streamDeliveryWorkIds(row)) {
+          const key = `${attempt}:${id}`;
+          assert.ok(!work.has(key), "Duplicate delivery work");
+          work.add(key);
+        }
+        if (row.deliveryKind)
+          assert.ok(attempt > 1 && row.atomicId.startsWith(`repair-${barrier.id}-`));
+        if (attempt === 1) {
+          assert.ok(!row.deliveryKind);
+          const coverage = originalAtoms.get(barrier.id) ?? new Set();
+          for (const id of atomicDeliveryIds(row)) {
+            assert.ok(!coverage.has(id));
+            coverage.add(id);
+          }
+          originalAtoms.set(barrier.id, coverage);
+        }
+        deliveries++;
+        repairs += Number(attempt > 1);
+      }
+      if (measured) {
+        assert.equal(originalAtoms.get(barrier.id)?.size, measured.final.totalAtoms);
+        assert.deepEqual(
+          [...attempts],
+          Array.from({ length: measured.attempts }, (_, index) => index + 1),
+        );
+      } else {
+        const position = suite.schedule.indexOf(barrier);
+        assert.ok(position >= result.rounds.length);
+        if (participantRows.length) assert.equal(position, result.rounds.length);
+      }
+    }
+    assert.equal(deliveries, result.execution.deliveries);
+    assert.equal(repairs, result.execution.repairs);
+  }
+}
 /** Validate the public hashes of the atomic workload, private bindings and dispatch contract.
  * Only hashes leave the controller; prepared token plans and expected source stay private.
  */
@@ -92,6 +255,8 @@ function failedNativeReceipt(delivery) {
 }
 /** Validate the maximal-team protocol, fixed policy and workload/schedule bindings. */
 export function validateTeamSuite(suite, contract, policy) {
+  if (suite.protocol === RESTORING_MULTI_AGENT_PROTOCOL)
+    return validateRestoringSuite(suite, contract, policy);
   keys(suite, [
     "id",
     "protocol",
@@ -171,6 +336,8 @@ export function validateTeamSuite(suite, contract, policy) {
 
 /** Verify joint task credit and participant delivery links without per-agent scores. */
 export function validateTeamTables(suite, profiles, trials, rounds) {
+  if (suite.protocol === RESTORING_MULTI_AGENT_PROTOCOL)
+    return validateRestoringTables(suite, profiles, trials, rounds);
   assert.equal(suite.protocol, MULTI_AGENT_PROTOCOL, "Unsupported Multi-Agent protocol");
   const maxAttempts = MULTI_AGENT_MAX_ATTEMPTS;
   const atomic = rounds.some(

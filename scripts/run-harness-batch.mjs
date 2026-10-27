@@ -21,7 +21,10 @@ import { selectedTasks } from "./focused-selection.mjs";
 import { loadBenchmarkProfiles } from "./benchmark-config.mjs";
 import { assertConfigurationMetadata } from "./normalized-run.mjs";
 import { DEFAULT_BENCHMARK_SUITE, suiteRunOptions } from "./benchmark-suites.mjs";
-import { MULTI_AGENT_POLICY } from "../src/suites/explicit-edit-multi-agent/results.mjs";
+import {
+  MULTI_AGENT_POLICY,
+  MULTI_AGENT_PROTOCOL,
+} from "../src/suites/explicit-edit-multi-agent/results.mjs";
 
 const args = process.argv.slice(2);
 if (args.includes("--help")) {
@@ -38,8 +41,14 @@ const selectedSuite = option("suite", DEFAULT_BENCHMARK_SUITE);
 const scheduling = suiteRunOptions(selectedSuite, {
   concurrency: option("concurrency", selectedSuite === DEFAULT_BENCHMARK_SUITE ? "4" : undefined),
   task: option("task"),
+  protocol: option("protocol"),
 });
 const multiAgent = scheduling.suite !== DEFAULT_BENCHMARK_SUITE;
+if (multiAgent && scheduling.protocol && scheduling.protocol !== MULTI_AGENT_PROTOCOL)
+  throw Object.assign(
+    new Error("Use benchmark:multi-agent run-restoring with a native config and matching proof"),
+    { code: "RESTORING_NATIVE_ENTRY_REQUIRED" },
+  );
 if (
   multiAgent &&
   (args.includes("--smoke") || option("task-manifest") || option("timeout-seconds"))
@@ -177,6 +186,7 @@ if (multiAgent) {
     const summary = await runMultiAgentBatch({
       root,
       preparation: option("preparation"),
+      protocol: scheduling.protocol,
       profiles: Object.fromEntries(names.map((name) => [name, config.harnesses[name]])),
       safeAdapters,
       configSha256: createHash("sha256").update(configSource).digest("hex"),

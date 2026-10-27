@@ -85,6 +85,17 @@ export async function runRestoringRound({
   }
   await idle();
   await assertCandidateUnchanged(workspace, candidate, { signal });
+  const final = attempts.at(-1);
+  const successful =
+    final.passedAtoms === final.totalAtoms &&
+    final.buildPassed &&
+    final.resultMatched &&
+    final.integrityPassed;
+  if (!successful && attempts.length !== 6)
+    throw Object.assign(new Error("Reference check failed before editing exhaustion"), {
+      category: "infrastructure",
+      code: "RESTORING_ATTEMPTS_INCOMPLETE",
+    });
   let restored;
   try {
     restored = await restoreCanonicalSource(workspace, interval.expectedTree, { signal });
@@ -114,14 +125,7 @@ export async function runRestoringRound({
     candidate.manifest.root.ino,
     "Restoration replaced the workspace inode",
   );
-  const final = attempts.at(-1);
-  const reason =
-    final.passedAtoms === final.totalAtoms &&
-    final.buildPassed &&
-    final.resultMatched &&
-    final.integrityPassed
-      ? "passed"
-      : "editing-exhausted";
+  const reason = successful ? "passed" : "editing-exhausted";
   const restoration = { status: "pass", identity: restored.identity, reason };
   await writeFile(
     path.join(output, "restorations", round, "restoration.json"),

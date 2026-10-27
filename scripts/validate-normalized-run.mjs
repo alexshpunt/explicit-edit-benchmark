@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { validateTeamSuite, validateTeamTables } from "./normalized-team-protocol.mjs";
+import { RESTORING_MULTI_AGENT_PROTOCOL } from "../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
 
 const TABLES = {
   "profiles.jsonl": ["profiles", "profileId"],
@@ -185,23 +186,26 @@ function parseJsonLines(content, name, schemaVersion) {
         schemaVersion >= 2 && name === "rounds.jsonl"
           ? [...SCHEMA_FIELDS[name], "providerFailure"]
           : SCHEMA_FIELDS[name];
-      const teamFields =
-        schemaVersion === 3
-          ? name === "trials.jsonl"
-            ? ["taskIds"]
-            : name === "rounds.jsonl"
-              ? [
-                  "agent",
-                  "barrierAttempt",
-                  "taskIds",
-                  ...["atomicId", "atomicIds", "deliveryKind", "repairIds"].filter((field) =>
-                    Object.hasOwn(row, field),
-                  ),
-                ]
-              : []
-          : [];
+      const teamFields = [3, 4].includes(schemaVersion)
+        ? name === "trials.jsonl"
+          ? ["taskIds", ...(schemaVersion === 4 ? ["firstScore", "finalScore"] : [])]
+          : name === "rounds.jsonl"
+            ? [
+                "agent",
+                "barrierAttempt",
+                "taskIds",
+                ...["atomicId", "atomicIds", "deliveryKind", "repairIds"].filter((field) =>
+                  Object.hasOwn(row, field),
+                ),
+              ]
+            : []
+        : [];
       exactKeys(row, [...fields, ...teamFields], label);
       if (teamFields.length) {
+        if (schemaVersion === 4 && name === "trials.jsonl")
+          for (const field of ["firstScore", "finalScore"])
+            if (!Number.isFinite(row[field]) || row[field] < 0 || row[field] > 100)
+              throw Error(`${label}: invalid round score`);
         if (
           !Array.isArray(row.taskIds) ||
           (!row.taskIds.length &&
@@ -421,12 +425,12 @@ function validateManifest(manifest) {
   if (Object.hasOwn(manifest, "sourceRuns")) manifestFields.push("sourceRuns");
   // Recorded from the first bundle that carried it; older archives predate it.
   if (Object.hasOwn(manifest, "verifierSha256")) manifestFields.push("verifierSha256");
-  if (manifest.schemaVersion === 3) manifestFields.push("suite");
+  if ([3, 4].includes(manifest.schemaVersion)) manifestFields.push("suite");
   exactKeys(manifest, manifestFields, "manifest");
   if (typeof manifest.runId !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(manifest.runId))
     throw Error(`Invalid runId: ${manifest.runId}`);
-  if (![1, 2, 3].includes(manifest.schemaVersion))
-    throw Error(`Unsupported schemaVersion: ${manifest.schemaVersion}; expected 1, 2 or 3`);
+  if (![1, 2, 3, 4].includes(manifest.schemaVersion))
+    throw Error(`Unsupported schemaVersion: ${manifest.schemaVersion}; expected 1, 2, 3 or 4`);
   if (manifest.sourceRuns !== undefined) {
     if (!Array.isArray(manifest.sourceRuns) || !manifest.sourceRuns.length)
       throw Error("manifest.sourceRuns: invalid value");
@@ -447,8 +451,20 @@ function validateManifest(manifest) {
     ["oracleRecoveries", "retryFailures", "concurrency", "timeoutMs"],
     "manifest.policy",
   );
-  if (manifest.schemaVersion === 3) {
+  if ([3, 4].includes(manifest.schemaVersion)) {
+    if (
+      (manifest.schemaVersion === 4) !==
+      (manifest.suite.protocol === RESTORING_MULTI_AGENT_PROTOCOL)
+    )
+      throw Error("Normalized schema does not match team protocol");
     validateTeamSuite(manifest.suite, manifest.contract, manifest.policy);
+    if (
+      manifest.schemaVersion === 4 &&
+      manifest.suite.observations.some(
+        (item) => item.result.identity.verifierSha256 !== manifest.verifierSha256,
+      )
+    )
+      throw Error("Normalized verifier differs from source-bound observations");
     if (manifest.taskSetSha256 !== manifest.suite.workloadSha256)
       throw Error("Team task set digest contradicts workload");
   } else
@@ -544,7 +560,7 @@ export async function validateNormalizedRun(directory) {
       throw Error(`${trial.trialId}: infrastructure status contradicts rounds`);
   }
 
-  if (manifest.schemaVersion === 3)
+  if ([3, 4].includes(manifest.schemaVersion))
     validateTeamTables(
       manifest.suite,
       rows["profiles.jsonl"],

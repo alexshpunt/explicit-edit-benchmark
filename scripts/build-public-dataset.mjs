@@ -15,6 +15,7 @@ import {
   aggregateToolUsage,
   taskFamily,
 } from "./result-aggregation.mjs";
+import { RESTORING_MULTI_AGENT_PROTOCOL } from "../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
 const TABLES = ["profiles", "configurations", "trials", "rounds", "tool-calls"];
 const DEFAULT_EXCLUSIONS = fileURLToPath(
   new URL("../policies/exclusions/v1.json", import.meta.url),
@@ -82,6 +83,9 @@ export function modelLeaderboard(groups = {}, leaderboardRows = []) {
         modelFamily,
         provider,
         score: group.score ?? null,
+        ...(group.firstScore !== undefined
+          ? { firstScore: group.firstScore, finalScore: group.finalScore }
+          : {}),
         qualityScore: group.qualityScore ?? null,
         coverage: group.coverage ?? null,
         firstExactRate: group.firstExactRate ?? null,
@@ -344,6 +348,7 @@ function badgeColor(score) {
 
 function familyConfigurationKey(row) {
   return JSON.stringify([
+    ...(row.restoringComparisonKey ? [row.restoringComparisonKey] : []),
     row.benchmarkId,
     row.benchmarkVersion,
     row.contract,
@@ -438,7 +443,9 @@ function compareVersions(left, right) {
 export function completeRunEvidence(index, profiles, trials, rounds) {
   const canonicalTaskCount = Math.max(
     0,
-    ...index.runs.map((run) => run.definitions?.taskSet?.taskIds?.length ?? 0),
+    ...index.runs
+      .filter((run) => run.suite?.protocol !== RESTORING_MULTI_AGENT_PROTOCOL)
+      .map((run) => run.definitions?.taskSet?.taskIds?.length ?? 0),
   );
   const profilesByRun = Map.groupBy(profiles, (profile) => profile.runId);
   const taskIdsByProfile = new Map();
@@ -452,13 +459,16 @@ export function completeRunEvidence(index, profiles, trials, rounds) {
     index.runs
       .filter((run) => {
         const runProfiles = profilesByRun.get(run.runId) ?? [];
+        const expected =
+          run.suite?.protocol === RESTORING_MULTI_AGENT_PROTOCOL
+            ? run.suite.schedule.length
+            : canonicalTaskCount;
         return (
-          canonicalTaskCount > 0 &&
+          expected > 0 &&
           runProfiles.length > 0 &&
           runProfiles.every(
             (profile) =>
-              taskIdsByProfile.get(`${run.runId}::${profile.profileId}`)?.size ===
-              canonicalTaskCount,
+              taskIdsByProfile.get(`${run.runId}::${profile.profileId}`)?.size === expected,
           )
         );
       })
@@ -591,7 +601,26 @@ export async function buildPublicDataset(outputDirectory, bundleDirectories) {
   return index;
 }
 
-function summarizeTrials(trials) {
+function summarizeTrials(trials, runs = []) {
+  const restoringRuns = new Set(
+    runs
+      .filter((run) => run.suite?.protocol === RESTORING_MULTI_AGENT_PROTOCOL)
+      .map((run) => run.runId),
+  );
+  const restoring = runs
+    .filter((run) => restoringRuns.has(run.runId))
+    .flatMap((run) =>
+      run.suite.observations.map(({ profileId, result }) => ({
+        runId: run.runId,
+        profileId,
+        comparisonKey: result.comparisonKey,
+        firstScore: result.score.first.score / 100,
+        finalScore: result.score.final.score / 100,
+        observedRounds: result.progress.observedRounds,
+        totalRounds: result.progress.totalRounds,
+      })),
+    );
+  trials = trials.filter((trial) => !restoringRuns.has(trial.runId));
   const byTask = new Map();
   const byProfile = new Map();
   for (const trial of trials)
@@ -616,6 +645,7 @@ function summarizeTrials(trials) {
   }));
   return {
     observations: trials.reduce((sum, trial) => sum + (trial.taskIds?.length ?? 1), 0),
+    ...(restoring.length ? { restoring } : {}),
     tasks,
     profiles,
     macroTaskExactRate: tasks.length
@@ -682,11 +712,13 @@ function summarizeEfficiency(trials, rounds, runs) {
     profiles.set(key, item);
   }
   return [...profiles.values()].map((item) => {
-    const observation = runs
-      .find((run) => run.runId === item.runId)
-      ?.suite?.observations.find((row) => row.profileId === item.profileId);
+    const run = runs.find((run) => run.runId === item.runId);
+    const observation = run?.suite?.observations.find((row) => row.profileId === item.profileId);
     if (observation) {
-      item.durationSeconds = observation.elapsedMs / 1000;
+      item.durationSeconds =
+        (run.suite.protocol === RESTORING_MULTI_AGENT_PROTOCOL
+          ? observation.result.execution.elapsedMs
+          : observation.elapsedMs) / 1000;
       item.durationBasis = "team-wall-clock";
     }
     for (const [total, coverage] of [
@@ -771,6 +803,8 @@ const EXPLORER_FIELDS = {
     "rounds",
     "firstExactPassed",
     "finalExactPassed",
+    "firstScore",
+    "finalScore",
   ],
   rounds: ["runId", "roundId", "trialId", "seconds", "costUsd", "totalTokens"],
   toolCalls: ["runId", "roundId", "tool"],
@@ -845,6 +879,39 @@ async function writeExplorerData(outputDirectory, index, views, evidence) {
   }
 }
 
+function scoringMetadata(runs) {
+  const legacy = {
+    id: "explicit-edit-score",
+    version: 2,
+    formula: "coverage * (0.75 * taskBalancedFirstExactRate + 0.25 * taskBalancedFinalExactRate)",
+    repetitionUnit: "mean within user configuration × task",
+    rollup: "equal configurations within task; equal tasks",
+    familyRollup: "median of complete eligible configuration scores",
+    primaryModelIdentity: "model family + provider",
+    providerQuarantine: "at least 50 trials and at least 20% confirmed provider failures",
+    source: "scripts/result-aggregation.mjs",
+  };
+  if (!runs.some((run) => run.suite?.protocol === RESTORING_MULTI_AGENT_PROTOCOL)) return legacy;
+  return {
+    ...legacy,
+    formula: "Selected by observation protocol",
+    repetitionUnit: "Selected by observation protocol",
+    rollup: "Selected by observation protocol",
+    protocols: {
+      default: legacy,
+      [RESTORING_MULTI_AGENT_PROTOCOL]: {
+        range: [0, 1],
+        primary: "final",
+        firstRetained: true,
+        formula:
+          "Mean final atom fraction times independent build, repeated-pixel and integrity factors across all planned rounds",
+        repetitionUnit: "mean of repeated full-planned-denominator observation scores",
+        comparison: "restoringComparisonKey",
+        coveragePenalty: false,
+      },
+    },
+  };
+}
 /** Rebuild only compact derived files from an already verified aggregate state. */
 export async function buildDerivedDatasetFromAggregateState(
   outputDirectory,
@@ -883,17 +950,7 @@ export async function buildDerivedDatasetFromAggregateState(
         ...row
       }) => ({ ...row, configurationLabels: [...configurationLabels] }),
     );
-  const scoring = {
-    id: "explicit-edit-score",
-    version: 2,
-    formula: "coverage * (0.75 * taskBalancedFirstExactRate + 0.25 * taskBalancedFinalExactRate)",
-    repetitionUnit: "mean within user configuration × task",
-    rollup: "equal configurations within task; equal tasks",
-    familyRollup: "median of complete eligible configuration scores",
-    primaryModelIdentity: "model family + provider",
-    providerQuarantine: "at least 50 trials and at least 20% confirmed provider failures",
-    source: "scripts/result-aggregation.mjs",
-  };
+  const scoring = scoringMetadata(index.runs);
   const leaderboardRows = aggregateLeaderboard(
     publicIndex,
     evidence.profiles,
@@ -978,7 +1035,7 @@ export async function buildDerivedDatasetFromAggregateState(
     exclusions,
     contributors: community.contributors.length,
     harnesses: community.harnesses.length,
-    ...summarizeTrials(evidence.trials),
+    ...summarizeTrials(evidence.trials, index.runs),
     models: models.length,
     configurations: leaderboardRows.length,
     efficiency: summarizeEfficiency(evidence.trials, evidence.rounds, index.runs),
@@ -1177,17 +1234,7 @@ export async function buildPublicDatasetFromStore(
   const leaderboard = {
     schemaVersion: 1,
     exclusions,
-    scoring: {
-      id: "explicit-edit-score",
-      version: 2,
-      formula: "coverage * (0.75 * taskBalancedFirstExactRate + 0.25 * taskBalancedFinalExactRate)",
-      repetitionUnit: "mean within user configuration × task",
-      rollup: "equal configurations within task; equal tasks",
-      familyRollup: "median of complete eligible configuration scores",
-      primaryModelIdentity: "model family + provider",
-      providerQuarantine: "at least 50 trials and at least 20% confirmed provider failures",
-      source: "scripts/result-aggregation.mjs",
-    },
+    scoring: scoringMetadata(index.runs),
     rows: serializeLeaderboard(
       aggregateLeaderboard(publicIndex, allProfiles, allTrials, allRounds),
     ),
@@ -1263,7 +1310,7 @@ export async function buildPublicDatasetFromStore(
     exclusions,
     contributors: community.contributors.length,
     harnesses: community.harnesses.length,
-    ...summarizeTrials(allTrials),
+    ...summarizeTrials(allTrials, index.runs),
     models: models.length,
     configurations: leaderboardRows.length,
     efficiency: summarizeEfficiency(allTrials, allRounds, index.runs),
