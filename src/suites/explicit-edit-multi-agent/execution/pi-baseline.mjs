@@ -6,6 +6,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { ExecutionFailure } from "./request-chain.mjs";
+import { assertProcessBoundary } from "./process-boundary.mjs";
 
 /** Sum finalized native Pi usage. Missing observations remain unknown, not zero. */
 export function finalizedUsage(events) {
@@ -37,7 +38,7 @@ export async function startBaseline(
   workspace,
   stateDirectory,
   config,
-  { eventsFile, signal } = {},
+  { eventsFile, signal, enforceProcessBoundary = false } = {},
 ) {
   signal?.throwIfAborted();
   const keys = new Set(["runtime", "model", "thinking", "authFile", "modelsFile", "envFile"]);
@@ -180,11 +181,34 @@ export async function startBaseline(
     "/state/pi/sessions",
   );
   signal?.throwIfAborted();
+  if (enforceProcessBoundary) args.unshift("--info-fd", "3");
   const child = spawn("bwrap", args, {
     detached: true,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: enforceProcessBoundary ? ["pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
     env: { PATH: "/usr/bin:/bin" },
   });
+  const namespace = Promise.withResolvers();
+  namespace.promise.catch(() => {});
+  let processIdentity;
+  if (enforceProcessBoundary) {
+    let information = "";
+    child.stdio[3].on("data", (bytes) => {
+      information += bytes;
+    });
+    child.stdio[3].once("end", () => {
+      try {
+        const pid = JSON.parse(information)["child-pid"];
+        assert.ok(Number.isSafeInteger(pid) && pid > 0, "Missing Baseline namespace PID");
+        namespace.resolve(pid);
+      } catch (error) {
+        namespace.reject(error);
+      }
+    });
+    child.once("error", (error) => namespace.reject(error));
+    child.once("close", () =>
+      namespace.reject(new ExecutionFailure("driver_exit", "Baseline namespace closed")),
+    );
+  }
   const events = [];
   const pending = new Map();
   const observers = new Set();
@@ -387,6 +411,12 @@ export async function startBaseline(
       fail(error);
       throw error;
     }
+    if (enforceProcessBoundary)
+      processIdentity = await assertProcessBoundary(
+        await namespace.promise,
+        observation.agentPid,
+        processIdentity,
+      );
     return current;
   };
   const abortStartup = () => {
@@ -419,6 +449,7 @@ export async function startBaseline(
           model: config.model,
           thinking: config.thinking,
           messageCount: current.messageCount,
+          ...(processIdentity ? { process: processIdentity } : {}),
         };
       },
       async execute(prompt, { signal } = {}) {

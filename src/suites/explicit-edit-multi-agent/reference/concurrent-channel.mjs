@@ -167,6 +167,18 @@ export function referenceChannel(workspace, tools, entry, { signal } = {}) {
   if (signal?.aborted) abort();
   return {
     ready: readiness.promise,
+    get closed() {
+      return child.exitCode !== null || child.signalCode !== null;
+    },
+    async assertIdle() {
+      await readiness.promise;
+      if (closing || pending || failure || child.exitCode !== null || child.signalCode !== null)
+        throw Object.assign(
+          new Error("Reference editor is not alive and idle", { cause: failure }),
+          { category: "driver_exit" },
+        );
+      process.kill(child.pid, 0);
+    },
     deliver(task) {
       if (closing || pending) throw Error("Reference channel closed or concurrent delivery");
       signal?.throwIfAborted();

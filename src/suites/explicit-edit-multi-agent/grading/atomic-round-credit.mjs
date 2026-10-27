@@ -12,9 +12,11 @@ import {
   structuralRecordOwners,
 } from "./structural-credit.mjs";
 import { namespaceShellCounts } from "./round-footprints.mjs";
+import { encodeSourceBytes, decodeSourceBytes } from "../cpp/source-bytes.mjs";
 
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const identifier = (text) => /^[A-Za-z_]\w*$/.test(text);
+const slotIds = (site) => site.nodeIds ?? [site.nodeId];
 const shape = (frame) => [frame.file, frame.scope, frame.kind, frame.conditions];
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const tokenKey = (frame) => digest([...shape(frame), frame.tokens]);
@@ -24,8 +26,10 @@ function append(map, key, value) {
   if (!map.has(key)) map.set(key, []);
   map.get(key).push(value);
 }
-const masked = (tokens, slots) =>
-  tokens.map((token, index) => (slots.has(index) && identifier(token) ? null : token));
+// Attribution does not certify a name. A malformed token occupying a known
+// requested slot can identify its failed owner without becoming collateral.
+const attributionMask = (tokens, slots) =>
+  tokens.map((token, index) => (slots.has(index) ? null : token));
 const header = (tokens) => {
   const end = tokens.findIndex((token) => token === "{" || token === "=" || token === ";");
   return tokens.slice(0, end < 0 ? tokens.length : end);
@@ -100,8 +104,14 @@ export function prepareAtomicRoundCredit({
         for (const site of owner.sites) {
           assert.ok(ids.has(site.nodeId), "Naming site outside this round");
           const previous = frame.slots.get(site.index);
-          assert.ok(!previous || same(previous, site), "Conflicting endpoint naming slots");
-          frame.slots.set(site.index, site);
+          assert.ok(!previous || previous.to === site.to, "Conflicting endpoint naming slots");
+          // Different original parameters can converge to identical prototypes.
+          // Keep every obligation: an indistinguishable family must satisfy all
+          // copies, never credit one convenient copy or overwrite a sibling atom.
+          frame.slots.set(site.index, {
+            ...site,
+            nodeIds: [...new Set([...(previous ? slotIds(previous) : []), site.nodeId])],
+          });
           frame.ids.add(site.nodeId);
           covered.add(site.nodeId);
         }
@@ -122,7 +132,7 @@ export function prepareAtomicRoundCredit({
   });
   const copies = new Map();
   for (const frame of frames) {
-    frame.key = digest([...shape(frame), masked(frame.tokens, frame.slots)]);
+    frame.key = tokenKey(frame);
     copies.set(frame.key, (copies.get(frame.key) ?? 0) + 1);
   }
   return {
@@ -147,7 +157,10 @@ function matchFrames(actual, expected) {
     append(full, tokenKey(frame), frame);
     append(shapes, JSON.stringify(shape(frame)), frame);
   }
+  const expectedKeys = new Set(expected.map(tokenKey));
   for (const frame of expected) {
+    const key = tokenKey(frame);
+    const canonical = full.get(key) ?? [];
     const candidates = frame.slots.size
       ? (shapes.get(JSON.stringify(shape(frame))) ?? []).filter(
           (other) =>
@@ -158,8 +171,14 @@ function matchFrames(actual, expected) {
             ),
         )
       : (full.get(tokenKey(frame)) ?? []);
-    matches.set(frame, candidates);
-    for (const other of candidates) append(reverse, other, frame);
+    // Preserve distinct requested names even when masking would make two
+    // physical owners identical. A complete canonical sibling is not evidence
+    // for another, misspelled owner; ambiguous leftovers remain fail-closed.
+    const selected = canonical.length
+      ? canonical
+      : candidates.filter((other) => !expectedKeys.has(tokenKey(other)));
+    matches.set(frame, selected);
+    for (const other of selected) append(reverse, other, frame);
   }
   return { matches, reverse };
 }
@@ -211,12 +230,37 @@ function compilerView(symbols, frames, identity) {
       point(row) ?? (row.kind === "NAMESPACE" ? JSON.stringify(["namespace", row.id]) : undefined);
     if (!position) continue;
     if (!groups.has(key)) groups.set(key, new Set());
-    groups.get(key).add(position);
+    groups.get(key).add(JSON.stringify([position, row.namespaceContext ?? null]));
   }
   const identities = new Map(
     [...groups].map(([key, values]) => [key, JSON.stringify([...values].sort())]),
   );
-  const target = (row, reference) => {
+  const usingTargets = new Map();
+  for (const row of symbols.credit.anchors) {
+    if (row.role !== "reference" || row.kind !== "USING_DECLARATION") continue;
+    append(usingTargets, JSON.stringify([row.translationUnit, row.file, row.offset]), row.target);
+  }
+  const target = (row, reference, visited = new Set()) => {
+    if (reference.namespace) return JSON.stringify(["namespace", reference.namespace]);
+    if (reference.kind === "UNEXPOSED_DECL" && reference.file) {
+      const key = JSON.stringify([row.translationUnit, reference.file, reference.offset]);
+      const aliases = usingTargets.get(key);
+      if (aliases) {
+        if (visited.has(key)) return undefined;
+        const next = new Set(visited).add(key);
+        const candidates = aliases.map((declaration) => target(row, declaration, next));
+        if (candidates.some((candidate) => candidate === undefined)) return undefined;
+        return JSON.stringify(["using-targets", [...new Set(candidates)].sort()]);
+      }
+    }
+    if (Array.isArray(reference.overloads)) {
+      if (!reference.overloads.length) return undefined;
+      const candidates = reference.overloads.map((declaration) =>
+        target(row, declaration, visited),
+      );
+      if (candidates.some((candidate) => candidate === undefined)) return undefined;
+      return JSON.stringify(["overload-set", [...new Set(candidates)].sort()]);
+    }
     if (reference.external) {
       return JSON.stringify(
         reference.file && Number.isSafeInteger(reference.offset)
@@ -243,6 +287,14 @@ function compilerView(symbols, frames, identity) {
   };
 }
 
+function bindingKey(rows = new Map()) {
+  if ([...rows.values()].some((values) => values.has("unresolved"))) return null;
+  return digest(
+    [...rows]
+      .map(([key, values]) => [key, [...values].sort()])
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
 function bindingDifferences(expected = new Map(), actual = new Map()) {
   const differences = new Set();
   for (const key of new Set([...expected.keys(), ...actual.keys()])) {
@@ -277,7 +329,7 @@ function lexicalProjection(tree, expected, matches) {
   }
   const projected = { ...tree };
   for (const [file, changes] of edits) {
-    const source = Buffer.from(tree[file]),
+    const source = encodeSourceBytes(tree[file]),
       chunks = [];
     let start = 0;
     for (const edit of [...changes.values()].sort((left, right) => left.start - right.start)) {
@@ -285,7 +337,7 @@ function lexicalProjection(tree, expected, matches) {
       start = edit.end;
     }
     chunks.push(source.subarray(start));
-    projected[file] = Buffer.concat(chunks).toString("utf8");
+    projected[file] = decodeSourceBytes(Buffer.concat(chunks));
   }
   return projected;
 }
@@ -337,16 +389,35 @@ export function evaluateAtomicRoundCredit(tree, prepared, { candidateSymbols }) 
       ? candidates[0].key
       : undefined;
   });
+  const expectedBindings = new Map(
+    expected.map((frame) => [frame, bindingKey(expectedView.rows.get(frame))]),
+  );
+  const actualBindings = new Map(
+    actual.map((frame) => [frame, bindingKey(actualView.rows.get(frame))]),
+  );
+  const bindingCopies = new Map();
   for (const frame of expected) {
-    const candidates = matches.get(frame);
+    const key = JSON.stringify([frame.key, expectedBindings.get(frame)]);
+    bindingCopies.set(key, (bindingCopies.get(key) ?? 0) + 1);
+  }
+  for (const frame of expected) {
+    let candidates = matches.get(frame);
     if (candidates.length !== prepared.copies.get(frame.key)) {
       fail(frame, "protected-owner");
       continue;
     }
+    // Identical source copies can be active in different macro frontiers. Match
+    // the complete multiset of real compiler facts, not every cross-product pair.
+    const signature = expectedBindings.get(frame);
+    if (signature !== null) {
+      const compatible = candidates.filter((other) => actualBindings.get(other) === signature);
+      if (compatible.length === bindingCopies.get(JSON.stringify([frame.key, signature])))
+        candidates = compatible;
+    }
     for (const other of candidates) {
       for (const [index, site] of frame.slots)
         if (other.tokens[index] !== site.to)
-          charge(new Set([site.nodeId]), "requested-name", frame.file);
+          charge(new Set(slotIds(site)), "requested-name", frame.file);
       const units = [...expectedView.units.values()].filter((unit) =>
         unit.files.includes(frame.file),
       );
@@ -362,7 +433,11 @@ export function evaluateAtomicRoundCredit(tree, prepared, { candidateSymbols }) 
         )) {
           const site = frame.slots.get(index);
           if (site)
-            charge(new Set([site.nodeId, ...frame.structuralIds]), "compiler-binding", frame.file);
+            charge(
+              new Set([...slotIds(site), ...frame.structuralIds]),
+              "compiler-binding",
+              frame.file,
+            );
           else fail(frame, "compiler-binding");
         }
       }
@@ -377,7 +452,10 @@ export function evaluateAtomicRoundCredit(tree, prepared, { candidateSymbols }) 
       (other) =>
         other.ids.size &&
         same(shape(frame), shape(other)) &&
-        same(header(masked(frame.tokens, other.slots)), header(masked(other.tokens, other.slots))),
+        same(
+          header(attributionMask(frame.tokens, other.slots)),
+          header(attributionMask(other.tokens, other.slots)),
+        ),
     );
   };
   for (const frame of actual) {

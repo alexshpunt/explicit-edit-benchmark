@@ -8,6 +8,7 @@ import { writeTree } from "../generation/generator.mjs";
 import { GradeFailure } from "./failure.mjs";
 import { compilerDiagnostics } from "./repair-diagnostics.mjs";
 import { unitDeclarator } from "../cpp/cpp-structure.mjs";
+import { decodeSourceBytes, encodeSourceBytes } from "../cpp/source-bytes.mjs";
 
 const indexer = fileURLToPath(new URL("../cpp/barrier-symbol-index.py", import.meta.url));
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -23,6 +24,40 @@ async function indexTree(tree, { evidence, signal } = {}) {
   await mkdir(evidence);
   const source = path.join(path.resolve(evidence), "source");
   await writeTree(source, tree);
+  const buffers = new Map(
+    Object.entries(tree).map(([file, content]) => [file, encodeSourceBytes(content)]),
+  );
+  return indexSource(source, Object.keys(tree).sort(), buffers, { evidence, signal });
+}
+
+/** Index the saved original candidate, not a UTF-8 projection or repaired tree. */
+export async function indexBarrierSnapshot(candidate, { evidence, signal } = {}) {
+  assert.ok(evidence, "A fresh raw symbol-index directory is required");
+  signal?.throwIfAborted();
+  await mkdir(path.dirname(path.resolve(evidence)), { recursive: true });
+  await mkdir(evidence);
+  const entries = candidate.manifest.entries.filter(({ pathBytes }) =>
+    /\.(?:cpp|h)$/.test(decodeSourceBytes(Buffer.from(pathBytes, "base64"))),
+  );
+  const files = entries
+    .map((entry) => entry.path ?? decodeSourceBytes(Buffer.from(entry.pathBytes, "base64")))
+    .sort();
+  const unavailable = entries
+    .filter((entry) => entry.type !== "file" || entry.path === null)
+    .map((entry) => entry.path ?? decodeSourceBytes(Buffer.from(entry.pathBytes, "base64")));
+  const buffers = new Map(
+    Object.entries(candidate.lexicalTree).map(([file, content]) => [
+      file,
+      encodeSourceBytes(content),
+    ]),
+  );
+  return indexSource(path.resolve(candidate.source), { files, unavailable }, buffers, {
+    evidence,
+    signal,
+  });
+}
+
+async function indexSource(source, inventory, buffers, { evidence, signal }) {
   const args = [
     "--unshare-all",
     "--new-session",
@@ -75,7 +110,7 @@ async function indexTree(tree, { evidence, signal } = {}) {
     stderr += chunk;
   });
   child.stdin.on("error", () => {});
-  child.stdin.end(JSON.stringify(Object.keys(tree).sort()));
+  child.stdin.end(JSON.stringify(inventory));
   let code;
   try {
     code = await new Promise((resolve, reject) => {
@@ -92,14 +127,12 @@ async function indexTree(tree, { evidence, signal } = {}) {
     throw new GradeFailure("infrastructure", `libclang barrier index failed (${code}): ${stderr}`);
   const result = JSON.parse(stdout);
   assert.equal(result.version, "renderer-barrier-symbol-map-v1");
-  const buffers = new Map(
-    Object.entries(tree).map(([file, source]) => [file, Buffer.from(source)]),
-  );
   for (const record of result.symbols) {
     const { start, end, scope } = record.declaration;
     const source = buffers.get(record.file);
-    const text = source.subarray(start, end).toString("utf8");
     try {
+      if (!source) throw new Error("Unavailable physical source");
+      const text = decodeSourceBytes(source.subarray(start, end));
       record.declaration = {
         scope,
         selector: unitDeclarator(text, { start: 0, end: text.length }),

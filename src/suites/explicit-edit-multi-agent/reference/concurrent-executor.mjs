@@ -31,9 +31,15 @@ export function concurrentExecutor(workspace, tools, { signal } = {}) {
   const channel = referenceChannel(workspace, tools, "full-worker.mjs", { signal });
   return {
     ready: channel.ready,
+    get closed() {
+      return channel.closed;
+    },
+    assertIdle: channel.assertIdle,
     execute: (task) => channel.deliver(publicReferenceTask(task)),
-    async executeBatch(tasks) {
-      const result = await channel.deliver(tasks.map(publicReferenceTask));
+    async executeBatch(tasks, { notices = [] } = {}) {
+      const current = tasks.map(publicReferenceTask);
+      if (notices.length) current[0] = { ...current[0], restorationNotices: notices };
+      const result = await channel.deliver(current);
       return result.receipts;
     },
     close: channel.close,

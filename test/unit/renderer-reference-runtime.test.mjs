@@ -32,6 +32,7 @@ await test("clustered reference runtimes stage only editing dependencies and can
     "cpp/cpp-structure.mjs",
     "cpp/cpp-tokens.mjs",
     "cpp/cpp-offsets.mjs",
+    "cpp/source-bytes.mjs",
     "cpp/scoped-names.mjs",
     "cpp/direct-call-edits.mjs",
     "cpp/template-call-witness.mjs",

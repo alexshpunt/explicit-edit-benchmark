@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { prepareCoherentContract } from "../grading/coherent-grade.mjs";
 import { cppStructure, unitDeclarator } from "../cpp/cpp-structure.mjs";
 import { cppTokens } from "../cpp/cpp-tokens.mjs";
+import { sourceByteOffsets } from "../cpp/source-bytes.mjs";
 
 const identifier = (text) => /^[A-Za-z_]\w*$/.test(text);
 
@@ -143,16 +144,7 @@ function contractConditions(unit) {
  */
 export function atomicOwnerFrames(tree) {
   return Object.entries(tree).flatMap(([file, source]) => {
-    const bytes = new Uint32Array(source.length + 1);
-    let offset = 0;
-    for (let index = 0; index < source.length;) {
-      const point = source.codePointAt(index);
-      const width = point > 0xffff ? 2 : 1;
-      bytes[index] = offset;
-      offset += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
-      index += width;
-      bytes[index] = offset;
-    }
+    const bytes = sourceByteOffsets(source);
     return owners(file, source).map((unit) => {
       const tokens = contractTokens(source.slice(unit.start, unit.end));
       return {

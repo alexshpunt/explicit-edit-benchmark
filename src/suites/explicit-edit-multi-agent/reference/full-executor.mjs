@@ -18,6 +18,7 @@ export async function prepareFullExecutor(directory) {
     "cpp/cpp-structure.mjs",
     "cpp/cpp-tokens.mjs",
     "cpp/cpp-offsets.mjs",
+    "cpp/source-bytes.mjs",
     "reference/scripted-worker.mjs",
     "generation/generator.mjs",
     "generation/origin-markers.mjs",

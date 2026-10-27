@@ -19,7 +19,7 @@ cindex.Config.set_library_file("/usr/lib/llvm-18/lib/libclang.so.1")
 
 
 def digest(value):
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "surrogateescape")).hexdigest()
 
 
 def main():
@@ -31,7 +31,9 @@ def main():
     version = cindex._CXString.from_result(version_function())
     if not re.search(r"clang version 18\.", version):
         raise RuntimeError("Barrier indexing requires libclang 18")
-    files = sorted(json.load(sys.stdin))
+    inventory = json.load(sys.stdin)
+    files = sorted(inventory if isinstance(inventory, list) else inventory["files"])
+    unavailable = set() if isinstance(inventory, list) else set(inventory["unavailable"])
     known = set(files)
     index = cindex.Index.create()
     records = {}
@@ -56,6 +58,8 @@ def main():
     binding_files = {}
     source_bytes = {}
     for source_file in files:
+        if source_file in unavailable:
+            continue
         with open(source_file, "rb") as source:
             source_bytes[source_file] = source.read()
     type_kinds = {cindex.CursorKind.STRUCT_DECL, cindex.CursorKind.CLASS_DECL,
@@ -85,6 +89,18 @@ def main():
         name = os.path.relpath(location.file.name)
         return name if name in known else None
 
+    def token_spelling(token):
+        try:
+            return token.spelling
+        except UnicodeDecodeError:
+            # The official wrapper decodes token strings strictly. A genuine
+            # successful TU can still contain malformed bytes in a comment.
+            # Keep that exact physical token, never a replacement character.
+            physical = project_file(token.location)
+            if physical not in source_bytes:
+                raise
+            start, end = token.extent.start.offset, token.extent.end.offset
+            return source_bytes[physical][start:end].decode("utf-8", "surrogateescape")
     def is_local(cursor):
         parent = cursor.semantic_parent
         while parent and parent.kind != cindex.CursorKind.TRANSLATION_UNIT:
@@ -127,11 +143,33 @@ def main():
             return digest(["internal", project_file(definition.location) or physical, raw])
         return digest(["external", raw])
 
+    namespace_contexts = {}
+
+    def namespace_context(cursor):
+        if not cursor or cursor.kind == cindex.CursorKind.TRANSLATION_UNIT:
+            return None
+        bucket = namespace_contexts.setdefault(cursor.hash, [])
+        for known, context in bucket:
+            if known == cursor:
+                return context
+        if cursor.kind == cindex.CursorKind.NAMESPACE:
+            context = cursor.get_usr() or None
+        else:
+            context = namespace_context(cursor.semantic_parent)
+        bucket.append((cursor, context))
+        return context
+
     def credit_target(cursor):
         physical = project_file(cursor.location)
         raw = cursor.get_usr()
         result = {"kind": cursor.kind.name}
+        if cursor.kind == cindex.CursorKind.NAMESPACE and raw:
+            result["namespace"] = raw
         if physical:
+            # Distinct macro-generated declarations can share one physical token.
+            context = namespace_context(cursor.semantic_parent)
+            if context:
+                result["namespaceContext"] = context
             result.update({"file": physical, "offset": cursor.location.offset,
                            "id": private_binding_id(cursor) or digest([
                                "project-anchor", physical, cursor.location.offset,
@@ -159,7 +197,9 @@ def main():
         credit_add({"file": target["file"], "offset": target["offset"],
                     "kind": target["kind"], "id": target["id"],
                     "role": "declaration", "translationUnit": translation_unit,
-                    "definition": cursor.is_definition()})
+                    "definition": cursor.is_definition(),
+                    **({key: target[key] for key in ("namespace", "namespaceContext")
+                        if key in target})})
 
     def credit_fact(cursor, translation_unit):
         physical = project_file(cursor.location)
@@ -170,6 +210,15 @@ def main():
         target = cursor.referenced
         if target and target != cursor:
             selected = credit_target(target)
+            if target.kind == cindex.CursorKind.OVERLOADED_DECL_REF:
+                # Dependent calls and using declarations can expose a lookup set,
+                # not a chosen declaration. Retain every real Clang candidate.
+                count = cindex.conf.lib.clang_getNumOverloadedDecls(target)
+                overloads = [cindex.conf.lib.clang_getOverloadedDecl(target, i)
+                             for i in range(count)]
+                selected["overloads"] = [credit_target(item) for item in overloads]
+                for item in overloads:
+                    credit_declaration(item, translation_unit)
             credit_add({"file": physical, "offset": cursor.location.offset,
                         "kind": cursor.kind.name, "role": "reference",
                         "translationUnit": translation_unit, "target": selected})
@@ -223,7 +272,7 @@ def main():
             # select. A constructor's class-name location alone is insufficient.
             if actual and role == "function":
                 actual = (cursor.extent.end.offset > cursor.extent.start.offset and
-                          any(token.spelling == "(" for token in cursor.get_tokens()))
+                          any(token_spelling(token) == "(" for token in cursor.get_tokens()))
             if actual:
                 scope = qualified_name(cursor)
                 parent = cursor.semantic_parent
@@ -273,21 +322,34 @@ def main():
             recover_candidate_facts(child, translation_unit, function_owner, anonymous)
 
     for file in files:
+        namespace_contexts.clear()
         if not file.endswith(".cpp"):
+            continue
+        if file in unavailable:
+            credit_units.append({"file": file, "status": "fail", "files": [file]})
+            diagnostics.append(f"{file}:1:1: error: unsupported source entry")
             continue
         unit = index.parse(file, args=["--driver-mode=g++", "--gcc-toolchain=/usr", "-std=c++17", "-O0", "-ferror-limit=0", "-ffp-contract=off", "-pthread", "-I", "support", "-I", "."])
         errors = [str(item) for item in unit.diagnostics if item.severity >= cindex.Diagnostic.Error]
         included = {file}
-        for inclusion in unit.get_includes():
-            name = os.path.relpath(inclusion.include.name)
-            if name in known:
-                included.add(name)
+        unsafe = False
+        try:
+            for inclusion in unit.get_includes():
+                name = os.path.relpath(inclusion.include.name)
+                if name in known:
+                    included.add(name)
+        except UnicodeError:
+            unsafe = True
+        unsafe = unsafe or bool(included & unavailable)
+        if unsafe:
+            errors.append(f"{file}:1:1: error: unavailable physical source coverage")
         credit_units.append({"file": file, "status": "fail" if errors else "pass",
                              "files": sorted(included)})
         if errors:
             diagnostics.extend(errors)
-            for child in unit.cursor.get_children():
-                recover_candidate_facts(child, file)
+            if not unsafe:
+                for child in unit.cursor.get_children():
+                    recover_candidate_facts(child, file)
             continue
         owners = []
         # Compiler-owned names anchor global anonymous types. Local types use
@@ -425,7 +487,7 @@ def main():
                     owner = {
                         "file": physical_file, "usr": usr, "kind": kind.name,
                         "definition": cursor.is_definition(),
-                        "tokensSha256": digest([token.spelling for token in tokens]),
+                        "tokensSha256": digest([token_spelling(token) for token in tokens]),
                         "references": set(),
                         "positions": [token.location.offset for token in tokens],
                         "start": cursor.extent.start.offset,
