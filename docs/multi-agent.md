@@ -90,9 +90,10 @@ subject to GitHub's six-hour platform limit, not a benchmark task deadline.
 
 ### Round-score protocol
 
-`shared-project-restoring-v2` has separate native Baseline entry points, currently
-under integration verification. The common run and submission commands below
-remain accepted-prefix commands; they do not select restoration implicitly.
+`shared-project-restoring-v2` uses the separate native Baseline entry points below.
+They require a new proof from the exact committed source and run policy. The common
+run and submission commands remain accepted-prefix commands; they do not select
+restoration implicitly.
 
 The grading core supports naming and structural endpoints, including final
 physical destinations, old-copy absence, declaration counts and explicit empty
@@ -170,6 +171,13 @@ continued session is not a persistent participant. Idle checks request no
 inference and reject live tool descendants before measurement or restoration.
 A detached background writer is a runtime/infrastructure violation, not another
 editing attempt.
+
+The integration fixture in `test/renderer/restoring.test.mjs` uses real persistent
+Pi processes with a local scripted provider. It covers six editing failures,
+current-round restoration and later edits, plus process death, cancellation,
+a detached writer, restoration failure and workspace loss. A wording-only source
+variant must pass with its own proof; neither fixture proof replaces the required
+full-workload reference proof.
 
 Reuse an audited full preparation. Generate a separate, model-free proof with the
 same maximum occupancy, batch size and weights as the intended observation:
