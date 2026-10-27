@@ -98,14 +98,17 @@ or per-attempt deadline by default; cancellation remains active.
 ## Scripted reference and resource use
 
 Each reference participant owns a private planner, compiler view and retained
-edit history. Planning remains independent and concurrent. Each requested file
-patch protects its latest read, merge and atomic replacement with an ordinary
-inherited-descriptor `flock`, available to a Bash participant. An inode check
-makes a waiting writer reopen a file replaced by a peer before reading it.
-Creating a file briefly protects its parent directory and rechecks absence.
-There are no lock files, shared planner or mandatory editing service. Other
-files remain writable, and multi-file intermediate states remain visible.
-This participant-owned protocol does not protect arbitrary writes that bypass it.
+edit history. Planning remains independent and concurrent. An editor briefly
+locks only its request's target files with ordinary inherited-descriptor `flock`,
+available to a Bash participant. It acquires distinct inode locks in a stable
+order, then rechecks every path. A replaced file releases the set and reopens it.
+New files share their parent directory's guard, with absence checked again.
+The editor merges every target before writing any file. A conflict leaves the
+source unchanged so Clang can select the same public request from current bytes;
+a half-published rename must not break that compilation.
+There are no lock files, shared planner or mandatory editing service. Unrelated
+files remain writable, and ordinary readers can see multi-file intermediate
+states. Direct writes that bypass this participant-owned protocol are unprotected.
 
 The scripted reference must pass every drained barrier on its first check.
 It cannot dispatch barrier repairs or authorize measured runs with a recovered

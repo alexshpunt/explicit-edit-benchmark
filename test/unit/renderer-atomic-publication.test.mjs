@@ -188,6 +188,132 @@ test(
   },
 );
 
+test("a cross-file rename conflict leaves every file available for current-source replanning", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "cross-file-rename-conflict-"));
+  const before = {
+    "api.h": "#pragma once\nnamespace sample { inline constexpr int Old = 1; }\n",
+    "main.cpp":
+      '#include "api.h"\n\nint main() { return sample::Old - 1; }\n\nnamespace sample {\n\n}\n',
+  };
+  const after = Object.fromEntries(
+    Object.entries(before).map(([file, source]) => [file, source.replaceAll("Old", "Current")]),
+  );
+  const cleaned = '#include "api.h"\nint main() { return sample::Old - 1; }\n';
+  try {
+    await writeFile(path.join(root, "api.h"), before["api.h"]);
+    await writeFile(path.join(root, "main.cpp"), cleaned);
+    const result = publishEdits(root, before, after);
+    assert.deepEqual(result, { written: [], conflicts: ["main.cpp"] });
+    assert.equal(await readFile(path.join(root, "api.h"), "utf8"), before["api.h"]);
+    assert.equal(await readFile(path.join(root, "main.cpp"), "utf8"), cleaned);
+    const current = { ...before, "main.cpp": cleaned };
+    const replanned = Object.fromEntries(
+      Object.entries(current).map(([file, source]) => [file, source.replaceAll("Old", "Current")]),
+    );
+    assert.deepEqual(publishEdits(root, current, replanned), {
+      written: ["api.h", "main.cpp"],
+      conflicts: [],
+    });
+    for (const [file, source] of Object.entries(replanned))
+      assert.equal(await readFile(path.join(root, file), "utf8"), source);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test(
+  "cross-file publishers guard all their targets while unrelated files remain writable",
+  { timeout: 15000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), "cross-file-publishers-"));
+    const before = {
+      "api.h": "int first; int second;\n",
+      "main.cpp": "int use() { return first + second; }\n",
+    };
+    const writers = [];
+    try {
+      for (const [file, source] of Object.entries(before))
+        await writeFile(path.join(root, file), source);
+      const rename = (name, next, reverse = false) =>
+        Object.fromEntries(
+          (reverse ? Object.entries(before).reverse() : Object.entries(before)).map(
+            ([file, source]) => [file, source.replaceAll(name, next)],
+          ),
+        );
+      const first = publisher(root, before, rename("first", "first_changed"), t.signal, {
+        pause: true,
+      });
+      writers.push(first);
+      await first.ready;
+      first.child.stdin.write("x");
+      await first.paused;
+      for (const file of Object.keys(before))
+        assert.equal(
+          spawnSync("flock", ["--nonblock", "--exclusive", path.join(root, file), "true"]).status,
+          1,
+        );
+      const second = publisher(
+        root,
+        Object.fromEntries(Object.entries(before).reverse()),
+        rename("second", "second_changed", true),
+        t.signal,
+      );
+      writers.push(second);
+      await second.ready;
+      second.child.stdin.end("x");
+      assert.deepEqual(publishEdits(root, {}, { "peer.h": "int independent;\n" }), {
+        written: ["peer.h"],
+        conflicts: [],
+      });
+      first.child.stdin.end("x");
+      await Promise.all(writers.map((writer) => writer.done));
+      for (const [file, source] of Object.entries(before))
+        assert.equal(
+          await readFile(path.join(root, file), "utf8"),
+          source.replaceAll("first", "first_changed").replaceAll("second", "second_changed"),
+        );
+    } finally {
+      await closePublishers(writers);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+test(
+  "several new files share one directory guard without blocking their publisher",
+  { timeout: 10000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), "cross-file-creation-"));
+    const after = { "first.h": "int first;\n", "second.h": "int second;\n" };
+    const writers = [];
+    try {
+      const writer = publisher(root, {}, after, t.signal);
+      writers.push(writer);
+      await writer.ready;
+      writer.child.stdin.end("x");
+      await writer.done;
+      for (const [file, source] of Object.entries(after))
+        assert.equal(await readFile(path.join(root, file), "utf8"), source);
+    } finally {
+      await closePublishers(writers);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test("a rejected multi-file edit creates no new files", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "cross-file-creation-conflict-"));
+  const before = { "main.cpp": "int Old;\n" };
+  try {
+    await writeFile(path.join(root, "main.cpp"), "int unrelated;\n");
+    assert.deepEqual(
+      publishEdits(root, before, { "main.cpp": "int current;\n", "api.h": "int added;\n" }),
+      { written: [], conflicts: ["main.cpp"] },
+    );
+    await assert.rejects(readFile(path.join(root, "api.h")), { code: "ENOENT" });
+    assert.equal(await readFile(path.join(root, "main.cpp"), "utf8"), "int unrelated;\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("atomic publication does not depend on the caller PATH", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "atomic-empty-path-"));
   const savedPath = process.env.PATH;

@@ -164,56 +164,78 @@ export function projectEdits(before, after, current) {
     rmSync(directory, { recursive: true, force: true });
   }
 }
-// Use ordinary inherited-descriptor flock, available to a Bash participant.
-// An existing file's inode protects its read/apply/rename operation. A waiter
-// that opened an older inode must reopen after a peer's atomic replacement.
-// Creation briefly protects the parent directory and rechecks absence. No lock
-// files, editor service or protection during planning are needed.
-function atomicFileEdit(target, edit) {
-  mkdirSync(path.dirname(target), { recursive: true });
+// Ordinary inherited-descriptor flock is available to a Bash participant. Lock
+// only this edit's targets, in one stable inode order, and recheck every path
+// after waiting. Missing files share their parent directory's one lock. A stale
+// descriptor requires releasing the set before reopening, never a lock upgrade.
+function atomicFilesEdit(targets, edit) {
+  for (const target of targets) mkdirSync(path.dirname(target), { recursive: true });
   for (;;) {
-    let descriptor,
-      missing = false;
+    const opened = [];
     try {
-      descriptor = openSync(target, "r");
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      descriptor = openSync(path.dirname(target), "r");
-      missing = true;
-    }
-    try {
-      execFileSync("/usr/bin/flock", ["--exclusive", "3"], {
-        stdio: ["ignore", "ignore", "pipe", descriptor],
-      });
-      let current;
-      try {
-        current = statSync(target);
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+      for (const target of targets) {
+        const entry = { target, missing: false };
+        try {
+          entry.descriptor = openSync(target, "r");
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          entry.descriptor = openSync(path.dirname(target), "r");
+          entry.missing = true;
+        }
+        opened.push(entry);
+        entry.identity = fstatSync(entry.descriptor);
+        if (entry.missing ? !entry.identity.isDirectory() : !entry.identity.isFile())
+          throw Error("Nonregular atomic edit target");
       }
-      if (missing) {
-        if (current) continue;
-      } else {
-        const opened = fstatSync(descriptor);
-        if (!current || opened.dev !== current.dev || opened.ino !== current.ino) continue;
-        if (!opened.isFile()) throw Error("Nonregular atomic edit target");
-      }
-      return edit(missing ? undefined : descriptor);
+      const locks = new Map();
+      for (const entry of opened)
+        locks.set(`${entry.identity.dev}:${entry.identity.ino}`, entry.descriptor);
+      for (const [, descriptor] of [...locks].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+        execFileSync("/usr/bin/flock", ["--exclusive", "3"], {
+          stdio: ["ignore", "ignore", "pipe", descriptor],
+        });
+      const current = (target) => {
+        try {
+          return statSync(target);
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+      };
+      if (
+        opened.some((entry) => {
+          const actual = current(entry.target);
+          const guard = entry.missing ? current(path.dirname(entry.target)) : actual;
+          return (
+            (entry.missing && actual !== undefined) ||
+            !guard ||
+            guard.dev !== entry.identity.dev ||
+            guard.ino !== entry.identity.ino
+          );
+        })
+      )
+        continue;
+      return edit(
+        new Map(
+          opened.map((entry) => [entry.target, entry.missing ? undefined : entry.descriptor]),
+        ),
+      );
     } finally {
-      closeSync(descriptor);
+      for (const entry of opened) closeSync(entry.descriptor);
     }
   }
 }
-/** Apply one file patch atomically using ordinary Bash-accessible file locks.
- * Each actor plans independently. Only its latest read, patch merge and atomic
- * replacement share a short per-file critical section. Other files remain
- * writable and multi-file intermediate states remain visible. Uncooperative
- * direct writes do not participate in this protocol and are not protected.
+/** Preflight every file patch before publishing any part of this edit.
+ * Each actor plans independently. Only this edit's target files share a short
+ * read/merge/write critical section; unrelated files remain writable. A rejected
+ * merge leaves the original source available for fresh compiler selection.
+ * Multi-file intermediate states remain visible to ordinary readers. Direct
+ * writes that ignore these Bash-accessible locks are not protected.
  */
 export function publishEdits(workspace, before, after, { onEvent = () => {} } = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), "reference-merge-"));
   const conflicts = [];
   const written = [];
+  const patches = [];
   try {
     for (const file of new Set([...Object.keys(before), ...Object.keys(after)])) {
       if (before[file] === after[file]) continue;
@@ -227,31 +249,39 @@ export function publishEdits(workspace, before, after, { onEvent = () => {} } = 
       const target = path.join(workspace, file);
       const change = replacement(before[file] ?? "", after[file]);
       onEvent("publish-ready", file);
-      atomicFileEdit(target, (descriptor) => {
-        onEvent("read-start", file);
-        const current = descriptor === undefined ? "" : readFileSync(descriptor, "utf8");
-        onEvent("read-end", file);
-        const next = merge(before[file] ?? "", after[file], current, directory, change);
-        if (next === undefined) {
-          conflicts.push(file);
-          return;
-        }
-        if (next === current) return;
-        onEvent("write-start", file);
-        const temporary = path.join(
-          path.dirname(target),
-          `.${path.basename(target)}.${randomUUID()}.tmp`,
-        );
-        try {
-          writeFileSync(temporary, next, { flag: "wx" });
-          renameSync(temporary, target);
-        } finally {
-          rmSync(temporary, { force: true });
-        }
-        onEvent("write-end", file);
-        written.push(file);
-      });
+      patches.push({ file, target, change });
     }
+    atomicFilesEdit(
+      patches.map(({ target }) => target),
+      (descriptors) => {
+        const ready = [];
+        for (const { file, target, change } of patches) {
+          const descriptor = descriptors.get(target);
+          onEvent("read-start", file);
+          const current = descriptor === undefined ? "" : readFileSync(descriptor, "utf8");
+          onEvent("read-end", file);
+          const next = merge(before[file] ?? "", after[file], current, directory, change);
+          if (next === undefined) conflicts.push(file);
+          else if (next !== current) ready.push({ file, target, next });
+        }
+        if (conflicts.length) return;
+        for (const { file, target, next } of ready) {
+          onEvent("write-start", file);
+          const temporary = path.join(
+            path.dirname(target),
+            `.${path.basename(target)}.${randomUUID()}.tmp`,
+          );
+          try {
+            writeFileSync(temporary, next, { flag: "wx" });
+            renameSync(temporary, target);
+          } finally {
+            rmSync(temporary, { force: true });
+          }
+          onEvent("write-end", file);
+          written.push(file);
+        }
+      },
+    );
     return { written, conflicts };
   } finally {
     rmSync(directory, { recursive: true, force: true });
