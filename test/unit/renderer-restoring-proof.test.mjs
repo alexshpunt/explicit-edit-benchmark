@@ -10,6 +10,70 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/execution/restoring-proof.mjs";
 
 const hash = (text) => createHash("sha256").update(text).digest("hex");
+function bulkReferenceFixture() {
+  const { identity, report } = fixture();
+  identity.totalAtoms = 4;
+  identity.atomicInventorySha256 = hash(JSON.stringify(["a", "b", "c", "d"]));
+  identity.plannedAtoms[0].totalAtoms = 3;
+  identity.roundInventories[0].sha256 = hash(JSON.stringify(["a", "b", "d"]));
+  Object.assign(report, identity, { referenceBatchSize: 100 });
+  Object.assign(report.rounds[0].attempts[0], { passedAtoms: 3, totalAtoms: 3 });
+  const extra = structuredClone(report.executions[0].receipts[0]);
+  extra.events = extra.events.map((event) => ({
+    ...event,
+    at: event.at + 7,
+    ...(event.file ? { file: "d.h" } : {}),
+  }));
+  report.executions[0].atomicIds.push("d");
+  report.executions[0].receipts.push(extra);
+  report.executions[2].receipts[0].events = report.executions[2].receipts[0].events.map(
+    (event) => ({ ...event, at: event.at + 10 }),
+  );
+  return { identity, report };
+}
+
+test("reference batches may exceed the measured batch without changing its authorization", () => {
+  const { identity, report } = bulkReferenceFixture();
+  const proof = createRestoringProof(report, identity);
+  assert.equal(proof.version, "renderer-restoring-execution-proof-v2");
+  assert.equal(proof.referenceBatchSize, 100);
+  assert.equal(proof.identity.batchSize, 1);
+  assert.equal(proof.originalAtomicEdits, 4);
+  assert.equal(proof.executions.length, 3);
+  assert.equal(proof.referenceConcurrency.executors, 2);
+  assert.equal(validateRestoringProof(JSON.parse(JSON.stringify(proof)), identity), true);
+  assert.throws(() => validateRestoringProof(proof, { ...identity, batchSize: 100 }));
+});
+
+test("reference batching still bounds every delivery and retains every original receipt", () => {
+  for (const size of [0, -1, 1.5, null, "100", Number.MAX_SAFE_INTEGER + 1, 1]) {
+    const { identity, report } = bulkReferenceFixture();
+    report.referenceBatchSize = size;
+    assert.throws(() => createRestoringProof(report, identity));
+  }
+  for (const change of [
+    (proof) => {
+      proof.referenceBatchSize = 1;
+    },
+    (proof) => {
+      delete proof.referenceBatchSize;
+    },
+    (proof) => {
+      proof.executions[0].receipts.pop();
+    },
+    (proof) => {
+      proof.executions[0].atomicIds[1] = "b";
+    },
+    (proof) => {
+      proof.executions[0].round = "round-002";
+    },
+  ]) {
+    const { identity, report } = bulkReferenceFixture();
+    const proof = createRestoringProof(report, identity);
+    change(proof);
+    assert.throws(() => validateRestoringProof(proof, identity));
+  }
+});
 function fixture() {
   const initial = hash("initial"),
     final = hash("final");

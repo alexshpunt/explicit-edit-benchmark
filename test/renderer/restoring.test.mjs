@@ -192,7 +192,13 @@ PY`;
 await test("the real restoring entry point keeps two Pi lifetimes through six editing failures, canonical healing and later success", async (t) => {
   const { preparation, final, edits } = await prepareFixture();
   const reference = path.join(root, "reference");
-  const verified = await runRestoring(preparation, reference, { agents: 2, batchSize: 1 });
+  const verified = await runRestoring(preparation, reference, {
+    agents: 2,
+    batchSize: 1,
+    referenceBatchSize: 100,
+  });
+  assert.equal(verified.batchSize, 1);
+  assert.equal(verified.referenceBatchSize, 100);
   assert.equal(verified.status, "complete");
   assert.equal(verified.schedule[0].assignments.length, 1);
   assert.equal(verified.rounds.length, verified.totalRounds);
@@ -202,7 +208,10 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
     ),
   );
   const proofPath = path.join(reference, "verification.json");
-  assert.equal((await json(proofPath)).status, "pass");
+  const proof = await json(proofPath);
+  assert.equal(proof.status, "pass");
+  assert.equal(proof.referenceBatchSize, 100);
+  assert.equal(proof.identity.batchSize, 1);
   let displacing = false,
     commandOverride = null,
     inferenceHook = null;

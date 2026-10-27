@@ -180,25 +180,31 @@ variant must pass with its own proof; neither fixture proof replaces the require
 full-workload reference proof.
 
 Reuse an audited full preparation. Generate a separate, model-free proof with the
-same maximum occupancy, batch size and weights as the intended observation:
+same maximum occupancy, intended measured batch size and weights as the observation.
+`--reference-batch-size` controls scripted reference deliveries only. It defaults
+to `--batch-size` and can be larger to reduce reference dispatch overhead:
 
 ```sh
 node scripts/multi-agent.mjs verify-restoring PRIVATE_PREPARATION \
-  .tmp/restoring-proof --agents 2 --batch-size 1 \
-  --build-weight 2 --result-weight 4
+  .tmp/restoring-proof --agents 15 --batch-size 10 \
+  --reference-batch-size 100 --build-weight 2 --result-weight 4
 ```
 
-Maximum occupancy 2 yields 38 planned rounds for the full workload. Every planned
+The graph and maximum occupancy determine the planned rounds. Every planned
 round must pass its first reference check. A failed reference candidate is
 preserved without restoration, then verification stops as ineligible. Reference
 verification cannot use five corrections to manufacture a passing proof.
 
-An authorizing proof requires clean, committed source. It binds the exact commit,
-verifier, execution code, dependency lockfile, immutable workload and graph,
-every original atom and canonical endpoint, schedule and grading policy.
+An authorizing `renderer-restoring-execution-proof-v2` proof requires clean,
+committed source. It binds the exact commit, verifier, execution code, dependency
+lockfile, immutable workload and graph, every original atom and canonical endpoint,
+schedule, grading policy and intended measured batch size. The reference delivery
+size is recorded and validated separately. Larger reference batches leave the
+original atom inventory, round endpoints and grading unchanged; they do not change
+the measured agents' delivery size.
 Historical preparation proofs do not authorize this protocol. A changed commit,
-dirty source, different batch or changed weight requires a new matching proof.
-Dirty source is rejected before reference execution begins.
+dirty source, different measured batch or changed weight requires a new matching
+proof. Dirty source is rejected before reference execution begins.
 
 Keep native configuration private and outside the shared candidate. Use absolute
 paths for the approved runtime root and existing credential files:
@@ -224,7 +230,7 @@ Only after the proof and free gates match, and model calls are authorized:
 
 ```sh
 node scripts/multi-agent.mjs run-restoring PRIVATE_PREPARATION \
-  .tmp/restoring-observation --agents 2 --batch-size 1 \
+  .tmp/restoring-observation --agents 15 --batch-size 10 \
   --build-weight 2 --result-weight 4 \
   --config PRIVATE_NATIVE_CONFIG.json \
   --proof .tmp/restoring-proof/verification.json --allow-model-calls

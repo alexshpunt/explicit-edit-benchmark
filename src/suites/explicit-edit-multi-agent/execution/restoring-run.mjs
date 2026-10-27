@@ -53,6 +53,7 @@ export async function runRestoring(
     reference = false,
     allowModelCalls = false,
     batchSize = ATOMIC_DISPATCH_POLICY.defaultBatchSize,
+    referenceBatchSize,
     buildWeight = 2,
     resultWeight = 4,
     signal: externalSignal,
@@ -74,6 +75,15 @@ export async function runRestoring(
   assert.ok(onCase === undefined || typeof onCase === "function");
   const live = Boolean(configPath || createDriver),
     referenceRun = !live || reference;
+  assert.ok(
+    referenceRun || referenceBatchSize === undefined,
+    "Reference delivery sizing cannot change measured execution",
+  );
+  const deliveryBatchSize = referenceBatchSize === undefined ? batchSize : referenceBatchSize;
+  assert.ok(
+    Number.isSafeInteger(deliveryBatchSize) && deliveryBatchSize > 0,
+    "Invalid reference delivery size",
+  );
   assert.ok(
     referenceRun || proofPath,
     "Measured restoration requires a new matching execution proof",
@@ -141,6 +151,7 @@ export async function runRestoring(
         version: RESTORING_RUN_VERSION,
         benchmark: MULTI_AGENT_BENCHMARK,
         mode: referenceRun ? "reference" : "measured",
+        ...(referenceRun ? { referenceBatchSize: deliveryBatchSize } : {}),
         status: "running",
         model: config?.model ?? null,
         thinking: config?.thinking ?? null,
@@ -259,7 +270,7 @@ export async function runRestoring(
               const stream = await runAtomicStream(nodes, {
                 agents,
                 rotation,
-                batchSize,
+                batchSize: deliveryBatchSize,
                 signal,
                 onCase: onCase
                   ? (event) => onCase({ ...event, round: round.id, attempt })
@@ -320,7 +331,7 @@ export async function runRestoring(
                         signal: deliverySignal,
                         round: round.id,
                         attempt,
-                        batchSize,
+                        batchSize: deliveryBatchSize,
                         atomicId: members[0].id,
                         atomicIds,
                         diagnostics,

@@ -46,6 +46,51 @@ await test("delivery sizes must be positive integers before any preparation is r
   }
 });
 
+await test("restoring references accept a separate delivery size while retaining the measured batch", async () => {
+  for (const size of ["1", "50", "100"]) {
+    await assert.rejects(
+      multiAgentMain([
+        "verify-restoring",
+        "missing-preparation",
+        "missing-output",
+        "--agents=15",
+        "--batch-size=10",
+        `--reference-batch-size=${size}`,
+      ]),
+      (error) =>
+        error.code === "ENOENT" &&
+        error.path.endsWith(path.join("missing-preparation", "manifest.json")),
+    );
+  }
+});
+
+await test("reference delivery sizes must be positive safe integers before preparation is read", async () => {
+  for (const size of ["0", "-1", "1.5", "", "auto", "Infinity", "9007199254740992"]) {
+    await assert.rejects(
+      multiAgentMain([
+        "verify-restoring",
+        "missing-preparation",
+        "missing-output",
+        `--reference-batch-size=${size}`,
+      ]),
+      { code: "ERR_ASSERTION" },
+    );
+  }
+});
+
+await test("reference batching cannot be selected for measured or legacy execution", async () => {
+  for (const command of ["run-restoring", "verify", "run"]) {
+    await assert.rejects(
+      multiAgentMain([
+        command,
+        "missing-preparation",
+        "missing-output",
+        "--reference-batch-size=100",
+      ]),
+      { code: "ERR_PARSE_ARGS_UNKNOWN_OPTION" },
+    );
+  }
+});
 await test("restoring proof, config and model-call authorization are required before reading private inputs", async () => {
   for (const missing of ["--proof", "--config", "--allow-model-calls"]) {
     const flags = new Map([

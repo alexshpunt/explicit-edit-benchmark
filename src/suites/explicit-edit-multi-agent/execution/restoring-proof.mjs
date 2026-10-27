@@ -6,9 +6,10 @@ import { partitionAtomicQueues } from "./atomic-stream.mjs";
 import { roundScore } from "../grading/round-score.mjs";
 
 export const RESTORING_RUN_VERSION = "renderer-concurrent-restoring-run-v2";
-export const RESTORING_PROOF_VERSION = "renderer-restoring-execution-proof-v1";
+export const RESTORING_PROOF_VERSION = "renderer-restoring-execution-proof-v2";
 export const RESTORING_REFERENCE_POLICY = Object.freeze({
-  version: "independent-restoring-reference-v1",
+  version: "independent-restoring-reference-v2",
+  batching: "separate-reference-delivery-limit",
   planning: "one-private-planner-per-executor",
   publication: "atomic-per-file-edits",
   coordination: "participant-owned-per-file-locks",
@@ -159,7 +160,11 @@ function trace(execution) {
   return execution.receipts ?? native?.receipts ?? (native ? [native] : []);
 }
 
-function executionEvidence(executions, identity) {
+function executionEvidence(executions, identity, referenceBatchSize) {
+  assert.ok(
+    Number.isSafeInteger(referenceBatchSize) && referenceBatchSize > 0,
+    "Invalid reference delivery size",
+  );
   assert.ok(executions.length > 0, "Missing original reference executions");
   const ids = [],
     byRound = new Map(identity.plannedAtoms.map(({ round }) => [round, []]));
@@ -176,7 +181,7 @@ function executionEvidence(executions, identity) {
     );
     assert.ok(Array.isArray(execution.atomicIds) && execution.atomicIds.length > 0);
     assert.ok(
-      execution.atomicIds.length <= identity.batchSize,
+      execution.atomicIds.length <= referenceBatchSize,
       "Reference delivery exceeded the configured batch",
     );
     assert.ok(byRound.has(execution.round));
@@ -247,11 +252,14 @@ export function createRestoringProof(report, identity) {
   assert.equal(report.repairs, 0);
   assert.equal(report.deliveries, report.executions.length);
   validateRounds(report.rounds, identity);
+  const referenceBatchSize =
+    report.referenceBatchSize === undefined ? identity.batchSize : report.referenceBatchSize;
   const proof = {
     version: RESTORING_PROOF_VERSION,
     status: "pass",
     identity: structuredClone(identity),
     referenceExecution: RESTORING_REFERENCE_POLICY,
+    referenceBatchSize,
     initialCheck: structuredClone(report.initialCheck),
     final: report.final,
     agentsClosed: [...report.agentsClosed],
@@ -274,7 +282,7 @@ export function createRestoringProof(report, identity) {
       receipts: trace(execution).map(({ lifetime, events }) => ({ lifetime, events })),
     })),
     originalAtomicEdits: identity.totalAtoms,
-    referenceConcurrency: executionEvidence(report.executions, identity),
+    referenceConcurrency: executionEvidence(report.executions, identity, referenceBatchSize),
   };
   validateRestoringProof(proof, identity);
   return proof;
@@ -298,6 +306,9 @@ export function validateRestoringProof(proof, identity) {
   assert.deepEqual(proof.agentsClosed, Array(identity.agents).fill(true));
   validateRounds(proof.rounds, identity);
   assert.equal(proof.originalAtomicEdits, identity.totalAtoms);
-  assert.deepEqual(proof.referenceConcurrency, executionEvidence(proof.executions, identity));
+  assert.deepEqual(
+    proof.referenceConcurrency,
+    executionEvidence(proof.executions, identity, proof.referenceBatchSize),
+  );
   return true;
 }

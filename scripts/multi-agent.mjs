@@ -16,7 +16,7 @@ Separate from the existing 226-task benchmark and its Score.
   prepare NEW_OUTPUT [--from-coherent AUDITED_COHERENT_PREPARATION]
   verify PREPARATION NEW_OUTPUT [--agents auto|N] [--batch-size N]
   run PREPARATION NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls [--agents auto|N] [--batch-size N]
-  verify-restoring PREPARATION NEW_OUTPUT [--agents auto|N] [--batch-size N] [--build-weight W] [--result-weight W]
+  verify-restoring PREPARATION NEW_OUTPUT [--agents auto|N] [--batch-size N] [--reference-batch-size N] [--build-weight W] [--result-weight W]
   run-restoring PREPARATION NEW_OUTPUT --config PRIVATE_JSON --proof NEW_PROOF --allow-model-calls [--agents auto|N] [--batch-size N] [--build-weight W] [--result-weight W]
   export RUN_DIRECTORY NEW_RESULT_JSON
   validate RESULT_JSON
@@ -31,6 +31,11 @@ They keep the same participant processes after passes and six editing failures.
 verify-restoring writes a new proof only from clean, committed source. It never
 modifies historical preparation proofs. run-restoring requires that exact proof
 and a native persistent Baseline Pi 1.3.0 config. It has no delivery deadline.
+--batch-size binds the measured delivery policy. verify-restoring alone accepts
+--reference-batch-size for scripted deliveries; it defaults to --batch-size.
+For 15 agents delivering 10 edits, reference verification may batch 100 edits:
+  verify-restoring PREPARATION PROOF_OUTPUT --agents 15 --batch-size 10 --reference-batch-size 100
+  run-restoring PREPARATION RUN_OUTPUT --agents 15 --batch-size 10 --config PRIVATE_JSON --proof PROOF_OUTPUT/verification.json --allow-model-calls
 export creates a safe local result. Nothing uploads or publishes automatically.
 See docs/multi-agent.md for prerequisites, private config and result interpretation.
 `;
@@ -65,7 +70,10 @@ export async function multiAgentMain(args) {
       config: { type: "string" },
       "allow-model-calls": { type: "boolean", default: false },
     },
-    "verify-restoring": restoringOptions,
+    "verify-restoring": {
+      ...restoringOptions,
+      "reference-batch-size": { type: "string" },
+    },
     "run-restoring": {
       ...restoringOptions,
       config: { type: "string" },
@@ -133,6 +141,15 @@ export async function multiAgentMain(args) {
     batchSize === undefined || (Number.isSafeInteger(batchSize) && batchSize > 0),
     "--batch-size must be a positive integer",
   );
+  const referenceBatchSize =
+    values["reference-batch-size"] === undefined
+      ? undefined
+      : Number(values["reference-batch-size"]);
+  assert.ok(
+    referenceBatchSize === undefined ||
+      (Number.isSafeInteger(referenceBatchSize) && referenceBatchSize > 0),
+    "--reference-batch-size must be a positive integer",
+  );
   const weights = {};
   for (const [flag, field] of [
     ["build-weight", "buildWeight"],
@@ -163,6 +180,7 @@ export async function multiAgentMain(args) {
       ...(restoring
         ? {
             ...weights,
+            ...(command === "verify-restoring" ? { referenceBatchSize } : {}),
             proofPath: values.proof,
             allowModelCalls: values["allow-model-calls"] === true,
           }
