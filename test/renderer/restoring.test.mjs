@@ -9,6 +9,11 @@ import { runCoherent } from "../../src/suites/explicit-edit-multi-agent/executio
 import { runRestoring } from "../../src/suites/explicit-edit-multi-agent/execution/restoring-run.mjs";
 import { prepareConcurrent } from "../../src/suites/explicit-edit-multi-agent/tasks/prepare-concurrent.mjs";
 import { appendCoherentNamingTask } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-tasks.mjs";
+import {
+  scopedNamingSession,
+  applyScopedNamePlan,
+} from "../../src/suites/explicit-edit-multi-agent/cpp/scoped-names.mjs";
+import { coherentNamingPlans } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-naming-plans.mjs";
 import { prepareCoherentContract } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-grade.mjs";
 import { buildCoherentCandidate } from "../../src/suites/explicit-edit-multi-agent/grading/coherent-build.mjs";
 import { scoreRounds } from "../../src/suites/explicit-edit-multi-agent/grading/round-score.mjs";
@@ -24,12 +29,13 @@ assert.ok(root && process.env.RENDERER_PI_RUNTIME);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const json = async (file) => JSON.parse(await readFile(file, "utf8"));
 
-// The first type rename produces every later signature. Its singleton round
-// deliberately leaves one of the two real participants idle until restoration.
+// The first type rename produces every later signature. Its singleton attempts
+// rotate the assigned participant while the other real participant remains idle.
 async function prepareFixture() {
   await mkdir(root);
   const original = path.join(root, "original");
   await mkdir(path.join(original, "contracts"), { recursive: true });
+  await mkdir(path.join(original, "naming-plans"));
   const names = ["Alpha", "Beta", "Gamma", "Delta"];
   const source = `#include <fstream>
 #include <string>
@@ -49,7 +55,8 @@ int main(int argc, char** argv) {
 `;
   const tasks = [],
     edits = new Map(),
-    contractHashes = {};
+    contractHashes = {},
+    namingPlanHashes = {};
   let current = source;
   async function checkpoint(id) {
     const bytes = JSON.stringify(prepareCoherentContract({ "main.cpp": current })) + "\n";
@@ -57,18 +64,32 @@ int main(int argc, char** argv) {
     await writeFile(path.join(original, "contracts", `${id}.json`), bytes);
   }
   async function naming(category, mapping, selectors, changes) {
-    appendCoherentNamingTask(tasks, category, "main.cpp", [
-      {
+    const before = { "main.cpp": current };
+    const analysis = path.join(root, `naming-analysis-${tasks.length}`);
+    await mkdir(analysis);
+    const session = await scopedNamingSession(before, analysis);
+    let certification;
+    try {
+      certification = await session.atomicPlans({
         id: `fixture-${tasks.length}`,
         phase: "names",
         category,
         mapping,
         selectors,
-      },
-    ]);
+      });
+    } finally {
+      session.close();
+    }
+    const plans = coherentNamingPlans(before, [certification.plan], [], [certification]);
+    appendCoherentNamingTask(tasks, category, "main.cpp", [certification.operation]);
+    const id = tasks.at(-1).id;
+    const bytes = JSON.stringify(plans) + "\n";
+    namingPlanHashes[id] = digest(bytes);
+    await writeFile(path.join(original, "naming-plans", `${id}.json`), bytes);
     edits.set(JSON.stringify(mapping), changes);
-    for (const [before, after] of changes) current = current.replaceAll(before, after);
-    await checkpoint(tasks.at(-1).id);
+    for (const [old, renamed] of changes) current = current.replaceAll(old, renamed);
+    assert.deepEqual(applyScopedNamePlan(before, certification.plan), { "main.cpp": current });
+    await checkpoint(id);
   }
   await checkpoint("initial");
   await naming(
@@ -124,6 +145,7 @@ int main(int argc, char** argv) {
       tasks: tasks.length,
       tasksSha256: digest(taskBytes),
       contractHashes,
+      namingPlanHashes,
       pixels,
     }) + "\n",
   );
@@ -227,12 +249,31 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
   assert.equal(provider.errors.length, 0);
 
   const output = path.join(root, "measured");
+  const dispatchTrace = [];
+  const activity = (agent) => {
+    const text = readFileSync(path.join(output, `agent-${agent}-events.jsonl`), "utf8");
+    // Native writers may be active; inspect complete records here. The complete
+    // saved stream is parsed and checked again after all deliveries below.
+    const events = text
+      .split("\n")
+      .slice(0, -1)
+      .map((line) => JSON.parse(line));
+    return {
+      contexts: events.filter(
+        (event) => event.type === "baseline_observation" && event.event === "context",
+      ).length,
+      tools: events.filter(({ type }) => type === "tool_execution_start").length,
+    };
+  };
   const report = await runRestoring(preparation, output, {
     agents: 2,
     batchSize: 1,
     configPath,
     proofPath,
     allowModelCalls: true,
+    onCase(event) {
+      dispatchTrace.push({ ...event, activity: [activity(0), activity(1)] });
+    },
   });
   assert.equal(report.status, "complete");
   assert.deepEqual(report.agentsClosed, [true, true]);
@@ -307,24 +348,53 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
           receipt.lifetime === participant.lifetime && receipt.sessionId === participant.sessionId,
       ),
     );
-    assert.equal(
-      deliveries[0].restorationNotices.some(({ round }) => round === first.round),
-      agent !== report.executions[0].agent,
-    );
+    for (const restored of report.rounds) {
+      const roundIndex = report.rounds.indexOf(restored);
+      const next = deliveries.find(
+        (row) => report.rounds.findIndex(({ round }) => round === row.round) > roundIndex,
+      );
+      const carrying = deliveries.filter((row) =>
+        row.restorationNotices.some(({ round }) => round === restored.round),
+      );
+      assert.deepEqual(carrying, next ? [next] : []);
+      if (next)
+        assert.deepEqual(
+          next.restorationNotices.find(({ round }) => round === restored.round),
+          { round: restored.round, ...restored.restoration },
+        );
+    }
   }
-  const initiallyIdle = 1 - report.executions[0].agent;
-  assert.ok(
-    report.executions
-      .filter((row) => row.round === first.round)
-      .every(({ agent }) => agent !== initiallyIdle),
+  const firstBarriers = report.atomicBarriers.filter(({ round }) => round === first.round);
+  assert.equal(firstBarriers.length, 6);
+  for (const state of report.atomicBarriers) {
+    const deliveries = report.executions.filter(
+      (row) => row.round === state.round && row.attempt === state.attempt,
+    );
+    const trace = dispatchTrace.filter(
+      (row) => row.round === state.round && row.attempt === state.attempt,
+    );
+    assert.ok(trace.length > 0);
+    for (const [agent, queue] of state.queues.entries()) {
+      const assigned = deliveries.filter((row) => row.agent === agent);
+      assert.deepEqual(
+        assigned.flatMap((row) => (state.attempt === 1 ? row.atomicIds : row.repairIds)),
+        queue,
+      );
+      if (queue.length === 0) {
+        assert.equal(assigned.length, 0);
+        for (const observed of trace)
+          assert.deepEqual(observed.activity[agent], trace[0].activity[agent]);
+      }
+    }
+  }
+  assert.deepEqual(
+    firstBarriers.map(({ queues }) => {
+      assert.equal(queues.filter((queue) => queue.length).length, 1);
+      return queues.findIndex((queue) => queue.length);
+    }),
+    Array.from({ length: 6 }, (_, attempt) => (report.executions[0].agent + attempt) % 2),
   );
-  const firstIdleDelivery = report.executions.find(({ agent }) => agent === initiallyIdle);
-  assert.notEqual(firstIdleDelivery.round, first.round);
-  assert.ok(
-    firstIdleDelivery.restorationNotices.some(
-      ({ round, reason }) => round === first.round && reason === "editing-exhausted",
-    ),
-  );
+  assert.equal(provider.requests.length, report.executions.length * 2);
   assert.ok(
     report.executions
       .filter(({ deliveryKind }) => deliveryKind === "barrier-repair")

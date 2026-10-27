@@ -28,5 +28,6 @@ jobs:
           bwrap --ro-bind / / -- true
       - run: npm ci --registry=https://registry.npmjs.org
       - run: npm run check
+      - run: npm run check:pins
         env:
           GITHUB_TOKEN: ${{ github.token }}

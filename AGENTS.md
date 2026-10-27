@@ -25,9 +25,14 @@ Do nothing on your own initiative: no run, no commit, no publication until the u
 full observation spends real money, so confirm the suite, scope and publication before starting.
 Use its documented smoke gate; not every suite permits partial scored runs.
 
-Before you commit, run the check the README describes. It is free, it is what CI runs, and it catches
+Before you commit, run `npm run check` as described in the README. It checks formatting, lint,
+types, unit tests and integration tests without paid model calls or GitHub API access. It catches
 a missing seeded file, an adapter name that does not exist, and an identity literal written outside
 its module.
+
+Online trusted-commit verification (`npm run check:pins`) is a separate CI step. Do not require or
+run it for local development, local renderer runs or their preparation. GitHub API quotas must not
+block local checks, commits or benchmark execution.
 
 ## Renderer work
 

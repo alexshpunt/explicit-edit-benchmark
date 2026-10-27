@@ -15,7 +15,7 @@
     "bench:report": "python3 scripts/analyze-oracle-recovery.py",
     "test": "node --import tsx --test test/unit/*.test.mjs",
     "test:integration": "node --import tsx --test test/integration/*.test.mjs",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run check:pins && npm test && npm run test:integration",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run test:integration",
     "check:pins": "node scripts/check-workflow-pins.mjs",
     "release:official": "node scripts/release-official-workflow.mjs",
     "lint": "oxlint --deny-warnings .",

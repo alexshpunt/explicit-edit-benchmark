@@ -334,7 +334,9 @@ The badge is a small JSON file served by the Dataset, so [shields.io](https://sh
 npm run check
 ```
 
-It runs formatting, linting, type checks, the unit and integration tests, and one deterministic sandbox trial. No paid model calls are involved, so it is a cheap way to check a clone or a change before running anything real.
+It runs formatting, linting, type checks, the unit and integration tests, and one deterministic sandbox trial. It needs no paid model calls or GitHub API access.
+
+CI separately runs `npm run check:pins` to verify trusted commit revisions on GitHub. That online check is not required for local development, renderer preparation or benchmark runs.
 
 ## Where to read more
 
