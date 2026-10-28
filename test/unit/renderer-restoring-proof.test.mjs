@@ -3,7 +3,10 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import { treeIdentity } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
 import * as restoringProof from "../../src/suites/explicit-edit-multi-agent/execution/restoring-proof.mjs";
-import { RESTORING_MULTI_AGENT_POLICY } from "../../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
+import {
+  RESTORING_MULTI_AGENT_POLICY,
+  RESTORING_FRESH_AGENT_POLICY,
+} from "../../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
 
 const {
   RESTORING_RUN_VERSION,
@@ -323,6 +326,41 @@ test("a validated retained workload authorizes a fresh execution profile without
   assert.equal(validateRestoringTaskProof(proof, current).kind, "retained-task-feasibility");
 });
 
+test("a first-pass historical reference remains workload evidence for the two-attempt policy", () => {
+  const { report, identity } = fixture();
+  Object.assign(identity.policy, { version: "renderer-restoring-policy-v2", oracleRecoveries: 5 });
+  const proof = createRestoringProof(report, identity);
+  const current = profileIdentity(identity);
+  Object.assign(current.policy, { version: "renderer-restoring-policy-v3", oracleRecoveries: 1 });
+  assert.equal(validateRestoringProof(proof, identity), true);
+  assert.equal(validateRestoringTaskProof(proof, current).kind, "retained-task-feasibility");
+  assert.throws(() => validateRestoringProof(proof, current), { code: "ERR_ASSERTION" });
+  assert.equal(proof.identity.policy.version, "renderer-restoring-policy-v2");
+  assert.equal(proof.identity.policy.oracleRecoveries, 5);
+});
+
+test("task policy migration cannot turn new feasibility evidence into a historical execution policy", () => {
+  const { report, identity } = fixture();
+  const proof = createRestoringProof(report, identity);
+  const current = profileIdentity(identity);
+  Object.assign(current.policy, { version: "renderer-restoring-policy-v2", oracleRecoveries: 5 });
+  assert.throws(() => validateRestoringTaskProof(proof, current), { code: "ERR_ASSERTION" });
+});
+
+test("task feasibility refuses unknown or contradictory policies even when both identities agree", () => {
+  for (const [version, oracleRecoveries] of [
+    ["renderer-restoring-policy-v2", 1],
+    ["renderer-restoring-policy-v3", 5],
+    ["renderer-restoring-policy-v4", 1],
+  ]) {
+    const { report, identity } = fixture();
+    const proof = createRestoringProof(report, identity);
+    Object.assign(proof.identity.policy, { version, oracleRecoveries });
+    const current = profileIdentity(proof.identity);
+    assert.throws(() => validateRestoringTaskProof(proof, current), { code: "ERR_ASSERTION" });
+  }
+});
+
 test("retained task authorization binds all workload and scoring fields", () => {
   const { report, identity } = fixture();
   const proof = createRestoringProof(report, identity);
@@ -495,6 +533,7 @@ test("execution profiles bind a worker cap independently of the task graph team"
   assert.equal(Object.hasOwn(legacy, "maxConcurrentAgents"), false);
   const fresh = restoringRunIdentity(loaded, source, {
     ...options,
+    policy: { ...RESTORING_FRESH_AGENT_POLICY, buildWeight: 2, resultWeight: 4 },
     agentLifecycle: "per-delivery",
     maxConcurrentAgents: 30,
   });

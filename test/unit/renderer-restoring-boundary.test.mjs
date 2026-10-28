@@ -37,7 +37,7 @@ const interval = {
   expectedTree: { "main.cpp": "int canonical;\n" },
 };
 
-test("six ordinary editing failures keep one candidate, retain first and final evidence, restore and allow later work", async (t) => {
+test("two ordinary editing failures keep one candidate, retain first and final evidence, restore and allow later work", async (t) => {
   const options = await fixture(t);
   const before = await stat(options.workspace);
   const mounted = await open(options.workspace, "r");
@@ -54,10 +54,10 @@ test("six ordinary editing failures keep one candidate, retain first and final e
     },
     measureCandidate: async () => measured(0),
   });
-  assert.deepEqual(seen, ["int initial;\n", ...[1, 2, 3, 4, 5].map((n) => `int wrong_${n};\n`)]);
-  assert.equal(first.attempts.length, 6);
+  assert.deepEqual(seen, ["int initial;\n", "int wrong_1;\n"]);
+  assert.equal(first.attempts.length, 2);
   assert.equal(first.firstAttempt, 1);
-  assert.equal(first.finalAttempt, 6);
+  assert.equal(first.finalAttempt, 2);
   assert.equal(first.restoration.status, "pass");
   assert.equal((await stat(options.workspace)).ino, before.ino);
   assert.equal(await readFile(`/proc/self/fd/${mounted.fd}/main.cpp`, "utf8"), "int canonical;\n");
@@ -71,10 +71,10 @@ test("six ordinary editing failures keep one candidate, retain first and final e
   );
   assert.equal(
     await readFile(
-      path.join(options.output, "checks/round-001-attempt-6/candidate/source/main.cpp"),
+      path.join(options.output, "checks/round-001-attempt-2/candidate/source/main.cpp"),
       "utf8",
     ),
-    "int wrong_6;\n",
+    "int wrong_2;\n",
   );
   assert.deepEqual(
     options.notices.map((entries) => entries.length),
@@ -101,6 +101,51 @@ test("six ordinary editing failures keep one candidate, retain first and final e
     [1, 2],
   );
 });
+
+test("a failed correction retains the final candidate rather than the better initial attempt", async (t) => {
+  const options = await fixture(t);
+  const result = await runRestoringRound({
+    ...options,
+    round: "round-001",
+    interval: { ...interval, nodes: [{ id: "first" }, { id: "second" }] },
+    executeAttempt: async ({ attempt }) =>
+      writeFile(path.join(options.workspace, "main.cpp"), `int candidate_${attempt};\n`),
+    measureCandidate: async (_, { attempt }) => ({
+      ...measured(attempt === 1 ? 1 : 0),
+      totalAtoms: 2,
+    }),
+  });
+  assert.deepEqual(
+    result.attempts.map(({ passedAtoms }) => passedAtoms),
+    [1, 0],
+  );
+  assert.equal(result.finalAttempt, 2);
+  assert.equal(result.attempts.at(-1).score, 0);
+  assert.equal(result.restoration.reason, "editing-exhausted");
+  await assert.rejects(stat(path.join(options.output, "checks/round-001-attempt-3")), {
+    code: "ENOENT",
+  });
+});
+
+for (const maxAttempts of [0, 3, 6, 1.5, null])
+  test(`an unsupported attempt budget ${maxAttempts} rejects before editing`, async (t) => {
+    const options = await fixture(t);
+    let deliveries = 0;
+    await assert.rejects(
+      runRestoringRound({
+        ...options,
+        round: "round-001",
+        interval,
+        maxAttempts,
+        executeAttempt: async () => {
+          deliveries++;
+        },
+        measureCandidate: async () => measured(0),
+      }),
+      { code: "ERR_ASSERTION" },
+    );
+    assert.equal(deliveries, 0);
+  });
 
 test("a failed first-check reference stops without treating one failure as editing exhaustion", async (t) => {
   const options = await fixture(t);

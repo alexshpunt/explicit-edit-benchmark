@@ -4,6 +4,7 @@ import { treeIdentity } from "../generation/generator.mjs";
 import { referenceConcurrency } from "../reference/execution-proof.mjs";
 import { partitionAtomicQueues } from "./atomic-stream.mjs";
 import { roundScore } from "../grading/round-score.mjs";
+import { RESTORING_MULTI_AGENT_POLICY, validateRestoringPolicy } from "../restoring-results.mjs";
 
 export const RESTORING_RUN_VERSION = "renderer-concurrent-restoring-run-v2";
 export const RESTORING_PROOF_VERSION = "renderer-restoring-execution-proof-v2";
@@ -108,6 +109,7 @@ function participantLimit(identity) {
 }
 
 function validateIdentity(identity) {
+  validateRestoringPolicy(identity.policy, identity.agentLifecycle);
   assert.equal(identity.sourceClean, true, "Restoring proof requires clean committed source");
   assert.match(identity.sourceCommit, /^[a-f0-9]{40}$/);
   for (const key of [
@@ -357,9 +359,23 @@ export function validateRestoringTaskProof(proof, identity) {
     assert.notEqual(proof.identity[key], undefined, "Missing retained task scope");
     assert.deepEqual(identity[key], proof.identity[key], "Retained task workload differs");
   }
+  if (identity.policy.version !== proof.identity.policy.version) {
+    assert.equal(
+      identity.policy.version,
+      RESTORING_MULTI_AGENT_POLICY.version,
+      "Unsupported task policy transition",
+    );
+    assert.equal(
+      proof.identity.policy.version,
+      "renderer-restoring-policy-v2",
+      "Unsupported retained task policy",
+    );
+  }
   const gradingPolicy = (policy) =>
     Object.fromEntries(
-      Object.entries(policy).filter(([key]) => !["participants", "idle"].includes(key)),
+      Object.entries(policy).filter(
+        ([key]) => !["participants", "idle", "version", "oracleRecoveries"].includes(key),
+      ),
     );
   assert.deepEqual(
     gradingPolicy(identity.policy),

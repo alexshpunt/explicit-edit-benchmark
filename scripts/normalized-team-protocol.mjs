@@ -14,7 +14,6 @@ import {
 
 import {
   RESTORING_MULTI_AGENT_PROTOCOL,
-  RESTORING_MULTI_AGENT_POLICY,
   validateRestoringMultiAgentResult,
 } from "../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
 const statuses = new Set([
@@ -57,7 +56,7 @@ function validateRestoringSuite(suite, contract, policy) {
   for (const field of ["agents", "graphWidth", "batchSize"])
     assert.ok(Number.isSafeInteger(suite[field]) && suite[field] > 0);
   assert.deepEqual(policy, {
-    oracleRecoveries: RESTORING_MULTI_AGENT_POLICY.oracleRecoveries,
+    oracleRecoveries: suite.policy.oracleRecoveries,
     retryFailures: 0,
     concurrency: suite.agents,
     timeoutMs: null,
@@ -146,7 +145,7 @@ function validateRestoringTables(suite, profiles, trials, rounds) {
       for (const row of participantRows) {
         assert.ok(row.agent < suite.agents);
         const attempt = row.barrierAttempt + 1;
-        assert.ok(attempt >= previous && attempt <= 6);
+        assert.ok(attempt >= previous && attempt <= suite.policy.oracleRecoveries + 1);
         previous = attempt;
         attempts.add(attempt);
         if (measured) assert.ok(attempt <= measured.attempts && !failedNativeReceipt(row));

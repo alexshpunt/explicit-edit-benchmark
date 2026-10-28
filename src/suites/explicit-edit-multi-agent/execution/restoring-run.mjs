@@ -6,6 +6,7 @@ import { MULTI_AGENT_BENCHMARK } from "../results.mjs";
 import {
   RESTORING_MULTI_AGENT_PROTOCOL,
   RESTORING_MULTI_AGENT_POLICY,
+  RESTORING_MULTI_AGENT_MAX_ATTEMPTS,
   RESTORING_FRESH_AGENT_POLICY,
 } from "../restoring-results.mjs";
 import { prepareBarrierSymbolMap } from "../grading/barrier-symbol-map.mjs";
@@ -18,7 +19,8 @@ import {
   concurrentExecutor,
 } from "../reference/concurrent-executor.mjs";
 import { ATOMIC_DISPATCH_POLICY, runAtomicStream } from "./atomic-stream.mjs";
-import { startBaseline, finalizedUsage } from "./pi-baseline.mjs";
+import { startPiParticipant, finalizedUsage } from "./pi-baseline.mjs";
+import { resolvePiParticipantProfile } from "./pi-profile.mjs";
 import { createDeliveryPool } from "./delivery-pool.mjs";
 import { restoringAgentProfile } from "./agent-profile.mjs";
 import {
@@ -160,20 +162,20 @@ export async function runRestoring(
         else validateRestoringProof(proof, identity);
       }
       let config,
+        participantProfile,
         runtime = null;
       if (configPath) {
         config = profile.baseline;
-        const installed = await json(
-          path.join(config.runtime, "node_modules/@earendil-works/pi-coding-agent/package.json"),
-        );
-        assert.equal(
-          installed.version,
-          "1.3.0",
-          "Restoring Baseline requires the approved persistent runtime",
-        );
+        participantProfile = await resolvePiParticipantProfile(config);
+        if (participantProfile.baseline)
+          assert.equal(
+            participantProfile.version,
+            "1.3.0",
+            "Restoring Baseline requires the approved persistent runtime",
+          );
         runtime = {
           agent: "pi",
-          version: installed.version,
+          version: participantProfile.version,
           platform: process.platform,
           architecture: process.arch,
         };
@@ -190,7 +192,7 @@ export async function runRestoring(
         status: "running",
         model: config?.model ?? null,
         thinking: config?.thinking ?? null,
-        harness: config ? "baseline-agent" : null,
+        harness: participantProfile?.harness ?? null,
         runtime,
         schedule,
         rounds: [],
@@ -247,7 +249,7 @@ export async function runRestoring(
             const state = path.join(output, `agent-${session}`);
             return createDriver
               ? createDriver(workspace, state, agent)
-              : startBaseline(workspace, state, config, {
+              : startPiParticipant(workspace, state, config, {
                   signal,
                   eventsFile: path.join(output, `agent-${session}-events.jsonl`),
                   enforceProcessBoundary: true,
@@ -266,7 +268,7 @@ export async function runRestoring(
           const driver = createDriver
             ? await createDriver(workspace, state, agent)
             : config
-              ? await startBaseline(workspace, state, config, {
+              ? await startPiParticipant(workspace, state, config, {
                   signal,
                   eventsFile: path.join(output, `agent-${agent}-events.jsonl`),
                   enforceProcessBoundary: true,
@@ -309,12 +311,12 @@ export async function runRestoring(
             notices,
             priorBoundary: boundary,
             signal,
-            maxAttempts: referenceRun ? 1 : 6,
+            maxAttempts: referenceRun ? 1 : RESTORING_MULTI_AGENT_MAX_ATTEMPTS,
             buildWeight,
             resultWeight,
             executeAttempt: async ({ attempt }) => {
               log(
-                `EDIT ${round.id}: maximum ${drivers.length} ${profile.agentLifecycle} agents, attempt ${attempt}/${referenceRun ? 1 : 6}`,
+                `EDIT ${round.id}: maximum ${drivers.length} ${profile.agentLifecycle} agents, attempt ${attempt}/${referenceRun ? 1 : RESTORING_MULTI_AGENT_MAX_ATTEMPTS}`,
               );
               const repair = attempt > 1;
               const repairId = (id) => `repair-${round.id}-attempt-${attempt}-${id}`;
@@ -455,7 +457,10 @@ export async function runRestoring(
                 JSON.stringify(measurement.credit) + "\n",
                 { flag: "wx", mode: 0o600 },
               );
-              if (!passed(outcome) && outcome.attempt < (referenceRun ? 1 : 6))
+              if (
+                !passed(outcome) &&
+                outcome.attempt < (referenceRun ? 1 : RESTORING_MULTI_AGENT_MAX_ATTEMPTS)
+              )
                 corrections = barrierRepairNodes({
                   category: measurement.category,
                   diagnostics: measurement.diagnostics,

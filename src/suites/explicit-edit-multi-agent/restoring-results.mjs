@@ -6,7 +6,7 @@ import { ROUND_SCORE_POLICY, roundScore, scoreRounds } from "./grading/round-sco
 export const RESTORING_MULTI_AGENT_PROTOCOL = "shared-project-restoring-v2";
 export const RESTORING_MULTI_AGENT_VERSION = "2";
 export const RESTORING_MULTI_AGENT_RESULT_VERSION = "renderer-multi-agent-result-v2";
-export const RESTORING_MULTI_AGENT_POLICY = Object.freeze({
+const LEGACY_RESTORING_MULTI_AGENT_POLICY = Object.freeze({
   version: "renderer-restoring-policy-v2",
   trialTimeoutMs: null,
   attemptTimeoutMs: null,
@@ -22,6 +22,13 @@ export const RESTORING_MULTI_AGENT_POLICY = Object.freeze({
   restoration: "canonical-end-current-round-after-pass-or-exhaustion",
   idle: "queue-notices-until-next-assignment-no-inference",
 });
+
+export const RESTORING_MULTI_AGENT_POLICY = Object.freeze({
+  ...LEGACY_RESTORING_MULTI_AGENT_POLICY,
+  version: "renderer-restoring-policy-v3",
+  oracleRecoveries: 1,
+});
+export const RESTORING_MULTI_AGENT_MAX_ATTEMPTS = RESTORING_MULTI_AGENT_POLICY.oracleRecoveries + 1;
 
 export const RESTORING_FRESH_AGENT_POLICY = Object.freeze({
   ...RESTORING_MULTI_AGENT_POLICY,
@@ -101,9 +108,19 @@ function lifecycleConfiguration(value) {
       .map((key) => [key, value[key]]),
   );
 }
-function policy(value, agentLifecycle = "persistent") {
+export function validateRestoringPolicy(value, agentLifecycle = "persistent") {
+  const base =
+    value?.version === LEGACY_RESTORING_MULTI_AGENT_POLICY.version
+      ? LEGACY_RESTORING_MULTI_AGENT_POLICY
+      : RESTORING_MULTI_AGENT_POLICY;
   const expected =
-    agentLifecycle === "per-delivery" ? RESTORING_FRESH_AGENT_POLICY : RESTORING_MULTI_AGENT_POLICY;
+    agentLifecycle === "per-delivery"
+      ? {
+          ...base,
+          participants: RESTORING_FRESH_AGENT_POLICY.participants,
+          idle: RESTORING_FRESH_AGENT_POLICY.idle,
+        }
+      : base;
   keys(value, [...Object.keys(expected), "buildWeight", "resultWeight"]);
   assert.deepEqual(
     Object.fromEntries(Object.keys(expected).map((key) => [key, value[key]])),
@@ -214,7 +231,8 @@ export function validateRestoringMultiAgentResult(result) {
   for (const [field, value] of Object.entries(result.identity))
     if (!(field === "final" && value === null && result.status !== "complete")) digest(value);
   configuration(result.configuration);
-  policy(result.policy, result.configuration.agentLifecycle);
+  validateRestoringPolicy(result.policy, result.configuration.agentLifecycle);
+  const maxAttempts = result.policy.oracleRecoveries + 1;
   if (result.mode === "reference")
     assert.notEqual(result.configuration.agentLifecycle, "per-delivery");
   keys(result.progress, [
@@ -241,7 +259,7 @@ export function validateRestoringMultiAgentResult(result) {
     keys(round, ["round", "attempts", "first", "final", "restoration"]);
     assert.equal(round.round, result.plannedAtoms[index].round, "Observed rounds are not a prefix");
     integer(round.attempts, 1);
-    assert.ok(round.attempts <= RESTORING_MULTI_AGENT_POLICY.oracleRecoveries + 1);
+    assert.ok(round.attempts <= maxAttempts);
     if (result.mode === "reference") assert.equal(round.attempts, 1);
     for (const field of ["first", "final"]) {
       const recomputed = outcome(round[field], result.policy);
@@ -251,7 +269,7 @@ export function validateRestoringMultiAgentResult(result) {
     if (round.attempts === 1) assert.deepEqual(round.first, round.final);
     else assert.ok(!passed(round.first), "Correction followed a successful first attempt");
     if (!passed(round.final))
-      assert.equal(round.attempts, 6, "Editing exhaustion lacks five corrections");
+      assert.equal(round.attempts, maxAttempts, "Editing exhaustion lacks required corrections");
     if (result.mode === "reference") assert.ok(passed(round.final), "Reference endpoint failed");
     keys(round.restoration, ["status", "identity"]);
     assert.equal(round.restoration.status, "pass");
@@ -316,6 +334,8 @@ export function restoringMultiAgentResult(raw) {
       ["agent", "version", "platform", "architecture"].map((key) => [key, raw.runtime[key]]),
     );
   configuration(config);
+  const selectedPolicy = validateRestoringPolicy(raw.policy, config.agentLifecycle);
+  const maxAttempts = selectedPolicy.oracleRecoveries + 1;
   const poolSize =
     config.agentLifecycle === "per-delivery"
       ? config.maxConcurrentAgents
@@ -376,8 +396,8 @@ export function restoringMultiAgentResult(raw) {
     const position = raw.schedule.findIndex((item) => item.id === delivery.round);
     assert.ok(position >= 0 && position <= rounds.length, "Delivery exceeded current round");
     integer(delivery.attempt, 1);
-    assert.ok(delivery.attempt <= 6);
-    const order = position * 6 + delivery.attempt;
+    assert.ok(delivery.attempt <= maxAttempts);
+    const order = position * maxAttempts + delivery.attempt;
     assert.ok(order >= previous, "Delivery moved to an earlier attempt");
     previous = order;
     integer(delivery.agent);
@@ -461,7 +481,7 @@ export function restoringMultiAgentResult(raw) {
     status: raw.status,
     identity,
     configuration: config,
-    policy: policy(raw.policy, config.agentLifecycle),
+    policy: selectedPolicy,
     plannedAtoms: raw.plannedAtoms.map((item) => ({ ...item })),
     rounds,
     progress: {

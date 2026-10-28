@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { treeIdentity } from "../generation/generator.mjs";
 import { roundScore } from "../grading/round-score.mjs";
+import { RESTORING_MULTI_AGENT_MAX_ATTEMPTS } from "../restoring-results.mjs";
 import { restoreCanonicalSource } from "./canonical-restore.mjs";
 import { captureCandidate, assertCandidateUnchanged } from "./candidate-evidence.mjs";
 
@@ -22,12 +23,14 @@ export async function runRestoringRound({
   measureCandidate,
   onAttempt,
   signal,
-  maxAttempts = 6,
+  maxAttempts = RESTORING_MULTI_AGENT_MAX_ATTEMPTS,
   buildWeight = 2,
   resultWeight = 4,
 }) {
   assert.ok(
-    Number.isSafeInteger(maxAttempts) && maxAttempts >= 1 && maxAttempts <= 6,
+    Number.isSafeInteger(maxAttempts) &&
+      maxAttempts >= 1 &&
+      maxAttempts <= RESTORING_MULTI_AGENT_MAX_ATTEMPTS,
     "Invalid restoration attempt budget",
   );
   roundScore(
@@ -91,7 +94,7 @@ export async function runRestoringRound({
     final.buildPassed &&
     final.resultMatched &&
     final.integrityPassed;
-  if (!successful && attempts.length !== 6)
+  if (!successful && attempts.length !== RESTORING_MULTI_AGENT_MAX_ATTEMPTS)
     throw Object.assign(new Error("Reference check failed before editing exhaustion"), {
       category: "infrastructure",
       code: "RESTORING_ATTEMPTS_INCOMPLETE",

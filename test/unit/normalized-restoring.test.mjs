@@ -16,10 +16,31 @@ import {
   MULTI_AGENT_BENCHMARK,
   MULTI_AGENT_PROTOCOL,
 } from "../../src/suites/explicit-edit-multi-agent/results.mjs";
-import { RESTORING_MULTI_AGENT_PROTOCOL } from "../../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
+import {
+  RESTORING_MULTI_AGENT_PROTOCOL,
+  RESTORING_MULTI_AGENT_POLICY,
+} from "../../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
 
 const profile = { profileId: "custom", modelId: "example/model", harnessId: "custom" };
 const sha = "a".repeat(64);
+
+function oneCorrectionFixture(report = restoringFixture()) {
+  Object.assign(report.policy, RESTORING_MULTI_AGENT_POLICY);
+  const first = report.rounds[0];
+  first.attempts = [
+    { ...first.attempts[0], passedAtoms: 2 },
+    { ...first.attempts.at(-1), attempt: 2 },
+  ];
+  first.finalAttempt = 2;
+  report.executions = report.executions.filter(
+    ({ round, attempt }) => round !== first.round || attempt <= 2,
+  );
+  report.deliveries = report.executions.length;
+  report.repairs = report.executions.filter(
+    ({ deliveryKind }) => deliveryKind === "barrier-repair",
+  ).length;
+  return report;
+}
 async function rawRun(t, changed = (value) => value) {
   const root = await tempDirectory("restoring-normalized-");
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -63,7 +84,7 @@ async function rawRun(t, changed = (value) => value) {
       contract: report.protocol,
       suite,
       harnesses: { custom: adapter },
-      oracleRecoveries: 5,
+      oracleRecoveries: report.policy.oracleRecoveries,
       retryFailures: 0,
       concurrency: report.agents,
       timeoutMs: null,
@@ -106,6 +127,136 @@ test("restoring normalization continues after exhausted rounds and keeps indepen
     rounds.reduce((sum, item) => sum + (item.modelRoundCount ?? 0), 0),
     8,
   );
+});
+
+test("two-attempt normalization retains a better first candidate and later restored-round work", () => {
+  const report = oneCorrectionFixture();
+  assert.equal(report.policy.version, "renderer-restoring-policy-v3");
+  assert.equal(report.policy.oracleRecoveries, 1);
+  const { trials, rounds } = normalizeTeamReport(report, profile, sha);
+  assert.deepEqual(
+    trials.map(({ firstScore }) => firstScore),
+    [12.5, 100],
+  );
+  assert.deepEqual(
+    trials.map(({ finalScore }) => finalScore),
+    [6.25, 100],
+  );
+  assert.deepEqual(
+    trials.map(({ finalExactPassed }) => finalExactPassed),
+    [false, true],
+  );
+  assert.equal(rounds.length, 4);
+  assert.equal(Math.max(...rounds.map(({ barrierAttempt }) => barrierAttempt)), 1);
+  assert.equal(rounds.filter(({ deliveryKind }) => deliveryKind === "barrier-repair").length, 1);
+});
+
+test("schema four exports and validates the two-attempt policy without rewriting historical fixtures", async (t) => {
+  const { raw, output } = await rawRun(t, oneCorrectionFixture);
+  const manifest = await exportNormalizedRun(raw, output);
+  assert.equal(manifest.schemaVersion, 4);
+  assert.equal(manifest.policy.oracleRecoveries, 1);
+  assert.equal(manifest.suite.policy.version, "renderer-restoring-policy-v3");
+  const result = manifest.suite.observations[0].result;
+  assert.equal(result.rounds[0].attempts, 2);
+  assert.equal(result.score.first.score, 56.25);
+  assert.equal(result.score.final.score, 53.125);
+  assert.deepEqual(await validateNormalizedRun(output), manifest);
+  const legacy = restoringFixture();
+  assert.equal(legacy.policy.version, "renderer-restoring-policy-v2");
+  assert.equal(legacy.policy.oracleRecoveries, 5);
+  assert.equal(legacy.rounds[0].attempts.length, 6);
+});
+
+for (const { name, mutate } of [
+  {
+    name: "a third attempt",
+    mutate(report) {
+      const first = report.rounds[0];
+      first.attempts.push({ ...first.attempts.at(-1), attempt: 3 });
+      first.finalAttempt = 3;
+      const repair = report.executions.find(
+        ({ deliveryKind }) => deliveryKind === "barrier-repair",
+      );
+      report.executions.splice(report.executions.length - 1, 0, { ...repair, attempt: 3 });
+      report.deliveries++;
+      report.repairs++;
+    },
+  },
+  {
+    name: "five corrections under the new policy identity",
+    mutate(report) {
+      report.policy.oracleRecoveries = 5;
+    },
+  },
+  {
+    name: "one correction under the historical policy identity",
+    mutate(report) {
+      report.policy.version = "renderer-restoring-policy-v2";
+    },
+  },
+  {
+    name: "exhaustion before the one correction",
+    mutate(report) {
+      const first = report.rounds[0];
+      first.attempts.pop();
+      first.finalAttempt = 1;
+      report.executions = report.executions.filter(({ deliveryKind }) => !deliveryKind);
+      report.deliveries = report.executions.length;
+      report.repairs = 0;
+    },
+  },
+]) {
+  test(`two-attempt normalization rejects ${name}`, () => {
+    const report = oneCorrectionFixture();
+    mutate(report);
+    assert.throws(() => normalizeTeamReport(report, profile, sha));
+  });
+}
+
+test("schema four rejects a manifest correction budget that contradicts its validated new policy", async (t) => {
+  const { raw, output } = await rawRun(t, oneCorrectionFixture);
+  await exportNormalizedRun(raw, output);
+  const file = path.join(output, "manifest.json");
+  const manifest = JSON.parse(await readFile(file, "utf8"));
+  manifest.policy.oracleRecoveries = 5;
+  await writeFile(file, JSON.stringify(manifest));
+  await assert.rejects(validateNormalizedRun(output));
+});
+
+test("two-attempt normalization preserves the integrity veto when the corrected edit builds and renders", () => {
+  const report = oneCorrectionFixture();
+  Object.assign(report.rounds[0].attempts.at(-1), {
+    buildPassed: true,
+    resultMatched: true,
+    integrityPassed: false,
+  });
+  const { trials } = normalizeTeamReport(report, profile, sha);
+  assert.deepEqual(
+    trials.map(({ firstScore }) => firstScore),
+    [12.5, 100],
+  );
+  assert.deepEqual(
+    trials.map(({ finalScore }) => finalScore),
+    [0, 100],
+  );
+});
+
+test("interrupted two-attempt results retain zero credit for every unobserved planned round", async (t) => {
+  const { raw, output } = await rawRun(t, (report) => {
+    oneCorrectionFixture(report);
+    report.status = "driver_exit";
+    report.terminal = { id: "round-002", category: "driver_exit" };
+    report.rounds.pop();
+    report.executions.pop();
+    report.deliveries--;
+  });
+  const manifest = await exportNormalizedRun(raw, output);
+  const result = manifest.suite.observations[0].result;
+  assert.equal(result.score.first.score, 6.25);
+  assert.equal(result.score.final.score, 3.125);
+  assert.equal(result.progress.totalRounds, 2);
+  await validateNormalizedRun(output);
 });
 
 test("schema four exports, validates and reports equal-round score without task weighting", async (t) => {

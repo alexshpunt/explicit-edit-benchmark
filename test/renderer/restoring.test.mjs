@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, readlinkSync, renameSync } from "node:fs";
+import { appendFileSync, readFileSync, readlinkSync, renameSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -189,7 +189,7 @@ with open('/workspace/.fixture-lock','a') as lock:
 PY`;
 }
 
-await test("the real restoring entry point keeps two Pi lifetimes through six editing failures, canonical healing and later success", async (t) => {
+await test("the real restoring entry point keeps two Pi lifetimes through two editing failures, canonical healing and later success", async (t) => {
   const { preparation, final, edits } = await prepareFixture();
   const reference = path.join(root, "reference");
   const verified = await runRestoring(preparation, reference, {
@@ -212,6 +212,46 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
   assert.equal(proof.status, "pass");
   assert.equal(proof.referenceBatchSize, 100);
   assert.equal(proof.identity.batchSize, 1);
+  await t.test(
+    "a failed first reference check retains unhealed source and authorizes no proof",
+    async () => {
+      const destination = path.join(root, "reference-first-failed");
+      let corrupted = false;
+      const rejected = await runRestoring(preparation, destination, {
+        agents: 2,
+        batchSize: 1,
+        referenceBatchSize: 100,
+        onCase({ event }) {
+          if (event !== "case-end" || corrupted) return;
+          appendFileSync(
+            path.join(destination, "workspace/main.cpp"),
+            "\n// reference-fixture-corruption\n",
+          );
+          corrupted = true;
+        },
+      });
+      assert.equal(corrupted, true);
+      assert.equal(rejected.status, "infrastructure");
+      assert.equal(rejected.terminal.code, "RESTORING_ATTEMPTS_INCOMPLETE");
+      assert.equal(rejected.rounds.length, 0);
+      assert.equal(rejected.repairs, 0);
+      assert.deepEqual(rejected.agentsClosed, [true, true]);
+      const firstRound = verified.schedule[0].id;
+      const outcome = await json(
+        path.join(destination, "checks", `${firstRound}-attempt-1`, "outcome.json"),
+      );
+      assert.equal(outcome.attempt, 1);
+      assert.equal(outcome.integrityPassed, false);
+      const workspace = await readTree(path.join(destination, "workspace"));
+      const captured = await readTree(
+        path.join(destination, "checks", `${firstRound}-attempt-1`, "candidate/source"),
+      );
+      assert.deepEqual(workspace, captured);
+      assert.ok(workspace["main.cpp"].includes("reference-fixture-corruption"));
+      for (const file of ["verification.json", "restorations", `checks/${firstRound}-attempt-2`])
+        await assert.rejects(access(path.join(destination, file)), { code: "ENOENT" });
+    },
+  );
   let displacing = false,
     commandOverride = null,
     inferenceHook = null;
@@ -290,9 +330,14 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
   assert.equal(report.final, report.expectedFinal);
   assert.equal(provider.errors.length, 0);
   const first = report.rounds[0];
-  assert.equal(first.attempts.length, 6);
+  assert.equal(report.policy.version, "renderer-restoring-policy-v3");
+  assert.equal(report.policy.oracleRecoveries, 1);
+  assert.deepEqual(
+    first.attempts.map(({ attempt }) => attempt),
+    [1, 2],
+  );
   assert.equal(first.firstAttempt, 1);
-  assert.equal(first.finalAttempt, 6);
+  assert.equal(first.finalAttempt, 2);
   assert.equal(first.restoration.reason, "editing-exhausted");
   let priorComments = 0;
   for (const outcome of first.attempts) {
@@ -341,7 +386,7 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
   const originals = report.executions.flatMap(({ atomicIds }) => atomicIds);
   assert.equal(originals.length, report.totalAtoms);
   assert.equal(new Set(originals).size, report.totalAtoms);
-  assert.ok(report.repairs >= 5);
+  assert.ok(report.repairs >= 1);
 
   const participants = report.participants;
   assert.equal(new Set(participants.map(({ lifetime }) => lifetime)).size, 2);
@@ -373,8 +418,11 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
         );
     }
   }
+  await assert.rejects(access(path.join(output, "checks", `${first.round}-attempt-3`)), {
+    code: "ENOENT",
+  });
   const firstBarriers = report.atomicBarriers.filter(({ round }) => round === first.round);
-  assert.equal(firstBarriers.length, 6);
+  assert.equal(firstBarriers.length, 2);
   for (const state of report.atomicBarriers) {
     const deliveries = report.executions.filter(
       (row) => row.round === state.round && row.attempt === state.attempt,
@@ -401,7 +449,7 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
       assert.equal(queues.filter((queue) => queue.length).length, 1);
       return queues.findIndex((queue) => queue.length);
     }),
-    Array.from({ length: 6 }, (_, attempt) => (report.executions[0].agent + attempt) % 2),
+    Array.from({ length: 2 }, (_, attempt) => (report.executions[0].agent + attempt) % 2),
   );
   assert.equal(provider.requests.length, report.executions.length * 2);
   assert.ok(
@@ -514,7 +562,7 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
     },
   );
   await t.test(
-    "actual filesystem restoration failure preserves six failures without a restored-round score",
+    "actual filesystem restoration failure preserves two failures without a restored-round score",
     async () => {
       assert.notEqual(process.geteuid(), 0);
       const destination = path.join(root, "restore-denied");
@@ -538,8 +586,8 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
       assert.equal(result.terminal.category, "infrastructure");
       assert.deepEqual(result.agentsClosed, [true, true]);
       assert.equal(result.rounds.length, 0);
-      assert.ok(result.repairs >= 5);
-      for (let attempt = 1; attempt <= 6; attempt++) {
+      assert.ok(result.repairs >= 1);
+      for (let attempt = 1; attempt <= 2; attempt++) {
         const outcome = await json(
           path.join(
             destination,
@@ -553,6 +601,10 @@ await test("the real restoring entry point keeps two Pi lifetimes through six ed
         assert.equal(outcome.buildPassed, true);
         assert.equal(outcome.resultMatched, true);
       }
+      await assert.rejects(
+        access(path.join(destination, "checks", `${verified.schedule[0].id}-attempt-3`)),
+        { code: "ENOENT" },
+      );
       await assert.rejects(
         access(path.join(destination, "restorations", verified.schedule[0].id, "restoration.json")),
         (error) => error.code === "ENOENT",

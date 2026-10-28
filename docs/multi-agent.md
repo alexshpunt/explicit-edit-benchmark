@@ -144,24 +144,30 @@ its completed rounds. Build and result failures reduce credit rather than
 multiplying it by zero. The verifier attempts their evidence collection even
 when some structural edits fail. Outputs cannot pass without a successful build.
 
-The first attempt and up to five corrections share one candidate and persistent
-histories. The final attempt determines the primary round score; first-attempt
-and final evidence are both retained. After recording the measured candidate,
-the controller restores the exact trusted **end of that round**, on success as
-well as failure. Restoration removes extra files and repairs missing or damaged
-ones. It grants no credit and never exposes later rounds' source.
+The first attempt and one correction share one candidate and participant
+histories, for two attempts in total. The final attempt determines the primary
+round score. Both first and final evidence are retained. After recording the
+measured candidate, the controller restores the exact trusted **end of that round**
+on success as well as failure. Restoration removes extra files and repairs
+missing or damaged ones. It grants no credit and never exposes later rounds' source.
 
 The same participant processes, mounted workspace and separate histories survive
 restoration. All participants are informed before their next assignments, and
 queue rotation continues. No model call or write may overlap restoration. A
 failed restore is an infrastructure stop, not an editing outcome. Ordinary edit
-failure after six attempts does not prevent the next round. Provider, auth,
+failure after two attempts does not prevent the next round. Provider, auth,
 runtime, cancellation and infrastructure stops remain distinct.
 
 Canonical restoration is not the accepted-prefix diagnostic recovery mechanism:
 it does not open fresh sessions, reset attempts or retroactively accept a failed
 candidate. Historical observations and reference proofs retain their original
-protocol and source identities. The original 226-task suite is unchanged.
+protocol and source identities. Current restoring runs use
+`renderer-restoring-policy-v3` with one correction. Historical
+`renderer-restoring-policy-v2` results and proofs keep their five-correction,
+six-attempt policy. Validation accepts each known policy separately; historical
+attempts are neither shortened nor rescored. Policy identity is part of result
+comparison, so the two budgets remain distinct. The original 226-task suite is
+unchanged.
 
 ### Native restoring entry points
 
@@ -175,7 +181,7 @@ A detached background writer is a runtime/infrastructure violation, not another
 editing attempt.
 
 The integration fixture in `test/renderer/restoring.test.mjs` uses real persistent
-Pi processes with a local scripted provider. It covers six editing failures,
+Pi processes with a local scripted provider. It covers two editing failures,
 current-round restoration and later edits, plus process death, cancellation,
 a detached writer, restoration failure and workspace loss. A wording-only source
 variant must pass with its own proof. Fixture proofs do not replace the required
@@ -196,7 +202,7 @@ node scripts/multi-agent.mjs verify-restoring PRIVATE_PREPARATION \
 The graph and maximum occupancy determine the planned rounds. Every planned
 round must pass its first reference check. A failed reference candidate is
 preserved without restoration, then verification stops as ineligible. Reference
-verification cannot use five corrections to manufacture a passing proof.
+verification cannot use a correction to manufacture a passing proof.
 
 For unconfigured persistent execution, an authorizing `renderer-restoring-execution-proof-v2`
 proof requires clean, committed source. It binds the exact commit, verifier,
@@ -283,7 +289,10 @@ and matches its immutable workload, graph, schedule, atom inventories, contracts
 canonical endpoints and grading requirements. It records the current runner
 identity, selected lifecycle and concurrency separately. This reuses the established
 feasibility of the requested edits without a new full scripted reference run.
-A missing, failed or incompatible retained proof is rejected. Reference
+A missing, failed or incompatible retained proof is rejected. The known
+first-pass v2 proof can establish task feasibility for v3's smaller correction
+budget only after its original policy and evidence pass validation. Workload,
+endpoints and grading requirements must still match exactly. Reference
 verification itself does not accept lifecycle or concurrency flags.
 
 Safe exported results include explicit lifecycle and concurrency settings when

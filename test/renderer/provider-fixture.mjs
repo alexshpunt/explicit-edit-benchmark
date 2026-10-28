@@ -26,14 +26,17 @@ export async function providerFixture(
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
       if (!result) return;
-      const delta = result.command
+      const call =
+        result.toolCall ??
+        (result.command ? { name: "bash", arguments: { command: result.command } } : null);
+      const delta = call
         ? {
             tool_calls: [
               {
                 index: 0,
                 id: `call-${number}`,
                 type: "function",
-                function: { name: "bash", arguments: JSON.stringify({ command: result.command }) },
+                function: { name: call.name, arguments: JSON.stringify(call.arguments) },
               },
             ],
           }
@@ -42,7 +45,7 @@ export async function providerFixture(
         `data: ${JSON.stringify({ id: `msg-${number}`, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`,
       );
       res.write(
-        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: result.command ? "tool_calls" : "stop" }], usage: result.usage ?? { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }], usage: result.usage ?? { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } })}\n\n`,
       );
       res.end("data: [DONE]\n\n");
     } catch (error) {

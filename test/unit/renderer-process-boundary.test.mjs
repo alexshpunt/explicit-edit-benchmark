@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, readlink } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import test from "node:test";
-import { assertProcessBoundary } from "../../src/suites/explicit-edit-multi-agent/execution/process-boundary.mjs";
+import {
+  assertProcessBoundary,
+  waitForProcessBoundaryExit,
+} from "../../src/suites/explicit-edit-multi-agent/execution/process-boundary.mjs";
 
+test("namespace exit observation refuses the controller and malformed namespaces", async () => {
+  await assert.rejects(waitForProcessBoundaryExit(await readlink("/proc/self/ns/pid")), {
+    code: "ERR_ASSERTION",
+  });
+  await assert.rejects(waitForProcessBoundaryExit("not-a-namespace"), { code: "ERR_ASSERTION" });
+});
 async function fixture(t) {
   const child = spawn(
     process.execPath,

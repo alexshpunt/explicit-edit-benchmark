@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { readFile, readdir, readlink } from "node:fs/promises";
 
 const failure = (message, category) => Object.assign(new Error(message), { category });
@@ -24,6 +26,34 @@ async function record(pid) {
   };
 }
 
+/** Wait for actual process exits, not just Bubblewrap monitor exit. The caller
+ * holds the namespace descriptor until completion, preventing inode reuse.
+ * The kernel pidfds are event-driven; there are no sleeps or polling deadlines.
+ */
+export async function waitForProcessBoundaryExit(namespace) {
+  assert.match(namespace, /^pid:\[\d+\]$/);
+  assert.notEqual(
+    namespace,
+    await readlink("/proc/self/ns/pid"),
+    "Cannot wait for the controller namespace",
+  );
+  await new Promise((resolve, reject) => {
+    execFile(
+      "python3",
+      [fileURLToPath(new URL("./process-boundary-exit.py", import.meta.url)), namespace],
+      (error) => {
+        if (error)
+          reject(
+            Object.assign(
+              failure("Participant namespace exit observation failed", "infrastructure"),
+              { cause: error },
+            ),
+          );
+        else resolve();
+      },
+    );
+  });
+}
 /** Inspect every thread's descendants, including detached/reparented tool work.
  * The caller supplies Bubblewrap's namespace-init host PID and Pi's observed
  * in-namespace agent PID. No shell, inference, polling deadline or signal is used.

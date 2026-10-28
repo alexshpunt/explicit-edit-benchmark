@@ -6,12 +6,40 @@ underlying experiment and scripted execution details.
 
 The native restoring entry point also supports
 [fresh agents for each packet](multi-agent.md#fresh-agents-for-each-packet), with a
-worker concurrency limit independent of the graph schedule. The persistent
-protocol described here remains available.
+worker concurrency limit independent of the graph schedule. Its current
+`renderer-restoring-policy-v3` allows one initial attempt and one correction,
+for two attempts total. It retains separate first and final evidence, scores the
+final candidate against the full planned denominator, applies the integrity veto,
+and canonically restores the current round before later work. Historical
+`renderer-restoring-policy-v2` observations keep their six-attempt identity and
+are validated without shortening their evidence. The accepted-prefix protocol
+described here remains available with its original five-correction budget.
 
 This experiment uses the complete coherent restoration workload, not a smaller
 parallel-only task set. It keeps the same initial shuffled C++ monolith and the
 same public tasks. It is separate from V1 results and publication.
+
+## Native restoring tool profiles
+
+The private native restoring config accepts `harness: "pi-agent-ide-codemode"`.
+Install Pi and the complete compiled `pi-agent-ide` package in the explicit
+runtime directory. The runner resolves the package's declared extension entry;
+its dependencies and entry must remain inside that mounted runtime.
+
+This profile uses the benchmark main branch's Codemode guard, additive
+`--tools +codemode`, and `codemode.mode: "on"`. Codemode and the standalone IDE
+tools must both appear in the active registry and the model-facing declarations.
+The IDE retains its system instructions. Personal extensions, skills, context
+files and configuration are not loaded. Automatic provider-error retries are
+disabled before the first request; editing still has only one correction.
+
+The safe result records the installed IDE version and, when present, its Git
+revision in the existing harness identity object. Pi's version remains a
+separate runtime identity; both affect the comparison key. Development packages
+must retain their exact source revision in their installed `gitHead` metadata.
+Omitting `harness` preserves the historical Bash-only, empty-system Baseline and
+its approved runtime requirement. The Codemode-disabled `pi-agent-ide` profile
+is not an alias for this profile.
 
 ## Find safe parallel work first
 

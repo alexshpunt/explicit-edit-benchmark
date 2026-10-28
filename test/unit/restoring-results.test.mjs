@@ -7,6 +7,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/results.mjs";
 import {
   RESTORING_MULTI_AGENT_RESULT_VERSION,
+  RESTORING_MULTI_AGENT_POLICY,
   restoringMultiAgentResult,
 } from "../../src/suites/explicit-edit-multi-agent/restoring-results.mjs";
 
@@ -24,6 +25,68 @@ test("restored editing exhaustion continues and final scores use equal full roun
   assert.equal(result.progress.observedRounds, 2);
   assert.equal(result.execution.deliveries, 8);
   assert.deepEqual(validateMultiAgentResult(result), result);
+});
+
+function twoAttemptFixture() {
+  const raw = restoringFixture();
+  raw.policy = { ...RESTORING_MULTI_AGENT_POLICY, buildWeight: 2, resultWeight: 4 };
+  raw.rounds[0].attempts = [
+    raw.rounds[0].attempts[0],
+    { ...raw.rounds[0].attempts.at(-1), attempt: 2 },
+  ];
+  raw.rounds[0].finalAttempt = 2;
+  raw.executions = raw.executions.filter(({ attempt }) => attempt <= 2);
+  raw.deliveries = raw.executions.length;
+  raw.repairs = 1;
+  return raw;
+}
+
+test("new restoring evidence permits one correction and keeps old six-attempt results separate", () => {
+  const current = restoringMultiAgentResult(twoAttemptFixture());
+  const legacy = restoringMultiAgentResult(restoringFixture());
+  assert.equal(current.policy.version, "renderer-restoring-policy-v3");
+  assert.equal(current.policy.oracleRecoveries, 1);
+  assert.equal(current.rounds[0].attempts, 2);
+  assert.equal(current.score.final.score, 53.125);
+  assert.equal(current.score.first.score, 50);
+  assert.equal(legacy.policy.version, "renderer-restoring-policy-v2");
+  assert.equal(legacy.policy.oracleRecoveries, 5);
+  assert.equal(legacy.rounds[0].attempts, 6);
+  assert.notEqual(current.comparisonKey, legacy.comparisonKey);
+});
+
+test("new restoring evidence rejects a third attempt and incomplete exhaustion", () => {
+  for (const attempts of [1, 3, 6]) {
+    const raw = restoringFixture();
+    raw.policy = { ...RESTORING_MULTI_AGENT_POLICY, buildWeight: 2, resultWeight: 4 };
+    raw.rounds[0].attempts = raw.rounds[0].attempts.slice(0, attempts);
+    raw.rounds[0].finalAttempt = attempts;
+    raw.executions = raw.executions.filter(({ attempt }) => attempt <= attempts);
+    raw.deliveries = raw.executions.length;
+    raw.repairs = attempts - 1;
+    assert.throws(() => restoringMultiAgentResult(raw), { code: "ERR_ASSERTION" });
+  }
+});
+
+test("an interrupted new-policy round cannot contain a third delivery attempt", () => {
+  const raw = twoAttemptFixture();
+  raw.status = "cancelled";
+  raw.terminal = { id: "round-002", category: "cancelled" };
+  raw.rounds.pop();
+  raw.executions.at(-1).attempt = 3;
+  assert.throws(() => restoringMultiAgentResult(raw), { code: "ERR_ASSERTION" });
+});
+
+test("policy versions cannot be relabelled with another recovery budget", () => {
+  for (const [version, oracleRecoveries] of [
+    ["renderer-restoring-policy-v2", 1],
+    ["renderer-restoring-policy-v3", 5],
+    ["renderer-restoring-policy-v4", 1],
+  ]) {
+    const raw = twoAttemptFixture();
+    Object.assign(raw.policy, { version, oracleRecoveries });
+    assert.throws(() => restoringMultiAgentResult(raw), { code: "ERR_ASSERTION" });
+  }
 });
 
 test("a runtime stop keeps all planned round maxima in both score denominators", () => {

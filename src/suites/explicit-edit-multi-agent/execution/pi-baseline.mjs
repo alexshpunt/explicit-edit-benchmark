@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { copyFile, mkdir, readFile, realpath } from "node:fs/promises";
+import { copyFile, mkdir, open, readFile, readlink, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { ExecutionFailure } from "./request-chain.mjs";
-import { assertProcessBoundary } from "./process-boundary.mjs";
+import { assertProcessBoundary, waitForProcessBoundaryExit } from "./process-boundary.mjs";
+import { resolvePiParticipantProfile } from "./pi-profile.mjs";
+import { missingProfileTools } from "../../../../scripts/pi-codemode-profile.mjs";
+export { startPiParticipant as startBaseline };
 
 /** Sum finalized native Pi usage. Missing observations remain unknown, not zero. */
 export function finalizedUsage(events) {
@@ -34,38 +37,23 @@ export function finalizedUsage(events) {
 /** Start exactly one isolated Pi process. Only declared runtime and authentication files are mounted.
  * Call close in finally. Cancellation kills the PID namespace before returning.
  */
-export async function startBaseline(
+export async function startPiParticipant(
   workspace,
   stateDirectory,
   config,
   { eventsFile, signal, enforceProcessBoundary = false } = {},
 ) {
   signal?.throwIfAborted();
-  const keys = new Set(["runtime", "model", "thinking", "authFile", "modelsFile", "envFile"]);
-  assert.ok(
-    Object.keys(config).every((key) => keys.has(key)),
-    "Unknown Baseline configuration key",
-  );
-  assert.ok(
-    typeof config.runtime === "string" &&
-      typeof config.model === "string" &&
-      config.model.includes("/"),
-    "Explicit runtime and provider/model are required",
-  );
-  assert.ok(
-    ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(config.thinking),
-    "Explicit thinking level is required",
-  );
-  const runtime = await realpath(config.runtime);
-  const packageFile = path.join(
-    runtime,
-    "node_modules/@earendil-works/pi-coding-agent/package.json",
-  );
-  const version = JSON.parse(await readFile(packageFile, "utf8")).version;
+  const profile = await resolvePiParticipantProfile(config);
+  const { runtime, version } = profile;
   const state = path.resolve(stateDirectory);
   await mkdir(state, { mode: 0o700 });
   await mkdir(path.join(state, "pi"));
   await mkdir(path.join(state, "home"));
+  if (profile.settings)
+    await writeFile(path.join(state, "pi/settings.json"), JSON.stringify(profile.settings) + "\n", {
+      mode: 0o600,
+    });
   for (const [key, name] of [
     ["authFile", "auth.json"],
     ["modelsFile", "models.json"],
@@ -77,6 +65,10 @@ export async function startBaseline(
   await copyFile(
     fileURLToPath(new URL("pi-baseline-observer.mjs", import.meta.url)),
     path.join(observer, "baseline.mjs"),
+  );
+  await copyFile(
+    fileURLToPath(new URL("../../../../scripts/pi-codemode-profile.mjs", import.meta.url)),
+    path.join(observer, "pi-codemode-profile.mjs"),
   );
   const args = [
     "--unshare-user",
@@ -146,6 +138,12 @@ export async function startBaseline(
     "--chdir",
     "/workspace",
   ];
+  args.push(
+    "--setenv",
+    "RENDERER_PI_HARNESS",
+    profile.baseline ? "baseline-agent" : profile.harness.id,
+  );
+  if (!profile.baseline) args.push("--setenv", "SHELL", "/bin/bash");
   if (config.envFile) {
     const env = JSON.parse(await readFile(config.envFile, "utf8"));
     for (const [key, value] of Object.entries(env)) {
@@ -166,8 +164,7 @@ export async function startBaseline(
     config.model,
     "--thinking",
     config.thinking,
-    "--tools",
-    "bash",
+    ...profile.toolArgs,
     "--no-extensions",
     "--no-skills",
     "--no-prompt-templates",
@@ -175,6 +172,7 @@ export async function startBaseline(
     "--no-context-files",
     "--no-approve",
     "--offline",
+    ...profile.extensionArgs,
     "--extension",
     "/observer/baseline.mjs",
     "--session-dir",
@@ -189,25 +187,24 @@ export async function startBaseline(
   });
   const namespace = Promise.withResolvers();
   namespace.promise.catch(() => {});
-  let processIdentity;
+  let processIdentity, namespaceHandle, namespaceLabel;
   if (enforceProcessBoundary) {
     let information = "";
     child.stdio[3].on("data", (bytes) => {
       information += bytes;
     });
-    child.stdio[3].once("end", () => {
+    child.stdio[3].once("end", async () => {
       try {
         const pid = JSON.parse(information)["child-pid"];
         assert.ok(Number.isSafeInteger(pid) && pid > 0, "Missing Baseline namespace PID");
+        namespaceHandle = await open(`/proc/${pid}/ns/pid`, "r");
+        namespaceLabel = await readlink(`/proc/self/fd/${namespaceHandle.fd}`);
         namespace.resolve(pid);
       } catch (error) {
         namespace.reject(error);
       }
     });
     child.once("error", (error) => namespace.reject(error));
-    child.once("close", () =>
-      namespace.reject(new ExecutionFailure("driver_exit", "Baseline namespace closed")),
-    );
   }
   const events = [];
   const pending = new Map();
@@ -245,17 +242,32 @@ export async function startBaseline(
   let sequence = 0;
   let terminal;
   let stopped = false;
+  let boundaryClosed = !enforceProcessBoundary;
   let closing = false;
   let active;
   let observation;
   let expected;
   let stderr = "";
-  const exited = new Promise((resolve) =>
+  const exited = new Promise((resolve, reject) =>
     child.once("close", (code, signal) => {
       stopped = true;
-      resolve({ code, signal });
+      (async () => {
+        try {
+          if (enforceProcessBoundary) {
+            // Startup can fail before a namespace exists; the original failure is retained.
+            await namespace.promise.catch(() => {});
+            if (namespaceHandle) await waitForProcessBoundaryExit(namespaceLabel);
+          }
+        } finally {
+          await namespaceHandle?.close();
+        }
+      })().then(() => {
+        boundaryClosed = true;
+        resolve({ code, signal });
+      }, reject);
     }),
   );
+  exited.catch(() => {});
   const trace = (event) => {
     if (!["message_update", "tool_execution_update"].includes(event.type)) events.push(event);
     if (eventsFile) appendFileSync(eventsFile, JSON.stringify(event) + "\n");
@@ -273,8 +285,14 @@ export async function startBaseline(
       !record.sessionId ||
       !record.lifetime ||
       !Number.isInteger(record.agentPid) ||
-      JSON.stringify(record.tools) !== '["bash"]' ||
-      record.systemEmpty === false
+      !Array.isArray(record.tools) ||
+      (profile.baseline
+        ? JSON.stringify(record.tools) !== '["bash"]' || record.systemEmpty === false
+        : missingProfileTools(record.tools).length > 0 ||
+          (record.event === "context" &&
+            (record.systemEmpty !== false ||
+              !Array.isArray(record.declaredTools) ||
+              missingProfileTools(record.declaredTools).length > 0)))
     )
       throw new ExecutionFailure(
         "driver_exit",
@@ -369,6 +387,7 @@ export async function startBaseline(
       child.stdin.write(JSON.stringify({ id, type, ...fields }) + "\n");
     });
   const kill = () => {
+    if (stopped || child.exitCode !== null || child.signalCode !== null) return;
     try {
       process.kill(-child.pid, "SIGKILL");
     } catch (error) {
@@ -376,7 +395,10 @@ export async function startBaseline(
     }
   };
   const close = async () => {
-    if (stopped) return;
+    if (stopped) {
+      await exited;
+      return;
+    }
     closing = true;
     child.stdin.end();
     let timer;
@@ -431,10 +453,11 @@ export async function startBaseline(
     assert.equal(initial.sessionId, expected.sessionId);
     assert.equal(`${initial.model.provider}/${initial.model.id}`, config.model);
     assert.equal(initial.thinkingLevel, config.thinking);
+    if (!profile.baseline) await command("set_auto_retry", { enabled: false });
     return {
       version,
       get closed() {
-        return stopped;
+        return stopped && boundaryClosed;
       },
       events,
       close,
@@ -510,8 +533,8 @@ export async function startBaseline(
             (record) => record.event === "context" && contexts > previousContexts,
           );
           assert.ok(
-            observation.systemEmpty,
-            "No observed model call under the empty system prompt",
+            profile.baseline ? observation.systemEmpty : observation.systemEmpty === false,
+            "No observed model call under the selected system profile",
           );
           const stateNow = await idleState();
           return { ...result(), messageCount: stateNow.messageCount };
