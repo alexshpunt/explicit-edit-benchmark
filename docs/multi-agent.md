@@ -176,14 +176,16 @@ empty system prompt. The default `persistent` lifecycle keeps one actual process
 and conversation per participant. A fresh process with a continued session is not
 a persistent participant. The `per-delivery` lifecycle starts a fresh agent for
 each original packet, as described below. Idle checks request no inference and
-reject live tool descendants before measurement or restoration.
-A detached background writer is a runtime/infrastructure violation, not another
-editing attempt.
+verify the participant process identity and settled RPC state before measurement
+or restoration. Harnesses may keep their own subprocesses running, including
+language servers and detached workers. Closing a participant terminates its entire
+PID namespace, not just Pi. Candidate byte and write-journal checks still reject
+source changes after capture; a live subprocess alone is not a failure.
 
 The integration fixture in `test/renderer/restoring.test.mjs` uses real persistent
 Pi processes with a local scripted provider. It covers two editing failures,
 current-round restoration and later edits, plus process death, cancellation,
-a detached writer, restoration failure and workspace loss. A wording-only source
+persistent harness subprocesses, restoration failure and workspace loss. A wording-only source
 variant must pass with its own proof. Fixture proofs do not replace the required
 full-workload reference proof for unconfigured persistent observations.
 

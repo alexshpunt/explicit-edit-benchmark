@@ -73,12 +73,9 @@ test("process-boundary inspection retains the exact living participant without s
   );
 });
 
-test("a detached tool descendant is an infrastructure boundary violation even after its shell returns", async (t) => {
+test("harness descendants may remain alive without changing the participant identity", async (t) => {
   const f = await fixture(t);
   const initial = await assertProcessBoundary(f.child.pid, f.agentPid);
   await f.background();
-  await assert.rejects(
-    assertProcessBoundary(f.child.pid, f.agentPid, initial),
-    (error) => error.category === "infrastructure",
-  );
+  assert.deepEqual(await assertProcessBoundary(f.child.pid, f.agentPid, initial), initial);
 });

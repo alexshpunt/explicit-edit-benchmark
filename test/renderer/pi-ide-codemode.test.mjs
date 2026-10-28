@@ -44,7 +44,7 @@ async function namedToolProvider(root, respond) {
   });
 }
 
-async function assertNamespaceClosed(identity) {
+async function liveNamespaceProcesses(identity) {
   const remaining = [];
   for (const pid of await readdir("/proc")) {
     if (!/^\d+$/.test(pid)) continue;
@@ -60,7 +60,11 @@ async function assertNamespaceClosed(identity) {
       if (!["ENOENT", "ESRCH", "EACCES", "EPERM"].includes(error.code)) throw error;
     }
   }
-  assert.deepEqual(remaining, []);
+  return remaining;
+}
+
+async function assertNamespaceClosed(identity) {
+  assert.deepEqual(await liveNamespaceProcesses(identity), []);
 }
 
 async function fixture(t, respond, providerFactory = providerFixture) {
@@ -256,6 +260,60 @@ test(
     checkLoadout(f.provider.requests);
     assert.deepEqual(f.provider.errors, []);
     await f.close(second);
+  },
+);
+
+test(
+  "native C++ IDE keeps its language service alive until the participant closes",
+  options,
+  async (t) => {
+    const source = "#pragma once\ninline constexpr int answer = 1;\n";
+    const updated = source.replace("answer = 1", "answer = 2");
+    const f = await fixture(
+      t,
+      (_body, number) => {
+        if (number === 1)
+          return { name: "write", arguments: { path: "/workspace/item.h", content: updated } };
+        if (number === 2)
+          return { name: "read", arguments: { path: "/workspace/item.h", views: ["diagnostics"] } };
+        assert.equal(number, 3);
+        return undefined;
+      },
+      namedToolProvider,
+    );
+    await writeFile(path.join(f.workspace, "item.h"), source);
+    await writeFile(
+      path.join(f.workspace, "item.cpp"),
+      '#include "item.h"\nint main() { return answer; }\n',
+    );
+    await writeFile(
+      path.join(f.workspace, "compile_commands.json"),
+      JSON.stringify([
+        {
+          directory: "/workspace",
+          file: "/workspace/item.cpp",
+          arguments: ["clang++", "-std=c++17", "-c", "/workspace/item.cpp"],
+        },
+      ]),
+    );
+    const participant = await f.start("cpp-service");
+    const { driver, initial } = participant;
+    const receipt = await driver.execute("Apply the C++ header edit and inspect diagnostics.");
+    assert.equal(receipt.failedToolCalls, 0);
+    assert.equal(await readFile(path.join(f.workspace, "item.h"), "utf8"), updated);
+    const calls = f.provider.requests.length;
+    assert.equal(calls, 3);
+    assert.deepEqual((await driver.assertIdle()).process, initial.process);
+    assert.equal(f.provider.requests.length, calls);
+    const processes = await liveNamespaceProcesses(initial.process);
+    assert.ok(
+      processes.some(
+        (pid) => ![initial.process.rootPid, initial.process.agentHostPid].includes(pid),
+      ),
+    );
+    checkLoadout(f.provider.requests);
+    assert.deepEqual(f.provider.errors, []);
+    await f.close(participant);
   },
 );
 

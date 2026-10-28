@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, readlinkSync, renameSync } from "node:fs";
-import { setTimeout as delay } from "node:timers/promises";
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -543,19 +542,18 @@ await test("the real restoring entry point keeps two Pi lifetimes through two ed
     },
   );
   await t.test(
-    "a real detached native writer is infrastructure and is drained without canonical healing",
+    "persistent native harness subprocesses allow grading and canonical restoration",
     async () => {
-      const destination = path.join(root, "late-writer");
-      commandOverride =
-        "(sleep 5; printf late > /workspace/late) >/tmp/fixture-background.log 2>&1 </dev/null &";
+      const destination = path.join(root, "background-worker");
+      commandOverride = "sleep 600 >/tmp/fixture-background.log 2>&1 </dev/null &";
       try {
         const result = await runRestoring(preparation, destination, nativeOptions);
-        stopped(result, "infrastructure");
-        await delay(5100);
-        await assert.rejects(
-          access(path.join(destination, "workspace/late")),
-          (error) => error.code === "ENOENT",
-        );
+        assert.equal(result.status, "complete");
+        assert.equal(result.rounds.length, result.totalRounds);
+        assert.ok(result.rounds.every((round) => round.attempts.length === 2));
+        assert.ok(result.rounds.every((round) => round.restoration.reason === "editing-exhausted"));
+        assert.deepEqual(result.agentsClosed, [true, true]);
+        assert.deepEqual(await readTree(path.join(destination, "workspace")), final);
       } finally {
         commandOverride = null;
       }

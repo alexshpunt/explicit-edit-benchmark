@@ -57,7 +57,8 @@ export async function waitForProcessBoundaryExit(namespace) {
 /** Inspect every thread's descendants, including detached/reparented tool work.
  * The caller supplies Bubblewrap's namespace-init host PID and Pi's observed
  * in-namespace agent PID. No shell, inference, polling deadline or signal is used.
- * Unknown live descendants cannot be hidden by a settled RPC/tool response.
+ * Harness-owned subprocesses may remain alive between deliveries; only the
+ * participant identity and namespace lifetime are checked here.
  */
 export async function assertProcessBoundary(rootPid, agentPid, expected) {
   assert.ok(Number.isSafeInteger(rootPid) && rootPid > 0, "Missing participant namespace root");
@@ -113,10 +114,6 @@ export async function assertProcessBoundary(rootPid, agentPid, expected) {
   };
   if (expected && JSON.stringify(observed) !== JSON.stringify(expected))
     throw failure("Participant process lifetime changed", "driver_exit");
-  if (
-    records.some((item) => item.pid !== agent.pid && !(item.pid === rootPid && item.inside === 1))
-  )
-    throw failure("Participant has undrained tool subprocesses", "infrastructure");
   const final = await record(rootPid);
   if (final.start !== root.start || final.namespace !== root.namespace)
     throw failure("Participant namespace lifetime changed", "driver_exit");

@@ -53,7 +53,7 @@ test("native process-boundary checks retain two real isolated Pi processes witho
   assert.equal(f.provider.requests.length, calls);
 });
 
-test("a detached Bash writer fails the runtime boundary and shutdown prevents its late write", async (t) => {
+test("a detached Bash child may remain alive but namespace shutdown prevents its late write", async (t) => {
   const f = await fixture(t, (body) =>
     body.messages.at(-1).role === "tool"
       ? {}
@@ -63,11 +63,11 @@ test("a detached Bash writer fails the runtime boundary and shutdown prevents it
         },
   );
   const driver = await f.start("writer");
-  await driver.assertIdle();
-  await assert.rejects(
-    driver.execute("Perform the current edit."),
-    (error) => error.category === "infrastructure",
-  );
+  const initial = await driver.assertIdle();
+  await driver.execute("Perform the current edit.");
+  const calls = f.provider.requests.length;
+  assert.deepEqual((await driver.assertIdle()).process, initial.process);
+  assert.equal(f.provider.requests.length, calls);
   assert.ok(driver.events.some((event) => event.type === "tool_execution_end" && !event.isError));
   await driver.close();
   assert.equal(driver.closed, true);
