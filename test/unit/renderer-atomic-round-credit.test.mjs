@@ -254,6 +254,94 @@ test("inactive protected code inside an assigned owner invalidates its atoms", a
   assert.equal(result.passed, 0);
   assert.equal(result.integrityPassed, true);
 });
+for (const delimiter of ["=", ";"]) {
+  test(`a requested parameter replaced by ${delimiter} remains attributable without AST credit`, async (t) => {
+    const { grade, expectedTree } = await fixture(t);
+    const result = await grade({
+      "main.cpp": expectedTree["main.cpp"].replace("int leftName,", `int ${delimiter},`),
+    });
+    assert.deepEqual(outcomes(result), { left: false, right: false });
+    assert.equal(result.total, 2);
+    assert.ok(
+      result.atoms.every((atom) =>
+        atom.failures.some(({ category }) => category === "protected-owner"),
+      ),
+    );
+    assert.equal(result.integrityPassed, true);
+    assert.deepEqual(result.preservationFailures, []);
+  });
+}
+
+test("an unmatched assigned body does not absorb independent protected corruption", async (t) => {
+  const tree = {
+    "a.cpp": "int first(int left) { return left; }\n",
+    "b.cpp": "int second(int right) { return right; }\nint untouched() { return 7; }\n",
+  };
+  const { grade, expectedTree } = await fixture(t, tree);
+  const assigned = {
+    ...expectedTree,
+    "b.cpp": expectedTree["b.cpp"].replace("return rightName;", "return rightName * 2;"),
+  };
+  const assignedResult = await grade(assigned);
+  assert.deepEqual(outcomes(assignedResult), { left: true, right: false });
+  assert.equal(assignedResult.integrityPassed, true);
+  const collateralResult = await grade({
+    ...assigned,
+    "b.cpp": assigned["b.cpp"].replace("return 7;", "return 8;"),
+  });
+  assert.deepEqual(outcomes(collateralResult), { left: true, right: false });
+  assert.equal(collateralResult.integrityPassed, false);
+  assert.ok(collateralResult.preservationFailures.length > 0);
+  assert.ok(collateralResult.preservationFailures.every(({ file }) => file === "b.cpp"));
+});
+
+test("different header masks retain every attributable assigned owner and duplicate", async (t) => {
+  const tree = {
+    "main.cpp": "int left(int value) { return value; }\nint value(int right) { return right; }\n",
+  };
+  const { grade } = await fixture(t, tree);
+  // The function-name slot in the first owner and parameter slot in the second
+  // independently recognize this header. Neither recognition certifies an atom.
+  const damaged = "int value(int value) { return value + 1; }\n";
+  for (const copies of [1, 2]) {
+    const result = await grade({ "main.cpp": damaged.repeat(copies) });
+    assert.deepEqual(outcomes(result), { left: false, right: false });
+    assert.equal(result.total, 2);
+    assert.equal(result.integrityPassed, true);
+    for (const atom of result.atoms)
+      assert.equal(
+        atom.failures.filter(({ category }) => category === "unexpected-owner").length,
+        copies,
+      );
+  }
+});
+
+test("an inactive protected owner cannot borrow an active owner's header attribution", async (t) => {
+  const tree = {
+    "main.cpp": `#if 1
+int combine(int left) { return left; }
+#else
+int combine(int value) { return value; }
+#endif
+int second(int right) { return right; }
+`,
+  };
+  const { grade, expectedTree } = await fixture(t, tree);
+  const result = await grade({
+    "main.cpp": expectedTree["main.cpp"]
+      .replace("return leftName;", "return leftName + 1;")
+      .replace("return value;", "return value + 1;"),
+  });
+  assert.deepEqual(outcomes(result), { left: false, right: true });
+  assert.equal(result.integrityPassed, false);
+  assert.ok(result.preservationFailures.length > 0);
+  assert.equal(
+    result.atoms
+      .find(({ id }) => id === "left")
+      .failures.filter(({ category }) => category === "unexpected-owner").length,
+    1,
+  );
+});
 test("unchanged owner tokens do not conceal a using-directive binding rebind", async (t) => {
   const tree = {
     "main.cpp": `namespace alpha { inline int value = 1; }

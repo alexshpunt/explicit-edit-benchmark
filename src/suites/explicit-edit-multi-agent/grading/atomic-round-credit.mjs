@@ -4,7 +4,7 @@ import { atomicOwnerFrames } from "../tasks/atomic-naming-replay.mjs";
 import {
   prepareCoherentContract,
   evaluateCoherentContract,
-  standardUsingContext,
+  createStandardUsingContext,
 } from "./coherent-grade.mjs";
 import {
   prepareStructuralCredit,
@@ -13,6 +13,7 @@ import {
 } from "./structural-credit.mjs";
 import { namespaceShellCounts } from "./round-footprints.mjs";
 import { encodeSourceBytes, decodeSourceBytes } from "../cpp/source-bytes.mjs";
+import { createFrameAttribution } from "./frame-attribution.mjs";
 
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const identifier = (text) => /^[A-Za-z_]\w*$/.test(text);
@@ -26,14 +27,6 @@ function append(map, key, value) {
   if (!map.has(key)) map.set(key, []);
   map.get(key).push(value);
 }
-// Attribution does not certify a name. A malformed token occupying a known
-// requested slot can identify its failed owner without becoming collateral.
-const attributionMask = (tokens, slots) =>
-  tokens.map((token, index) => (slots.has(index) ? null : token));
-const header = (tokens) => {
-  const end = tokens.findIndex((token) => token === "{" || token === "=" || token === ";");
-  return tokens.slice(0, end < 0 ? tokens.length : end);
-};
 
 function frameRecords(tree) {
   const frames = [],
@@ -445,19 +438,7 @@ export function evaluateAtomicRoundCredit(tree, prepared, { candidateSymbols }) 
   }
   // Recognizing an old or damaged assigned declaration is attribution only. It
   // does not establish credit for the required canonical destination.
-  const attributed = (frame) => {
-    const exact = reverse.get(frame) ?? [];
-    if (exact.length) return exact;
-    return expected.filter(
-      (other) =>
-        other.ids.size &&
-        same(shape(frame), shape(other)) &&
-        same(
-          header(attributionMask(frame.tokens, other.slots)),
-          header(attributionMask(other.tokens, other.slots)),
-        ),
-    );
-  };
+  const attributed = createFrameAttribution(expected, reverse);
   for (const frame of actual) {
     if (reverse.has(frame)) continue;
     const owners = new Set(attributed(frame).flatMap((other) => [...frameOwners(other)]));
@@ -547,11 +528,12 @@ export function evaluateAtomicRoundCredit(tree, prepared, { candidateSymbols }) 
     if (!shells || (shells.get(JSON.stringify([file, scope])) ?? 0) !== count)
       charge(new Set([id]), "namespace-cleanup", file);
   }
+  const importContext = createStandardUsingContext(tree);
   for (const record of structural.imports) {
     for (const frame of structural.dependencies.get(record.id) ?? []) {
       for (const consumer of matches.get(frame)) {
         if (
-          !standardUsingContext(tree, { ...record, file: consumer.file, conditions: [] }, false, {
+          !importContext({ ...record, file: consumer.file, conditions: [] }, false, {
             consumer,
           })
         )

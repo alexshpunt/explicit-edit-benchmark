@@ -209,161 +209,185 @@ function inventory(tree) {
  * This is not arbitrary C++ namespace equivalence: aliases, broad namespace
  * directives and conditional imports remain physical requirements.
  */
-export function standardUsingContext(tree, record, omitOwn = false, { consumer } = {}) {
-  if (record.kind !== "using" || record.conditions.length) return false;
-  const spelling = record.tokens.join("");
-  const literalNamespace = spelling === "usingnamespacestd::string_literals;";
-  const name = /^usingstd::([A-Za-z_]\w*);$/.exec(spelling)?.[1];
-  const literalUse = (token, index, all) =>
-    token.text === "s" && all[index - 1]?.text.endsWith('"') && all[index - 1].end === token.start;
-  if (!name && !literalNamespace) return false;
-  const containsScope = (outer, inner) =>
-    !outer || outer === inner || inner.startsWith(`${outer}::`);
-  const containsConditions = (outer, inner) =>
-    outer.length <= inner.length &&
-    outer.every((condition, index) => JSON.stringify(condition) === JSON.stringify(inner[index]));
-  const declarations = new Map();
-  function structure(source) {
-    if (!declarations.has(source)) declarations.set(source, cppStructure(source));
-    return declarations.get(source);
-  }
-  function guardedHeader(file, source, unit, parts) {
-    if (!file.endsWith(".h") || unit.scope || parts.length !== 1) return false;
-    const guard = /^\s*#\s*ifndef\s+([A-Za-z_]\w*)\s*\n\s*#\s*define\s+\1\s*\n/.exec(source);
-    return Boolean(guard && !source.slice(0, unit.start).trim() && !source.slice(unit.end).trim());
-  }
-  function available(
-    file,
-    source,
-    scope,
-    conditions,
-    offset,
-    limit,
-    wantedScope,
-    wantedConditions,
-    seen,
-  ) {
-    const syntax = structure(source);
-    for (const unit of syntax.units) {
-      if (offset + unit.start >= limit) continue;
-      const owner = [scope, unit.scope].filter(Boolean).join("::");
-      const text = source.slice(unit.start, unit.end);
-      if (
-        unit.kind === "using" &&
-        offset + unit.end <= limit &&
-        containsScope(owner, wantedScope) &&
-        containsConditions(conditions, wantedConditions) &&
-        tokens(text).join("") === spelling &&
-        !(omitOwn && file === record.file && owner === record.scope && !conditions.length)
-      )
-        return true;
-      if (unit.kind === "conditional") {
-        const parts = branches(text);
-        const guard = guardedHeader(file, source, unit, parts);
-        for (const part of parts) {
-          const nested = guard ? conditions : [...conditions, part.condition];
-          if (
-            containsConditions(nested, wantedConditions) &&
-            available(
-              file,
-              part.source,
-              owner,
-              nested,
-              offset + unit.start + part.start,
-              limit,
-              wantedScope,
-              wantedConditions,
-              seen,
+export function standardUsingContext(tree, record, omitOwn = false, options = {}) {
+  return createStandardUsingContext(tree)(record, omitOwn, options);
+}
+
+/** Reuse lexical work within one immutable candidate. Availability still depends
+ * on the selected import, consumer, source position, conditions and omit-own rule.
+ */
+export function createStandardUsingContext(tree) {
+  const files = new Map();
+  const sourceFile = (file) => {
+    if (!files.has(file)) files.set(file, tree[file]);
+    return files.get(file);
+  };
+  const memo = (parse) => {
+    const cache = new Map();
+    return (source) => {
+      if (!cache.has(source)) cache.set(source, parse(source));
+      return cache.get(source);
+    };
+  };
+  const structure = memo(cppStructure);
+  const conditionalParts = memo(branches);
+  const tokenTexts = memo(tokens);
+  const lexicalTokens = memo(cppTokens);
+  return function check(record, omitOwn = false, { consumer } = {}) {
+    if (record.kind !== "using" || record.conditions.length) return false;
+    const spelling = record.tokens.join("");
+    const literalNamespace = spelling === "usingnamespacestd::string_literals;";
+    const name = /^usingstd::([A-Za-z_]\w*);$/.exec(spelling)?.[1];
+    const literalUse = (token, index, all) =>
+      token.text === "s" &&
+      all[index - 1]?.text.endsWith('"') &&
+      all[index - 1].end === token.start;
+    if (!name && !literalNamespace) return false;
+    const containsScope = (outer, inner) =>
+      !outer || outer === inner || inner.startsWith(`${outer}::`);
+    const containsConditions = (outer, inner) =>
+      outer.length <= inner.length &&
+      outer.every((condition, index) => JSON.stringify(condition) === JSON.stringify(inner[index]));
+    function guardedHeader(file, source, unit, parts) {
+      if (!file.endsWith(".h") || unit.scope || parts.length !== 1) return false;
+      const guard = /^\s*#\s*ifndef\s+([A-Za-z_]\w*)\s*\n\s*#\s*define\s+\1\s*\n/.exec(source);
+      return Boolean(
+        guard && !source.slice(0, unit.start).trim() && !source.slice(unit.end).trim(),
+      );
+    }
+    function available(
+      file,
+      source,
+      scope,
+      conditions,
+      offset,
+      limit,
+      wantedScope,
+      wantedConditions,
+      seen,
+    ) {
+      const syntax = structure(source);
+      for (const unit of syntax.units) {
+        if (offset + unit.start >= limit) continue;
+        const owner = [scope, unit.scope].filter(Boolean).join("::");
+        const text = source.slice(unit.start, unit.end);
+        if (
+          unit.kind === "using" &&
+          offset + unit.end <= limit &&
+          containsScope(owner, wantedScope) &&
+          containsConditions(conditions, wantedConditions) &&
+          tokenTexts(text).join("") === spelling &&
+          !(omitOwn && file === record.file && owner === record.scope && !conditions.length)
+        )
+          return true;
+        if (unit.kind === "conditional") {
+          const parts = conditionalParts(text);
+          const guard = guardedHeader(file, source, unit, parts);
+          for (const part of parts) {
+            const nested = guard ? conditions : [...conditions, part.condition];
+            if (
+              containsConditions(nested, wantedConditions) &&
+              available(
+                file,
+                part.source,
+                owner,
+                nested,
+                offset + unit.start + part.start,
+                limit,
+                wantedScope,
+                wantedConditions,
+                seen,
+              )
             )
-          )
-            return true;
+              return true;
+          }
         }
       }
-    }
-    for (const directive of syntax.directives) {
-      if (offset + directive.end > limit) continue;
-      const include = /^\s*#\s*include\s*["<]([^">]+)[">]/.exec(directive.text)?.[1];
-      if (!include || !containsConditions(conditions, wantedConditions)) continue;
-      const included = [
-        path.posix.join(path.posix.dirname(file), include),
-        include,
-        `support/${include}`,
-      ].find((candidate) => Object.hasOwn(tree, candidate));
-      if (!included || seen.has(included)) continue;
-      const owner = [scope, directive.scope].filter(Boolean).join("::");
-      if (
-        available(
-          included,
-          tree[included],
-          owner,
-          conditions,
-          0,
-          Infinity,
-          wantedScope,
-          wantedConditions,
-          new Set([...seen, included]),
+      for (const directive of syntax.directives) {
+        if (offset + directive.end > limit) continue;
+        const include = /^\s*#\s*include\s*["<]([^">]+)[">]/.exec(directive.text)?.[1];
+        if (!include || !containsConditions(conditions, wantedConditions)) continue;
+        const included = [
+          path.posix.join(path.posix.dirname(file), include),
+          include,
+          `support/${include}`,
+        ].find((candidate) => Object.hasOwn(tree, candidate));
+        if (!included || seen.has(included)) continue;
+        const owner = [scope, directive.scope].filter(Boolean).join("::");
+        if (
+          available(
+            included,
+            sourceFile(included),
+            owner,
+            conditions,
+            0,
+            Infinity,
+            wantedScope,
+            wantedConditions,
+            new Set([...seen, included]),
+          )
         )
-      )
-        return true;
+          return true;
+      }
+      return false;
     }
-    return false;
-  }
-  let matchedConsumer = consumer === undefined;
-  function consumers(source, scope = "", conditions = [], offset = 0) {
-    if (literalNamespace && !cppTokens(source).some(literalUse)) return true;
-    for (const unit of structure(source).units) {
-      const owner = [scope, unit.scope].filter(Boolean).join("::");
-      const text = source.slice(unit.start, unit.end);
-      if (unit.kind === "conditional") {
-        for (const part of branches(text))
+    let matchedConsumer = consumer === undefined;
+    function consumers(source, scope = "", conditions = [], offset = 0) {
+      if (literalNamespace && !lexicalTokens(source).some(literalUse)) return true;
+      for (const unit of structure(source).units) {
+        const owner = [scope, unit.scope].filter(Boolean).join("::");
+        const text = source.slice(unit.start, unit.end);
+        if (unit.kind === "conditional") {
+          for (const part of conditionalParts(text))
+            if (
+              !consumers(
+                part.source,
+                owner,
+                [...conditions, part.condition],
+                offset + unit.start + part.start,
+              )
+            )
+              return false;
+        } else if (unit.kind !== "using" && containsScope(record.scope, owner)) {
           if (
-            !consumers(
-              part.source,
+            consumer &&
+            (consumer.scope !== owner ||
+              JSON.stringify(consumer.conditions) !== JSON.stringify(conditions) ||
+              JSON.stringify(consumer.tokens) !== JSON.stringify(tokenTexts(text)))
+          )
+            continue;
+          matchedConsumer = true;
+          const uses = lexicalTokens(text).some((token, index, all) =>
+            literalNamespace
+              ? literalUse(token, index, all)
+              : token.text === name && !/(?:::|\.|->)\s*$/.test(text.slice(0, token.start)),
+          );
+          if (
+            uses &&
+            !available(
+              record.file,
+              sourceFile(record.file),
+              "",
+              [],
+              0,
+              offset + unit.start,
               owner,
-              [...conditions, part.condition],
-              offset + unit.start + part.start,
+              conditions,
+              new Set([record.file]),
             )
           )
             return false;
-      } else if (unit.kind !== "using" && containsScope(record.scope, owner)) {
-        if (
-          consumer &&
-          (consumer.scope !== owner ||
-            JSON.stringify(consumer.conditions) !== JSON.stringify(conditions) ||
-            JSON.stringify(consumer.tokens) !== JSON.stringify(tokens(text)))
-        )
-          continue;
-        matchedConsumer = true;
-        const uses = cppTokens(text).some((token, index, all) =>
-          literalNamespace
-            ? literalUse(token, index, all)
-            : token.text === name && !/(?:::|\.|->)\s*$/.test(text.slice(0, token.start)),
-        );
-        if (
-          uses &&
-          !available(
-            record.file,
-            tree[record.file],
-            "",
-            [],
-            0,
-            offset + unit.start,
-            owner,
-            conditions,
-            new Set([record.file]),
-          )
-        )
-          return false;
+        }
       }
+      return true;
     }
-    return true;
-  }
-  try {
-    return consumers(tree[record.file]) && matchedConsumer;
-  } catch {
-    // Unsupported lexical contexts never grant a preservation exception.
-    return false;
-  }
+    try {
+      return consumers(sourceFile(record.file)) && matchedConsumer;
+    } catch {
+      // Unsupported lexical contexts never grant a preservation exception.
+      return false;
+    }
+  };
 }
 /** Seal the cumulative permitted code, binding names, branch contexts and physical
  * module ownership at a task endpoint. This private contract contains no source-order
@@ -410,6 +434,7 @@ export function evaluateCoherentContract(tree, contract) {
     left.scope === right.scope &&
     JSON.stringify(left.conditions) === JSON.stringify(right.conditions) &&
     JSON.stringify(left.tokens) === JSON.stringify(right.tokens);
+  const importContext = createStandardUsingContext(tree);
   for (const { id, count, ...record } of contract.obligations) {
     const key = JSON.stringify(record);
     const found = actual?.get(key)?.count ?? 0;
@@ -417,7 +442,7 @@ export function evaluateCoherentContract(tree, contract) {
       record.kind === "using" &&
       !record.conditions.length &&
       record.tokens.join("") === "usingnamespacestd::string_literals;";
-    const context = Boolean(actual) && standardUsingContext(tree, record);
+    const context = Boolean(actual) && importContext(record);
     const inherited =
       found === 0 &&
       context &&
@@ -439,9 +464,8 @@ export function evaluateCoherentContract(tree, contract) {
       !record.conditions.length &&
       record.tokens.join("") === "usingnamespacestd::string_literals;";
     const harmless = literalNamespace
-      ? contract.obligations.some((item) => sameImport(item, record)) &&
-        standardUsingContext(tree, record)
-      : standardUsingContext(tree, record, true);
+      ? contract.obligations.some((item) => sameImport(item, record)) && importContext(record)
+      : importContext(record, true);
     add(createHash("sha256").update(record.key).digest("hex"), harmless ? "pass" : "fail", {
       kind: harmless ? "using-context" : "unexpected",
       file: record.file,
