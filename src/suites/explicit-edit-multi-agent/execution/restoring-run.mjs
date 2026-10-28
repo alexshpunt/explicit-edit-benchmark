@@ -6,6 +6,7 @@ import { MULTI_AGENT_BENCHMARK } from "../results.mjs";
 import {
   RESTORING_MULTI_AGENT_PROTOCOL,
   RESTORING_MULTI_AGENT_POLICY,
+  RESTORING_FRESH_AGENT_POLICY,
 } from "../restoring-results.mjs";
 import { prepareBarrierSymbolMap } from "../grading/barrier-symbol-map.mjs";
 import { prepareAtomicRoundCredit } from "../grading/atomic-round-credit.mjs";
@@ -18,6 +19,8 @@ import {
 } from "../reference/concurrent-executor.mjs";
 import { ATOMIC_DISPATCH_POLICY, runAtomicStream } from "./atomic-stream.mjs";
 import { startBaseline, finalizedUsage } from "./pi-baseline.mjs";
+import { createDeliveryPool } from "./delivery-pool.mjs";
+import { restoringAgentProfile } from "./agent-profile.mjs";
 import {
   captureCandidate,
   assertCandidateUnchanged,
@@ -31,16 +34,19 @@ import {
   restoringRunIdentity,
   createRestoringProof,
   validateRestoringProof,
+  validateRestoringTaskProof,
 } from "./restoring-proof.mjs";
 
 const json = async (file) => JSON.parse(await readFile(file, "utf8"));
 const passed = (row) =>
   row.passedAtoms === row.totalAtoms && row.buildPassed && row.resultMatched && row.integrityPassed;
 
-/** Separate restoring methodology. Historical checkpoints and proofs are never inputs.
+/** Grade drained restoring rounds. Legacy runs require an exact source-bound
+ * proof; explicit profiles may reuse validated workload-feasibility evidence.
  * Every round is measured from one drained, raw shared candidate. Six ordinary
  * editing attempts share that candidate; pass or exhaustion restores the trusted
- * current endpoint without credit, replacement processes or idle inference.
+ * current endpoint without credit or idle inference. Explicit execution profiles
+ * select participant lifetime independently of the immutable task schedule.
  */
 export async function runRestoring(
   preparationPath,
@@ -54,6 +60,8 @@ export async function runRestoring(
     allowModelCalls = false,
     batchSize = ATOMIC_DISPATCH_POLICY.defaultBatchSize,
     referenceBatchSize,
+    agentLifecycle,
+    maxConcurrentAgents,
     buildWeight = 2,
     resultWeight = 4,
     signal: externalSignal,
@@ -62,6 +70,7 @@ export async function runRestoring(
   } = {},
 ) {
   const started = performance.now();
+  restoringAgentProfile({ agentLifecycle, maxConcurrentAgents });
   assert.ok(Number.isSafeInteger(batchSize) && batchSize > 0, "Invalid restoring delivery size");
   roundScore(
     { passedAtoms: 0, totalAtoms: 1, buildPassed: false, resultMatched: false },
@@ -96,7 +105,7 @@ export async function runRestoring(
     output = path.resolve(outputPath);
   const drivers = [],
     notices = [];
-  let report, workspace, boundary, identity;
+  let report, workspace, boundary, identity, pool;
   let saving = Promise.resolve();
   const save = () => {
     saving = saving.then(async () => {
@@ -115,20 +124,45 @@ export async function runRestoring(
       const loaded = await loadRestoringPreparation(preparationPath, { agents });
       agents = loaded.agents;
       const { manifest, schedule, atomicIntervals } = loaded;
-      identity = restoringRunIdentity(loaded, await restoringSourceIdentity(), {
+      const source = await restoringSourceIdentity();
+      assert.equal(source.sourceClean, true, "Restoring execution requires clean committed source");
+      const privateConfig = configPath ? await json(configPath) : {};
+      const profile = restoringAgentProfile(
+        { agentLifecycle, maxConcurrentAgents },
+        privateConfig,
+        agents,
+      );
+      assert.ok(
+        !referenceRun || !profile.selected,
+        "Reference execution uses persistent participants",
+      );
+      const profileFields = profile.selected
+        ? {
+            agentLifecycle: profile.agentLifecycle,
+            maxConcurrentAgents: profile.maxConcurrentAgents,
+          }
+        : {};
+      identity = restoringRunIdentity(loaded, source, {
         protocol: RESTORING_MULTI_AGENT_PROTOCOL,
-        policy: RESTORING_MULTI_AGENT_POLICY,
+        policy:
+          profile.agentLifecycle === "per-delivery"
+            ? RESTORING_FRESH_AGENT_POLICY
+            : RESTORING_MULTI_AGENT_POLICY,
         batchSize,
         buildWeight,
         resultWeight,
+        ...profileFields,
       });
-      // No participant is constructed until both fresh source identity and the
-      // new full-scope proof match. Old preparation verification files are ignored.
-      if (!referenceRun) validateRestoringProof(await json(proofPath), identity);
+      let authorization;
+      if (!referenceRun) {
+        const proof = await json(proofPath);
+        if (profile.selected) authorization = validateRestoringTaskProof(proof, identity);
+        else validateRestoringProof(proof, identity);
+      }
       let config,
         runtime = null;
       if (configPath) {
-        config = await json(configPath);
+        config = profile.baseline;
         const installed = await json(
           path.join(config.runtime, "node_modules/@earendil-works/pi-coding-agent/package.json"),
         );
@@ -148,6 +182,7 @@ export async function runRestoring(
       workspace = path.join(output, "workspace");
       report = {
         ...identity,
+        ...(authorization ? { authorization } : {}),
         version: RESTORING_RUN_VERSION,
         benchmark: MULTI_AGENT_BENCHMARK,
         mode: referenceRun ? "reference" : "measured",
@@ -201,23 +236,48 @@ export async function runRestoring(
       boundary = initial;
       await save();
       if (!live) await prepareConcurrentExecutor(path.join(output, "executor"));
-      for (let agent = 0; agent < agents; agent++) {
-        signal.throwIfAborted();
-        const state = path.join(output, `agent-${agent}`);
-        const driver = createDriver
-          ? await createDriver(workspace, state, agent)
-          : config
-            ? await startBaseline(workspace, state, config, {
-                signal,
-                eventsFile: path.join(output, `agent-${agent}-events.jsonl`),
-                enforceProcessBoundary: true,
-              })
-            : concurrentExecutor(workspace, path.join(output, "executor"), { signal });
-        drivers.push(driver);
-        notices.push([]);
+      if (profile.selected) {
+        report.participants = [];
+        pool = createDeliveryPool({
+          size: profile.size,
+          agentLifecycle: profile.agentLifecycle,
+          usage: (driver) => (Array.isArray(driver.events) ? finalizedUsage(driver.events) : null),
+          createDriver: async (agent, session) => {
+            signal.throwIfAborted();
+            const state = path.join(output, `agent-${session}`);
+            return createDriver
+              ? createDriver(workspace, state, agent)
+              : startBaseline(workspace, state, config, {
+                  signal,
+                  eventsFile: path.join(output, `agent-${session}-events.jsonl`),
+                  enforceProcessBoundary: true,
+                });
+          },
+          onParticipant: ({ agent, session, participant }) => {
+            report.participants.push({ agent, session, ...participant });
+          },
+        });
+        drivers.push(...pool.drivers);
+        notices.push(...Array.from({ length: profile.size }, () => []));
+      } else {
+        for (let agent = 0; agent < agents; agent++) {
+          signal.throwIfAborted();
+          const state = path.join(output, `agent-${agent}`);
+          const driver = createDriver
+            ? await createDriver(workspace, state, agent)
+            : config
+              ? await startBaseline(workspace, state, config, {
+                  signal,
+                  eventsFile: path.join(output, `agent-${agent}-events.jsonl`),
+                  enforceProcessBoundary: true,
+                })
+              : concurrentExecutor(workspace, path.join(output, "executor"), { signal });
+          drivers.push(driver);
+          notices.push([]);
+        }
+        await Promise.all(drivers.map((driver) => driver.ready));
+        report.participants = await Promise.all(drivers.map((driver) => driver.assertIdle()));
       }
-      await Promise.all(drivers.map((driver) => driver.ready));
-      report.participants = await Promise.all(drivers.map((driver) => driver.assertIdle()));
       await save();
       let rotation = 0,
         lastProgressSave = performance.now();
@@ -254,7 +314,7 @@ export async function runRestoring(
             resultWeight,
             executeAttempt: async ({ attempt }) => {
               log(
-                `EDIT ${round.id}: maximum ${agents} persistent agents, attempt ${attempt}/${referenceRun ? 1 : 6}`,
+                `EDIT ${round.id}: maximum ${drivers.length} ${profile.agentLifecycle} agents, attempt ${attempt}/${referenceRun ? 1 : 6}`,
               );
               const repair = attempt > 1;
               const repairId = (id) => `repair-${round.id}-attempt-${attempt}-${id}`;
@@ -268,7 +328,7 @@ export async function runRestoring(
               const state = { round: round.id, attempt, dispatched: [], status: "delivering" };
               report.atomicBarriers.push(state);
               const stream = await runAtomicStream(nodes, {
-                agents,
+                agents: drivers.length,
                 rotation,
                 batchSize: deliveryBatchSize,
                 signal,
@@ -324,27 +384,35 @@ export async function runRestoring(
                     (diagnostics.length
                       ? `\n\nCandidate compiler diagnostics:\n${JSON.stringify(diagnostics)}`
                       : "") +
-                    `\n\nYou share this writable project with up to ${agents} persistent agents, each with a separate retained history. Other agents may edit the same files concurrently. This round assigns ${context.assignedParticipants} agents; ${context.activeDeliveries} editing deliveries are active at this dispatch, including yours.`;
+                    `\n\nYou share this writable project with up to ${drivers.length} agents. Other agents may edit the same files concurrently. This round assigns ${context.assignedParticipants} slots; ${context.activeDeliveries} editing deliveries are active at this dispatch, including yours.` +
+                    (profile.agentLifecycle === "per-delivery"
+                      ? " Inspect the current shared files for this delivery. Your session receives one original packet and may continue for recovery within this round."
+                      : " Retain your separate history across deliveries.");
                   try {
-                    if (live)
-                      item.receipt = await drivers[agent].execute(prompt, {
-                        signal: deliverySignal,
-                        round: round.id,
-                        attempt,
-                        batchSize: deliveryBatchSize,
-                        atomicId: members[0].id,
-                        atomicIds,
-                        diagnostics,
-                        ...(repair
-                          ? { deliveryKind: "barrier-repair", repairTasks: editingTasks }
-                          : {}),
-                      });
-                    else {
-                      item.receipts = await drivers[agent].executeBatch(editingTasks, {
-                        notices: queued,
-                      });
-                      for (const receipt of item.receipts) report.conflicts += receipt.conflicts;
-                    }
+                    const execute = async (driver, record) => {
+                      if (record) item.session = record.session;
+                      if (live)
+                        item.receipt = await driver.execute(prompt, {
+                          signal: deliverySignal,
+                          round: round.id,
+                          attempt,
+                          batchSize: deliveryBatchSize,
+                          atomicId: members[0].id,
+                          atomicIds,
+                          diagnostics,
+                          ...(repair
+                            ? { deliveryKind: "barrier-repair", repairTasks: editingTasks }
+                            : {}),
+                        });
+                      else {
+                        item.receipts = await driver.executeBatch(editingTasks, {
+                          notices: queued,
+                        });
+                        for (const receipt of item.receipts) report.conflicts += receipt.conflicts;
+                      }
+                    };
+                    if (pool) await pool.execute(agent, repair, execute);
+                    else await execute(drivers[agent]);
                     notices[agent].splice(0, queued.length);
                     item.status = "settled";
                   } catch (error) {
@@ -404,6 +472,10 @@ export async function runRestoring(
           });
           const { boundary: restoredBoundary, ...observed } = result;
           boundary = restoredBoundary;
+          await pool?.closeRound();
+          await assertCandidateUnchanged(workspace, boundary, { signal });
+          if (profile.agentLifecycle === "per-delivery")
+            for (const queue of notices) queue.length = 0;
           report.rounds.push(observed);
           await save();
           if (referenceRun && !passed(observed.attempts[0]))
@@ -438,12 +510,16 @@ export async function runRestoring(
     } finally {
       const closed = await Promise.allSettled(drivers.map((driver) => driver.close()));
       if (report) {
-        report.agentsClosed = drivers.map(
-          (driver, index) => closed[index].status === "fulfilled" && driver.closed === true,
-        );
+        report.agentsClosed = pool
+          ? pool.records.map((record) => record.closed === true)
+          : drivers.map(
+              (driver, index) => closed[index].status === "fulfilled" && driver.closed === true,
+            );
         if (
           report.status === "complete" &&
-          (drivers.length !== agents || report.agentsClosed.some((value) => !value))
+          ((pool ? pool.records.length === 0 : drivers.length !== agents) ||
+            closed.some((result) => result.status === "rejected") ||
+            report.agentsClosed.some((value) => !value))
         ) {
           report.status = "infrastructure";
           report.terminal = {
@@ -451,11 +527,13 @@ export async function runRestoring(
             message: "Participant shutdown did not drain every process",
           };
         }
-        const usage = drivers.map((driver) =>
-          Array.isArray(driver.events) ? finalizedUsage(driver.events) : null,
-        );
+        const usage = pool
+          ? pool.records.map((record) => record.usage)
+          : drivers.map((driver) =>
+              Array.isArray(driver.events) ? finalizedUsage(driver.events) : null,
+            );
         report.usage =
-          usage.length === agents && usage.every(Boolean)
+          usage.length > 0 && usage.every(Boolean)
             ? Object.fromEntries(
                 Object.keys(usage[0]).map((key) => [
                   key,
@@ -476,7 +554,7 @@ export async function runRestoring(
             report.status = "infrastructure";
           report.terminal ??= detail;
         };
-        for (let agent = 0; agent < drivers.length; agent++) {
+        for (let agent = 0; agent < (pool ? pool.records.length : drivers.length); agent++) {
           try {
             await rm(path.join(output, `agent-${agent}/pi/auth.json`), { force: true });
           } catch (error) {

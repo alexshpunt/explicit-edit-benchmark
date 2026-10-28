@@ -4,6 +4,11 @@ The separate public candidate is **Explicit Edit — Multi-Agent**. Start with i
 [clean-checkout run guide](multi-agent.md); this document describes the
 underlying experiment and scripted execution details.
 
+The native restoring entry point also supports
+[fresh agents for each packet](multi-agent.md#fresh-agents-for-each-packet), with a
+worker concurrency limit independent of the graph schedule. The persistent
+protocol described here remains available.
+
 This experiment uses the complete coherent restoration workload, not a smaller
 parallel-only task set. It keeps the same initial shuffled C++ monolith and the
 same public tasks. It is separate from V1 results and publication.

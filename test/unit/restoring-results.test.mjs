@@ -124,6 +124,95 @@ test("raw restoring evidence refuses early exhaustion, inflated atoms and histor
   }
 });
 
+function freshFixture() {
+  const raw = restoringFixture();
+  raw.agentLifecycle = "per-delivery";
+  raw.maxConcurrentAgents = 30;
+  raw.policy.participants = "fresh-session-per-original-delivery";
+  raw.policy.idle = "round-local-recovery-contexts";
+  raw.participants = [
+    { agent: 0, sessionId: "private-first-session" },
+    { agent: 1, sessionId: "private-second-session" },
+    { agent: 29, sessionId: "private-last-session" },
+  ];
+  raw.agentsClosed = [true, true, true];
+  raw.executions[0].agent = 29;
+  return raw;
+}
+
+test("fresh delivery results retain lifecycle and concurrency without exporting session identities", () => {
+  const result = restoringMultiAgentResult(freshFixture());
+  assert.equal(result.configuration.agentLifecycle, "per-delivery");
+  assert.equal(result.configuration.maxConcurrentAgents, 30);
+  assert.equal(result.configuration.agents, 2);
+  assert.equal(result.execution.agentsClosed, true);
+  assert.equal(result.score.final.score, 53.125);
+  assert.equal(Object.hasOwn(result, "participants"), false);
+  assert.ok(!JSON.stringify(result).includes("private-first-session"));
+  assert.deepEqual(validateMultiAgentResult(result), result);
+});
+
+test("an explicit persistent cap can use fewer processes without changing the planned schedule", () => {
+  const raw = restoringFixture();
+  raw.agentLifecycle = "persistent";
+  raw.maxConcurrentAgents = 1;
+  raw.participants = [{ agent: 0, sessionId: "private-session" }];
+  raw.agentsClosed = [true];
+  for (const execution of raw.executions) execution.agent = 0;
+  const result = restoringMultiAgentResult(raw);
+  assert.equal(result.configuration.agents, 2);
+  assert.equal(result.configuration.maxConcurrentAgents, 1);
+  assert.equal(result.execution.agentsClosed, true);
+  assert.deepEqual(result.plannedAtoms, raw.plannedAtoms);
+});
+
+test("an explicit persistent pool need not start slots without assigned work", () => {
+  const raw = restoringFixture();
+  raw.agentLifecycle = "persistent";
+  raw.maxConcurrentAgents = 2;
+  raw.participants = [{ agent: 0, sessionId: "private-session" }];
+  raw.agentsClosed = [true];
+  for (const execution of raw.executions) execution.agent = 0;
+  assert.equal(restoringMultiAgentResult(raw).execution.agentsClosed, true);
+  raw.participants.push({ ...raw.participants[0] });
+  raw.agentsClosed.push(true);
+  assert.throws(() => restoringMultiAgentResult(raw));
+});
+test("result identity binds fresh lifecycle and the independent concurrency limit", () => {
+  const original = restoringMultiAgentResult(freshFixture());
+  const changed = freshFixture();
+  changed.maxConcurrentAgents = 31;
+  assert.notEqual(restoringMultiAgentResult(changed).comparisonKey, original.comparisonKey);
+  assert.notEqual(
+    original.comparisonKey,
+    restoringMultiAgentResult(restoringFixture()).comparisonKey,
+  );
+  original.configuration.maxConcurrentAgents = 31;
+  assert.throws(() => validateMultiAgentResult(original), { code: "ERR_ASSERTION" });
+});
+
+test("fresh results reject missing, invalid or contradictory lifecycle evidence", () => {
+  for (const mutate of [
+    (raw) => delete raw.agentLifecycle,
+    (raw) => delete raw.maxConcurrentAgents,
+    (raw) => (raw.agentLifecycle = "unknown"),
+    (raw) => (raw.maxConcurrentAgents = 0),
+    (raw) => (raw.maxConcurrentAgents = 1.5),
+    (raw) => (raw.maxConcurrentAgents = Number.MAX_SAFE_INTEGER + 1),
+    (raw) => (raw.executions[0].agent = 30),
+    (raw) => raw.agentsClosed.pop(),
+    (raw) => (raw.agentsClosed[1] = false),
+    (raw) => delete raw.participants,
+    (raw) => (raw.participants = []),
+    (raw) => (raw.policy.participants = "maximum-occupancy-persistent-processes"),
+    (raw) => (raw.mode = "reference"),
+  ]) {
+    const raw = freshFixture();
+    mutate(raw);
+    assert.throws(() => restoringMultiAgentResult(raw), { code: "ERR_ASSERTION" });
+  }
+});
+
 test("comparison identities separate maximum occupancy, batch and valid weight configurations", () => {
   const original = restoringMultiAgentResult(restoringFixture());
   for (const mutate of [

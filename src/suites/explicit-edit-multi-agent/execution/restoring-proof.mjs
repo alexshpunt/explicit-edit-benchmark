@@ -25,7 +25,15 @@ const inventory = (ids) =>
 export function restoringRunIdentity(
   loaded,
   source,
-  { protocol, policy, batchSize, buildWeight = 2, resultWeight = 4 },
+  {
+    protocol,
+    policy,
+    batchSize,
+    buildWeight = 2,
+    resultWeight = 4,
+    agentLifecycle,
+    maxConcurrentAgents,
+  },
 ) {
   const {
     manifest,
@@ -39,11 +47,17 @@ export function restoringRunIdentity(
     plannedAtoms,
   } = loaded;
   const intervals = schedule.map(({ id }) => atomicIntervals.rounds.get(id));
+  const profile =
+    agentLifecycle !== undefined || maxConcurrentAgents !== undefined
+      ? { agentLifecycle, maxConcurrentAgents }
+      : {};
+  const participants = participantLimit({ agents, ...profile });
   const identity = {
     ...source,
     protocol,
     policy: { ...policy, buildWeight, resultWeight },
     agents,
+    ...profile,
     batchSize,
     graphWidth: graph.width,
     workloadSha256: manifest.workloadSha256,
@@ -68,12 +82,29 @@ export function restoringRunIdentity(
     })),
     maxAssignedParticipants: Math.max(
       ...intervals.map(
-        ({ nodes }) => partitionAtomicQueues(nodes, agents).filter((queue) => queue.length).length,
+        ({ nodes }) =>
+          partitionAtomicQueues(nodes, participants).filter((queue) => queue.length).length,
       ),
     ),
   };
   validateIdentity(identity);
   return identity;
+}
+
+function participantLimit(identity) {
+  if (!Object.hasOwn(identity, "agentLifecycle") && !Object.hasOwn(identity, "maxConcurrentAgents"))
+    return identity.agents;
+  assert.ok(
+    ["persistent", "per-delivery"].includes(identity.agentLifecycle),
+    "Invalid agent lifecycle",
+  );
+  assert.ok(
+    Number.isSafeInteger(identity.maxConcurrentAgents) && identity.maxConcurrentAgents > 0,
+    "Invalid concurrent agent limit",
+  );
+  return identity.agentLifecycle === "per-delivery"
+    ? identity.maxConcurrentAgents
+    : Math.min(identity.agents, identity.maxConcurrentAgents);
 }
 
 function validateIdentity(identity) {
@@ -102,7 +133,10 @@ function validateIdentity(identity) {
       Number.isSafeInteger(identity[key]) && identity[key] > 0,
       "Invalid restoring proof scope",
     );
-  assert.ok(identity.maxAssignedParticipants <= identity.agents, "Invalid restoring occupancy");
+  assert.ok(
+    identity.maxAssignedParticipants <= participantLimit(identity),
+    "Invalid restoring occupancy",
+  );
   assert.equal(identity.plannedAtoms.length, identity.totalRounds);
   assert.equal(new Set(identity.plannedAtoms.map(({ round }) => round)).size, identity.totalRounds);
   assert.equal(
@@ -286,6 +320,58 @@ export function createRestoringProof(report, identity) {
   };
   validateRestoringProof(proof, identity);
   return proof;
+}
+
+/** Reuse a fully validated reference as workload-feasibility evidence only.
+ * Current source must remain clean and fully identified; its process lifecycle
+ * and concurrency are checked separately, not certified by the retained run.
+ */
+export function validateRestoringTaskProof(proof, identity) {
+  validateRestoringProof(proof, proof.identity);
+  validateIdentity(identity);
+  assert.ok(Object.hasOwn(identity, "agentLifecycle"), "Task proof requires an execution profile");
+  assert.ok(
+    Object.hasOwn(identity, "maxConcurrentAgents"),
+    "Task proof requires an execution limit",
+  );
+  for (const key of [
+    "protocol",
+    "agents",
+    "graphWidth",
+    "workloadSha256",
+    "graphSha256",
+    "scheduleSha256",
+    "contractHashes",
+    "atomic",
+    "initial",
+    "expectedFinal",
+    "totalTasks",
+    "totalRounds",
+    "totalAtoms",
+    "atomicInventorySha256",
+    "plannedAtoms",
+    "roundEndpoints",
+    "roundInventories",
+  ]) {
+    assert.notEqual(identity[key], undefined, "Missing current task scope");
+    assert.notEqual(proof.identity[key], undefined, "Missing retained task scope");
+    assert.deepEqual(identity[key], proof.identity[key], "Retained task workload differs");
+  }
+  const gradingPolicy = (policy) =>
+    Object.fromEntries(
+      Object.entries(policy).filter(([key]) => !["participants", "idle"].includes(key)),
+    );
+  assert.deepEqual(
+    gradingPolicy(identity.policy),
+    gradingPolicy(proof.identity.policy),
+    "Retained task grading policy differs",
+  );
+  return {
+    kind: "retained-task-feasibility",
+    sourceCommit: proof.identity.sourceCommit,
+    runnerSha256: proof.identity.runnerSha256,
+    verifierSha256: proof.identity.verifierSha256,
+  };
 }
 
 /** All authorization fields and derived evidence are rechecked at consumption. */

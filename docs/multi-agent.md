@@ -165,10 +165,12 @@ protocol and source identities. The original 226-task suite is unchanged.
 
 ### Native restoring entry points
 
-Use the installed, approved Pi 1.3.0 runtime. Baseline keeps one actual process per
-participant, with Bash only and an empty system prompt. A fresh process with a
-continued session is not a persistent participant. Idle checks request no
-inference and reject live tool descendants before measurement or restoration.
+Use the installed, approved Pi 1.3.0 runtime. Baseline uses Bash only and an
+empty system prompt. The default `persistent` lifecycle keeps one actual process
+and conversation per participant. A fresh process with a continued session is not
+a persistent participant. The `per-delivery` lifecycle starts a fresh agent for
+each original packet, as described below. Idle checks request no inference and
+reject live tool descendants before measurement or restoration.
 A detached background writer is a runtime/infrastructure violation, not another
 editing attempt.
 
@@ -176,11 +178,12 @@ The integration fixture in `test/renderer/restoring.test.mjs` uses real persiste
 Pi processes with a local scripted provider. It covers six editing failures,
 current-round restoration and later edits, plus process death, cancellation,
 a detached writer, restoration failure and workspace loss. A wording-only source
-variant must pass with its own proof; neither fixture proof replaces the required
-full-workload reference proof.
+variant must pass with its own proof. Fixture proofs do not replace the required
+full-workload reference proof for unconfigured persistent observations.
 
-Reuse an audited full preparation. Generate a separate, model-free proof with the
-same maximum occupancy, intended measured batch size and weights as the observation.
+Reuse an audited full preparation. For unconfigured persistent execution, generate a separate,
+model-free proof with the same maximum occupancy, intended measured batch size
+and weights as the observation.
 `--reference-batch-size` controls scripted reference deliveries only. It defaults
 to `--batch-size` and can be larger to reduce reference dispatch overhead:
 
@@ -195,16 +198,18 @@ round must pass its first reference check. A failed reference candidate is
 preserved without restoration, then verification stops as ineligible. Reference
 verification cannot use five corrections to manufacture a passing proof.
 
-An authorizing `renderer-restoring-execution-proof-v2` proof requires clean,
-committed source. It binds the exact commit, verifier, execution code, dependency
-lockfile, immutable workload and graph, every original atom and canonical endpoint,
+For unconfigured persistent execution, an authorizing `renderer-restoring-execution-proof-v2`
+proof requires clean, committed source. It binds the exact commit, verifier,
+execution code, dependency lockfile, immutable workload and graph, every original atom and canonical endpoint,
 schedule, grading policy and intended measured batch size. The reference delivery
 size is recorded and validated separately. Larger reference batches leave the
 original atom inventory, round endpoints and grading unchanged; they do not change
 the measured agents' delivery size.
-Historical preparation proofs do not authorize this protocol. A changed commit,
-dirty source, different measured batch or changed weight requires a new matching
-proof. Dirty source is rejected before reference execution begins.
+Historical preparation proofs do not authorize this protocol. Unconfigured persistent execution
+requires a new matching proof after a changed commit, measured batch or weight.
+Dirty source is rejected before reference execution begins. Explicit lifecycle or concurrency
+profiles can reuse a retained restoring execution proof for the same immutable workload,
+under the validation described below.
 
 Keep native configuration private and outside the shared candidate. Use absolute
 paths for the approved runtime root and existing credential files:
@@ -235,6 +240,55 @@ node scripts/multi-agent.mjs run-restoring PRIVATE_PREPARATION \
   --config PRIVATE_NATIVE_CONFIG.json \
   --proof .tmp/restoring-proof/verification.json --allow-model-calls
 ```
+
+#### Fresh agents for each packet
+
+Choose `per-delivery` to give every original edit packet a new process and an empty
+conversation. Completed agents receive no later original packet. Recovery may
+continue a context from the same round; later rounds start fresh. The agents still
+edit one live shared project. Dependencies, planned rounds, original atom checks,
+correction budget, integrity veto and Score are unchanged.
+
+`--agents` selects the graph schedule. `--max-concurrent-agents` independently
+limits the live worker pool; it does not change planned round boundaries. Across
+the whole run, the controller can create more agents than this limit. The
+per-delivery default limit is 30. Persistent execution defaults to its scheduled
+team size and can use a lower explicit concurrency limit.
+
+The following invocation selects fresh agents with a maximum of 30 live workers:
+
+```sh
+node scripts/multi-agent.mjs run-restoring PRIVATE_PREPARATION \
+  .tmp/fresh-observation --agents 15 --batch-size 10 \
+  --agent-lifecycle per-delivery --max-concurrent-agents 30 \
+  --config PRIVATE_NATIVE_CONFIG.json \
+  --proof RETAINED_RESTORING_VERIFICATION.json --allow-model-calls
+```
+
+Both settings can instead be added to the private native configuration:
+
+```json
+{
+  "agentLifecycle": "per-delivery",
+  "maxConcurrentAgents": 30
+}
+```
+
+Explicit command-line values override configuration values. Use
+`--agent-lifecycle persistent` to select the long-lived team. Without either
+setting, existing persistent runs retain their original behavior.
+
+An explicit lifecycle or concurrency profile validates the retained restoring proof's original evidence
+and matches its immutable workload, graph, schedule, atom inventories, contracts,
+canonical endpoints and grading requirements. It records the current runner
+identity, selected lifecycle and concurrency separately. This reuses the established
+feasibility of the requested edits without a new full scripted reference run.
+A missing, failed or incompatible retained proof is rejected. Reference
+verification itself does not accept lifecycle or concurrency flags.
+
+Safe exported results include explicit lifecycle and concurrency settings when
+present. They bind these settings to the result identity without exporting
+private participant sessions or conversation contents.
 
 Both commands keep private raw evidence in fresh output directories. Every
 candidate is captured before interpretation, including malformed bytes,

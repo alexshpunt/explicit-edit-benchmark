@@ -17,7 +17,7 @@ Separate from the existing 226-task benchmark and its Score.
   verify PREPARATION NEW_OUTPUT [--agents auto|N] [--batch-size N]
   run PREPARATION NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls [--agents auto|N] [--batch-size N]
   verify-restoring PREPARATION NEW_OUTPUT [--agents auto|N] [--batch-size N] [--reference-batch-size N] [--build-weight W] [--result-weight W]
-  run-restoring PREPARATION NEW_OUTPUT --config PRIVATE_JSON --proof NEW_PROOF --allow-model-calls [--agents auto|N] [--batch-size N] [--build-weight W] [--result-weight W]
+  run-restoring PREPARATION NEW_OUTPUT --config PRIVATE_JSON --proof NEW_PROOF --allow-model-calls [--agents auto|N] [--batch-size N] [--build-weight W] [--result-weight W] [--agent-lifecycle persistent|per-delivery] [--max-concurrent-agents N]
   export RUN_DIRECTORY NEW_RESULT_JSON
   validate RESULT_JSON
 
@@ -27,10 +27,15 @@ It requires a matching scripted team proof. It has no default time limits and ca
 spend model credit indefinitely. Cancel with Ctrl+C; failed edits are retained.
 Restoring commands use a separate methodology: partial original-atom round Score,
 independent build/output evidence and canonical end-of-current-round restoration.
-They keep the same participant processes after passes and six editing failures.
+The default persistent mode keeps participant processes between packets and rounds.
+--agent-lifecycle per-delivery gives every original packet a fresh agent; recovery
+may continue a round-local context. --max-concurrent-agents limits live workers
+independently of --agents, which still selects the graph schedule.
 verify-restoring writes a new proof only from clean, committed source. It never
-modifies historical preparation proofs. run-restoring requires that exact proof
-and a native persistent Baseline Pi 1.3.0 config. It has no delivery deadline.
+modifies historical preparation proofs. Unconfigured persistent runs require an
+exact proof; explicit lifecycle/concurrency profiles can validate retained
+restoring workload-feasibility evidence.
+Both modes require native Baseline Pi 1.3.0 and have no delivery deadline.
 --batch-size binds the measured delivery policy. verify-restoring alone accepts
 --reference-batch-size for scripted deliveries; it defaults to --batch-size.
 For 15 agents delivering 10 edits, reference verification may batch 100 edits:
@@ -76,6 +81,8 @@ export async function multiAgentMain(args) {
     },
     "run-restoring": {
       ...restoringOptions,
+      "agent-lifecycle": { type: "string" },
+      "max-concurrent-agents": { type: "string" },
       config: { type: "string" },
       proof: { type: "string" },
       "allow-model-calls": { type: "boolean", default: false },
@@ -150,6 +157,20 @@ export async function multiAgentMain(args) {
       (Number.isSafeInteger(referenceBatchSize) && referenceBatchSize > 0),
     "--reference-batch-size must be a positive integer",
   );
+  const agentLifecycle = values["agent-lifecycle"];
+  assert.ok(
+    agentLifecycle === undefined || ["persistent", "per-delivery"].includes(agentLifecycle),
+    "--agent-lifecycle must be persistent or per-delivery",
+  );
+  const maxConcurrentAgents =
+    values["max-concurrent-agents"] === undefined
+      ? undefined
+      : Number(values["max-concurrent-agents"]);
+  assert.ok(
+    maxConcurrentAgents === undefined ||
+      (Number.isSafeInteger(maxConcurrentAgents) && maxConcurrentAgents > 0),
+    "--max-concurrent-agents must be a positive integer",
+  );
   const weights = {};
   for (const [flag, field] of [
     ["build-weight", "buildWeight"],
@@ -180,6 +201,7 @@ export async function multiAgentMain(args) {
       ...(restoring
         ? {
             ...weights,
+            ...(command === "run-restoring" ? { agentLifecycle, maxConcurrentAgents } : {}),
             ...(command === "verify-restoring" ? { referenceBatchSize } : {}),
             proofPath: values.proof,
             allowModelCalls: values["allow-model-calls"] === true,

@@ -23,6 +23,12 @@ export const RESTORING_MULTI_AGENT_POLICY = Object.freeze({
   idle: "queue-notices-until-next-assignment-no-inference",
 });
 
+export const RESTORING_FRESH_AGENT_POLICY = Object.freeze({
+  ...RESTORING_MULTI_AGENT_POLICY,
+  participants: "fresh-session-per-original-delivery",
+  idle: "round-local-recovery-contexts",
+});
+
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const statuses = new Set(["complete", "driver_exit", "infrastructure", "cancelled"]);
 const failureCategories = new Set([
@@ -88,11 +94,20 @@ function safeLabel(value, nullable = false) {
     "Private public identity",
   );
 }
-function policy(value) {
-  keys(value, [...Object.keys(RESTORING_MULTI_AGENT_POLICY), "buildWeight", "resultWeight"]);
+function lifecycleConfiguration(value) {
+  return Object.fromEntries(
+    ["agentLifecycle", "maxConcurrentAgents"]
+      .filter((key) => Object.hasOwn(value, key))
+      .map((key) => [key, value[key]]),
+  );
+}
+function policy(value, agentLifecycle = "persistent") {
+  const expected =
+    agentLifecycle === "per-delivery" ? RESTORING_FRESH_AGENT_POLICY : RESTORING_MULTI_AGENT_POLICY;
+  keys(value, [...Object.keys(expected), "buildWeight", "resultWeight"]);
   assert.deepEqual(
-    Object.fromEntries(Object.keys(RESTORING_MULTI_AGENT_POLICY).map((key) => [key, value[key]])),
-    RESTORING_MULTI_AGENT_POLICY,
+    Object.fromEntries(Object.keys(expected).map((key) => [key, value[key]])),
+    expected,
     "Unsupported restoring methodology",
   );
   roundScore(
@@ -108,7 +123,15 @@ function policy(value) {
   return { ...value };
 }
 function configuration(value) {
-  keys(value, configurationKeys);
+  const lifecycle = Object.keys(lifecycleConfiguration(value)).length > 0;
+  keys(
+    value,
+    lifecycle ? [...configurationKeys, "agentLifecycle", "maxConcurrentAgents"] : configurationKeys,
+  );
+  if (lifecycle) {
+    assert.ok(["persistent", "per-delivery"].includes(value.agentLifecycle));
+    integer(value.maxConcurrentAgents, 1);
+  }
   for (const field of ["agents", "batchSize", "graphWidth"]) integer(value[field], 1);
   for (const field of ["model", "thinking"]) safeLabel(value[field], true);
   if (value.harness !== null) {
@@ -155,6 +178,7 @@ function comparisonKey(result) {
     identity,
     agents: result.configuration.agents,
     batchSize: result.configuration.batchSize,
+    ...lifecycleConfiguration(result.configuration),
     runtime: result.configuration.runtime,
     harness: result.configuration.harness,
     policy: result.policy,
@@ -190,7 +214,9 @@ export function validateRestoringMultiAgentResult(result) {
   for (const [field, value] of Object.entries(result.identity))
     if (!(field === "final" && value === null && result.status !== "complete")) digest(value);
   configuration(result.configuration);
-  policy(result.policy);
+  policy(result.policy, result.configuration.agentLifecycle);
+  if (result.mode === "reference")
+    assert.notEqual(result.configuration.agentLifecycle, "per-delivery");
   keys(result.progress, [
     "totalTasks",
     "totalRounds",
@@ -281,12 +307,19 @@ export function restoringMultiAgentResult(raw) {
   assert.equal(hash(raw.schedule), raw.scheduleSha256, "Schedule identity differs");
   assert.equal(raw.totalRounds, raw.schedule.length);
   plannedAtoms(raw.plannedAtoms, raw.totalRounds, raw.totalAtoms);
-  const config = Object.fromEntries(configurationKeys.map((key) => [key, raw[key] ?? null]));
+  const config = {
+    ...Object.fromEntries(configurationKeys.map((key) => [key, raw[key] ?? null])),
+    ...lifecycleConfiguration(raw),
+  };
   if (config.runtime)
     config.runtime = Object.fromEntries(
       ["agent", "version", "platform", "architecture"].map((key) => [key, raw.runtime[key]]),
     );
   configuration(config);
+  const poolSize =
+    config.agentLifecycle === "per-delivery"
+      ? config.maxConcurrentAgents
+      : Math.min(config.agents, config.maxConcurrentAgents ?? config.agents);
   const tasks = new Set();
   for (const [index, round] of raw.schedule.entries()) {
     assert.equal(round.id, raw.plannedAtoms[index].round);
@@ -348,7 +381,7 @@ export function restoringMultiAgentResult(raw) {
     assert.ok(order >= previous, "Delivery moved to an earlier attempt");
     previous = order;
     integer(delivery.agent);
-    assert.ok(delivery.agent < raw.agents);
+    assert.ok(delivery.agent < poolSize);
     const availableParents = raw.schedule
       .slice(0, position + 1)
       .flatMap((item) => item.assignments.map((assignment) => assignment.task));
@@ -428,7 +461,7 @@ export function restoringMultiAgentResult(raw) {
     status: raw.status,
     identity,
     configuration: config,
-    policy: policy(raw.policy),
+    policy: policy(raw.policy, config.agentLifecycle),
     plannedAtoms: raw.plannedAtoms.map((item) => ({ ...item })),
     rounds,
     progress: {
@@ -457,7 +490,19 @@ export function restoringMultiAgentResult(raw) {
       elapsedMs: raw.elapsedMs,
       agentsClosed:
         Array.isArray(raw.agentsClosed) &&
-        raw.agentsClosed.length === raw.agents &&
+        (config.agentLifecycle === undefined
+          ? raw.agentsClosed.length === raw.agents
+          : Array.isArray(raw.participants) &&
+            (config.agentLifecycle === "per-delivery"
+              ? raw.participants.length > 0
+              : raw.participants.length > 0 &&
+                raw.participants.length <= poolSize &&
+                new Set(raw.participants.map(({ agent }) => agent)).size ===
+                  raw.participants.length) &&
+            raw.agentsClosed.length === raw.participants.length &&
+            raw.participants.every(
+              ({ agent }) => Number.isSafeInteger(agent) && agent >= 0 && agent < poolSize,
+            )) &&
         raw.agentsClosed.every((value) => value === true),
     },
     terminal:

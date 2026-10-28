@@ -111,6 +111,58 @@ await test("restoring proof, config and model-call authorization are required be
   }
 });
 
+await test("measured restoring accepts explicit lifecycle and concurrency options", async () => {
+  for (const lifecycle of ["persistent", "per-delivery"]) {
+    await assert.rejects(
+      multiAgentMain([
+        "run-restoring",
+        "missing-preparation",
+        "missing-output",
+        "--config=private-config.json",
+        "--proof=missing-proof.json",
+        "--allow-model-calls",
+        `--agent-lifecycle=${lifecycle}`,
+        "--max-concurrent-agents=30",
+      ]),
+      { code: "ENOENT" },
+    );
+  }
+});
+
+await test("lifecycle and concurrency options reject invalid values before private input reads", async () => {
+  for (const option of [
+    "--agent-lifecycle=unknown",
+    "--agent-lifecycle=",
+    ...["0", "-1", "1.5", "Infinity", "9007199254740992", ""].map(
+      (value) => `--max-concurrent-agents=${value}`,
+    ),
+  ]) {
+    await assert.rejects(
+      multiAgentMain([
+        "run-restoring",
+        "missing-preparation",
+        "missing-output",
+        "--config=private-config.json",
+        "--proof=missing-proof.json",
+        "--allow-model-calls",
+        option,
+      ]),
+      { code: "ERR_ASSERTION" },
+    );
+  }
+});
+
+await test("reference and legacy commands reject measured lifecycle options", async () => {
+  for (const command of ["verify-restoring", "verify", "run"]) {
+    for (const option of ["--agent-lifecycle=per-delivery", "--max-concurrent-agents=30"]) {
+      await assert.rejects(
+        multiAgentMain([command, "missing-preparation", "missing-output", option]),
+        { code: "ERR_PARSE_ARGS_UNKNOWN_OPTION" },
+      );
+    }
+  }
+});
+
 await test("restoring weights are finite numbers at least one before loading preparation or execution", async () => {
   for (const flag of ["--build-weight", "--result-weight"]) {
     for (const value of ["0", "0.5", "-1", "Infinity", "NaN", "wrong"]) {
