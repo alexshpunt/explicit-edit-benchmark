@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { watch } from "node:fs";
+import { existsSync, watch } from "node:fs";
 import { mkdtemp, mkdir, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -127,6 +127,32 @@ function userPayload(message) {
 function identity(receipt) {
   return [receipt.sessionId, receipt.lifetime, receipt.agentPid];
 }
+
+test(
+  "native IDE Bash resolves host alternatives read-only and closes its namespace",
+  { ...options, skip: options.skip || !existsSync("/etc/alternatives") },
+  async (t) => {
+    const f = await fixture(t, (body) =>
+      body.messages.at(-1).role === "tool"
+        ? {}
+        : {
+            command:
+              "set -eu\nawk 'BEGIN { print 6 * 7 }' > /workspace/alternatives.txt\npython3 -c 'import os; assert os.statvfs(\"/etc/alternatives\").f_flag & os.ST_RDONLY; print(\"readonly\")' > /workspace/alternatives-mode.txt",
+          },
+    );
+    const participant = await f.start("alternatives");
+    const receipt = await participant.driver.execute("Run the fixture command.");
+    assert.deepEqual(identity(receipt), identity(participant.initial));
+    assert.equal(await readFile(path.join(f.workspace, "alternatives.txt"), "utf8"), "42\n");
+    assert.equal(
+      await readFile(path.join(f.workspace, "alternatives-mode.txt"), "utf8"),
+      "readonly\n",
+    );
+    assert.equal(f.provider.errors.length, 0);
+    checkLoadout(f.provider.requests);
+    await f.close(participant);
+  },
+);
 
 test(
   "real IDE combines Codemode edits and standalone tools while retaining correction context",

@@ -108,6 +108,10 @@ export async function startPiParticipant(
     "--ro-bind",
     "/etc/ld.so.cache",
     "/etc/ld.so.cache",
+    // Resolve standard /usr/bin alternative symlinks without binding all of /etc.
+    "--ro-bind-try",
+    "/etc/alternatives",
+    "/etc/alternatives",
     "--ro-bind",
     await realpath("/etc/resolv.conf"),
     "/etc/resolv.conf",
