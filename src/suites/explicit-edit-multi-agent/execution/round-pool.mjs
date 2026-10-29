@@ -10,6 +10,10 @@ export const ROUND_POOL_POLICY = Object.freeze({
   occupancy: "starting-running-and-closing-processes",
 });
 
+/** Notification hooks can complete synchronously or return a promise.
+ * @returns {void | Promise<void>}
+ */
+const ignoreNotification = (_record) => {};
 /** Run one editing wave. The caller owns prompts and grading; this scheduler only
  * releases dependencies when a packet returns. Factories must clean up resources
  * they create but never return, and should pass their supplied signal to startup.
@@ -25,9 +29,9 @@ export async function runRoundPool(
     batchSize = 10,
     createDriver,
     executeBatch,
-    onParticipant = () => {},
-    onDelivery = () => {},
-    onClosed = () => {},
+    onParticipant = ignoreNotification,
+    onDelivery = ignoreNotification,
+    onClosed = ignoreNotification,
     usage = () => null,
     signal,
   } = {},

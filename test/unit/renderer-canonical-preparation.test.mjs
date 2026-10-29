@@ -26,7 +26,12 @@ function fixture() {
   const initial = source(0, 0),
     middle = source(1, 0),
     final = source(1, 2);
-  const nodes = ["a", "b", "c"].map((id) => ({ id, dependencies: [] }));
+  const initialContract = { version: "fixture-contract", files: Object.keys(initial).sort() };
+  const nodes = [
+    { id: "a", taskId: "first-task", dependencies: [] },
+    { id: "b", taskId: "first-task", dependencies: [] },
+    { id: "c", taskId: "second-task", dependencies: ["b"] },
+  ];
   const loaded = {
     manifest: {
       initial: treeIdentity(initial),
@@ -38,15 +43,20 @@ function fixture() {
     },
     graph: { width: 2 },
     agents: 2,
-    schedule: [{ id: "round-001" }, { id: "round-002" }],
+    schedule: [
+      { id: "round-001", assignments: [{ task: "first-task" }] },
+      { id: "round-002", assignments: [{ task: "second-task" }] },
+    ],
     scheduleSha256: hash("schedule"),
-    contractHashes: { initial: hash("initial contract") },
+    contractHashes: { initial: hash(JSON.stringify(initialContract)) },
+    initialContract,
+    inputFingerprint: hash("immutable input files"),
     initial,
     atomicWorkload: { nodes },
     atomicIntervals: {
       rounds: new Map([
         ["round-001", { nodes: nodes.slice(0, 2), expectedTree: middle }],
-        ["round-002", { nodes: nodes.slice(2), expectedTree: final }],
+        ["round-002", { nodes: [{ ...nodes[2], dependencies: [] }], expectedTree: final }],
       ]),
     },
     plannedAtoms: [
@@ -139,7 +149,28 @@ test("a trusted cache retains complete canonical endpoints and common-baseline h
   const before = structuredClone(f.loaded.initial);
   const manifest = await buildCanonicalCache(f.loaded, f.output, { proofBytes: f.proofBytes });
   const result = await readCanonicalCache(f.loaded, f.output);
-  assert.equal(manifest.version, "renderer-canonical-preparation-v1");
+  assert.equal(manifest.version, "renderer-canonical-preparation-v2");
+  assert.deepEqual(
+    JSON.parse(await readFile(path.join(f.output, manifest.initial.source.file), "utf8")),
+    f.loaded.initial,
+  );
+  for (const [index, { id }] of f.loaded.schedule.entries()) {
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(f.output, manifest.rounds[index].source.file), "utf8")),
+      f.loaded.atomicIntervals.rounds.get(id).expectedTree,
+    );
+    assert.equal(
+      (await stat(path.join(f.output, manifest.rounds[index].source.file))).mode & 0o777,
+      0o600,
+    );
+  }
+  assert.deepEqual(result.atomicIntervals.rounds.get("round-002").nodes, [
+    { ...f.loaded.atomicWorkload.nodes[2], dependencies: [] },
+  ]);
+  assert.deepEqual(
+    result.atomicIntervals.rounds.get("round-002").expectedTree,
+    f.loaded.atomicIntervals.rounds.get("round-002").expectedTree,
+  );
   assert.equal(manifest.protocol, "shared-project-canonical-diff-v1");
   assert.equal(result.canonical.rounds.size, 2);
   assert.equal(result.canonical.rounds.get("round-001").preparedDiff.totalHunks, 1);
@@ -155,6 +186,31 @@ test("a trusted cache retains complete canonical endpoints and common-baseline h
   assert.deepEqual(await readFile(path.join(f.output, "feasibility.json")), f.proofBytes);
   assert.equal((await stat(f.output)).mode & 0o777, 0o700);
   assert.equal((await stat(path.join(f.output, "manifest.json"))).mode & 0o777, 0o600);
+});
+
+test("input-only loading restores exact endpoints and removes only completed dependencies", async (t) => {
+  const f = await setup(t);
+  await buildCanonicalCache(f.loaded, f.output, { proofBytes: f.proofBytes });
+  const atomicIntervals = f.loaded.atomicIntervals;
+  const inputs = {
+    ...f.loaded,
+    atomicIntervals: undefined,
+    contractHashes: undefined,
+    plannedAtoms: undefined,
+  };
+  const result = await readCanonicalCache(inputs, f.output);
+  assert.deepEqual(result.plannedAtoms, f.loaded.plannedAtoms);
+  assert.deepEqual(result.contractHashes, f.loaded.contractHashes);
+  for (const { id } of f.loaded.schedule) {
+    assert.deepEqual(
+      result.atomicIntervals.rounds.get(id).nodes,
+      atomicIntervals.rounds.get(id).nodes,
+    );
+    assert.deepEqual(
+      result.atomicIntervals.rounds.get(id).expectedTree,
+      atomicIntervals.rounds.get(id).expectedTree,
+    );
+  }
 });
 
 test("cached function bodies retain meaningful runtime changes", async (t) => {
@@ -264,6 +320,74 @@ test("canonical baselines form the complete original round chain", async (t) => 
     manifest.rounds[1].startCanonicalIdentity = manifest.rounds[1].endCanonicalIdentity;
   });
   await assert.rejects(readCanonicalCache(f.loaded, f.output), { code: "ERR_ASSERTION" });
+});
+
+test("raw endpoint tampering is rejected even after resealing its artifact digest", async (t) => {
+  for (const endpoint of ["initial", "round"]) {
+    const f = await setup(t);
+    const manifest = await buildCanonicalCache(f.loaded, f.output, { proofBytes: f.proofBytes });
+    const artifact = endpoint === "initial" ? manifest.initial.source : manifest.rounds[0].source;
+    const file = path.join(f.output, artifact.file);
+    const tree = JSON.parse(await readFile(file, "utf8"));
+    tree["main.cpp"] += "\nint unrelated() { return 987; }\n";
+    const bytes = Buffer.from(JSON.stringify(tree) + "\n");
+    await writeFile(file, bytes);
+    await changeManifest(f.output, (value) => {
+      (endpoint === "initial" ? value.initial.source : value.rounds[0].source).sha256 = hash(bytes);
+    });
+    await assert.rejects(readCanonicalCache(f.loaded, f.output), { code: "ERR_ASSERTION" });
+  }
+});
+
+test("missing raw source artifacts require explicit repreparation without replay fallback", async (t) => {
+  for (const endpoint of ["initial", "round"]) {
+    const f = await setup(t);
+    const manifest = await buildCanonicalCache(f.loaded, f.output, { proofBytes: f.proofBytes });
+    const artifact = endpoint === "initial" ? manifest.initial.source : manifest.rounds[0].source;
+    await rm(path.join(f.output, artifact.file));
+    await assert.rejects(readCanonicalCache(f.loaded, f.output), {
+      code: "CANONICAL_CACHE_REPREPARE",
+    });
+  }
+});
+
+test("a cache without the raw-source format requires explicit repreparation", async (t) => {
+  for (const mutate of [
+    (value) => {
+      value.version = "renderer-canonical-preparation-v1";
+    },
+    (value) => {
+      delete value.rounds[0].source;
+    },
+  ]) {
+    const f = await setup(t);
+    await buildCanonicalCache(f.loaded, f.output, { proofBytes: f.proofBytes });
+    await changeManifest(f.output, mutate);
+    await assert.rejects(readCanonicalCache(f.loaded, f.output), {
+      code: "CANONICAL_CACHE_REPREPARE",
+    });
+  }
+});
+
+test("a changed exact input fingerprint invalidates a cache with unchanged workload scope", async (t) => {
+  const f = await setup(t);
+  await buildCanonicalCache(f.loaded, f.output, { proofBytes: f.proofBytes });
+  const changed = { ...f.loaded, inputFingerprint: hash("changed manifest bytes") };
+  await assert.rejects(readCanonicalCache(changed, f.output), { code: "ERR_ASSERTION" });
+});
+
+test("cached raw source paths cannot escape or use invalid UTF-8 names", async (t) => {
+  for (const name of ["../outside.cpp", "/absolute.cpp", "a/../outside.cpp", "bad\uD800.cpp"]) {
+    const f = await setup(t);
+    const manifest = await buildCanonicalCache(f.loaded, f.output, { proofBytes: f.proofBytes });
+    const tree = { [name]: "int value() { return 1; }" };
+    const bytes = Buffer.from(JSON.stringify(tree) + "\n");
+    await writeFile(path.join(f.output, manifest.rounds[0].source.file), bytes);
+    await changeManifest(f.output, (value) => {
+      value.rounds[0].source.sha256 = hash(bytes);
+    });
+    await assert.rejects(readCanonicalCache(f.loaded, f.output), { code: "ERR_ASSERTION" });
+  }
 });
 
 test("changing retained proof bytes invalidates authorization", async (t) => {

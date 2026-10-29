@@ -4,6 +4,51 @@ This methodology is under implementation. It is separate from accepted-prefix an
 restoring atom-score observations. Historical evidence, proofs and scores retain
 their original interpretation.
 
+## Local commands
+
+Use a new cache and output directory for each preparation or observation. The cache
+contains private trusted endpoints and is not an editing-worker mount. Cache format
+v2 retains raw source endpoints as well as canonical snapshots and hunks. Loading
+validates the original input fingerprint, retained proof, source identities and
+canonical artifacts without applying the workload again or preparing legacy repair
+scopes. Older caches need explicit preparation; loading never falls back to replay.
+Its verifier identity invalidates the cache when implementation code changes.
+
+Preparation can replay the workload once, or use `--trusted-endpoints PRIVATE_JSON`
+to reuse saved source states. The endpoint file has version
+`renderer-retained-source-endpoints-v2`, the exact original input fingerprint,
+retained-proof SHA-256, initial source tree and ordered `{round, identity, tree}`
+endpoints. Every source identity must match the retained proof. The input
+fingerprint must be sealed when those trusted artifacts are collected, not
+replaced to accept modified inputs. This path runs no reference execution.
+
+```sh
+node scripts/multi-agent.mjs prepare-canonical PREPARATION NEW_CACHE --proof RETAINED_PROOF --agents 15
+node scripts/multi-agent.mjs run-canonical PREPARATION NEW_OUTPUT --canonical NEW_CACHE --config PRIVATE_JSON --allow-model-calls --agents 15 --batch-size 10 --max-concurrent-agents 30
+node scripts/multi-agent.mjs export-canonical NEW_OUTPUT NEW_RESULT_JSON
+node scripts/multi-agent.mjs validate-canonical NEW_RESULT_JSON
+node scripts/multi-agent.mjs inspect-canonical NEW_OUTPUT
+```
+
+The run command spends model credit and needs separate run authorization. There is
+no `verify-canonical` reference-execution command. `--agents` retains the workload's
+original graph schedule; `--max-concurrent-agents` bounds the new process pool.
+The participant configuration uses the isolated native runtime fields documented
+in the Multi-Agent run guide. Omit its legacy `agentLifecycle` field or set it to
+`round-ready-pool`; canonical execution does not accept a persistent or per-packet
+lifetime override. Native IDE instructions, tools and language services remain on.
+
+Export and inspection accept terminal runs only. They recompute scores from stage
+evidence, preserve the full planned denominator and do not publish anything.
+Public difference identities are hashes rather than source paths or hunk text.
+Native usage cost is an SDK estimate, not a billing receipt. Observed native
+concurrency is a kernel-sampled lower bound, reported separately from the pool cap.
+Public execution counts distinguish registered participants from closed startup
+attempts that never registered. No native identity is invented for those attempts.
+The public restoration summary retains the completed restoration count and final
+trusted identity. Measuring every round does not make a restoration failure a
+completed result.
+
 ## What is measured
 
 The measured object is the shared project at each round boundary. Original task
@@ -36,6 +81,11 @@ rewrites, repairs or replaces the measured working files.
   boundaries must not be accidentally erased by moving sortable blocks.
 - Remove comments and normalize insignificant formatting using a parser, not
   unrestricted text replacement. Preserve whitespace that belongs to literals.
+  Macro replacement lists retain preprocessing-token separation; comments and
+  whitespace width normalize to one separator. Calls to macros defined in project
+  sources retain the same per-argument information, including definitions from
+  other project headers. Ordinary function-call layout still normalizes. The
+  parser does not discover macro definitions in external system headers.
 - Exclude parser memory addresses, source offsets and absolute machine paths.
 - Record recoverable syntax errors explicitly. A parser crash, missing dependency
   or broken analyzer configuration is an infrastructure failure, not evidence of
@@ -94,7 +144,11 @@ After original work:
 2. If disagreements exist, turn them into correction tasks, batch them and give
    one structural correction pass to a new pool. The original executor is not
    relevant. Close the pool and compare the complete candidate again.
-3. Build the actual candidate. A failed build permits one build-correction pass.
+3. Build the actual candidate. Discover translation units from its complete
+   captured physical inventory, including malformed UTF-8 contents, byte-path
+   filenames and source symlinks. Preserve inert FIFO/socket entry types in the
+   private mirror without opening them. Unrepresentable unsafe types are verifier
+   failures, not omitted files. A failed build permits one build-correction pass.
    Close that pool and build again.
 4. If the build permits rendering, compare the repeated scene outputs. A mismatch
    permits one image-correction pass. Close that pool, rebuild and compare again.

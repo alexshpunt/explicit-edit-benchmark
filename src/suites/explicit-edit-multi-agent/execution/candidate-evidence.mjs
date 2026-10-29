@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { constants, watch } from "node:fs";
 import { setImmediate } from "node:timers/promises";
 import { lstat, mkdir, open, readdir, readlink, symlink, writeFile } from "node:fs/promises";
@@ -14,6 +17,28 @@ const metadata = (value) =>
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const journals = new Map();
 const boundaries = new WeakMap();
+const exec = promisify(execFile);
+const specialMirrorHelper = fileURLToPath(new URL("./mirror-special-entries.py", import.meta.url));
+
+async function mirrorSpecialEntries(source, entries, signal) {
+  if (!entries.length) return;
+  const plan = path.join(path.dirname(source), "special-entries.json");
+  await writeFile(plan, JSON.stringify(entries) + "\n", { flag: "wx", mode: 0o600 });
+  try {
+    await exec("/usr/bin/python3", ["-I", specialMirrorHelper, source, plan], {
+      env: {},
+      signal,
+      maxBuffer: 1024 * 1024,
+    });
+    signal?.throwIfAborted();
+  } catch (cause) {
+    signal?.throwIfAborted();
+    throw Object.assign(new Error("Cannot reproduce captured special entries", { cause }), {
+      category: "infrastructure",
+      code: "CANDIDATE_MIRROR_FAILED",
+    });
+  }
+}
 
 function journalFor(workspace, root) {
   let journal = journals.get(workspace);
@@ -90,6 +115,7 @@ async function inspect(
     tree = {},
     lexicalTree = {};
   const watchers = [];
+  const specialEntries = [];
   const contents = includeAllFiles ? new Map() : undefined;
   let before,
     journal = null,
@@ -166,6 +192,18 @@ async function inspect(
         entry.type = "unsupported";
         invalid.push({ path: pathname, reason: "entry-type" });
         entries.push(entry);
+        if (includeAllFiles && mirrored) {
+          const kind = info.isFIFO() ? "fifo" : info.isSocket() ? "socket" : null;
+          if (!kind)
+            throw Object.assign(
+              new Error("Captured entry cannot be represented in the build mirror"),
+              {
+                category: "infrastructure",
+                code: "CANDIDATE_MIRROR_UNSUPPORTED",
+              },
+            );
+          specialEntries.push({ pathBytes: entry.pathBytes, kind, mode: entry.mode });
+        }
       }
       if (!same(metadata(await lstat(location, { bigint: true })), metadata(info)))
         throw boundaryFailure();
@@ -180,6 +218,7 @@ async function inspect(
       version = journal.version;
     }
     await visit(root, Buffer.alloc(0));
+    if (source && includeAllFiles) await mirrorSpecialEntries(source, specialEntries, signal);
     const after = metadata(await root.stat({ bigint: true }));
     const named = metadata(await lstat(workspace, { bigint: true }));
     if (!same(before, after) || !same(after, named)) throw boundaryFailure();
@@ -226,7 +265,8 @@ async function inspect(
   }
 }
 
-/** Opt-in contents retain the already captured bytes of every regular entry.
+/** Opt-in contents retain every regular entry's already captured bytes. Complete
+ * mirrors also retain inert FIFO/socket types; unrepresentable types fail closed.
  * Legacy callers keep the original C++-only text views and return shape.
  */
 export async function captureCandidate(

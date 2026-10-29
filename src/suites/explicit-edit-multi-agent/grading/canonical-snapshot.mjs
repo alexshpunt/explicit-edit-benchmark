@@ -34,7 +34,8 @@ async function language() {
           version: "0.23.4",
           sha256: createHash("sha256").update(grammarBytes).digest("hex"),
         },
-        serialization: "cst-token-lines-v1",
+        serialization: "cst-token-lines-v2",
+        macroLayout: "project-definitions-and-arguments-token-gaps-v1",
       },
     };
   })();
@@ -45,37 +46,96 @@ async function language() {
  * Reuse the project's protected literal/comment scanner; maximal-munch operators
  * and numbers keep `+ +` distinct from `++` instead of stripping all whitespace.
  */
-function opaqueTokens(source) {
+function preprocessingTokens(source) {
   const protectedTokens = new Map(
     cppTokens(source)
       .filter((token) => !/^[A-Za-z_]\w*$/.test(token.text))
       .map((token) => [token.start, token]),
   );
   const result = [];
+  let gap = false;
+  const emit = (text) => {
+    result.push({ text, separated: result.length > 0 && gap });
+    gap = false;
+  };
   for (let at = 0; at < source.length;) {
     const protectedToken = protectedTokens.get(at);
     if (protectedToken) {
-      if (!protectedToken.text.startsWith("//") && !protectedToken.text.startsWith("/*"))
-        result.push(protectedToken.text);
+      if (protectedToken.text.startsWith("//") || protectedToken.text.startsWith("/*")) gap = true;
+      else emit(protectedToken.text);
       at = protectedToken.end;
       continue;
     }
     if (/\s/.test(source[at])) {
+      gap = true;
       at++;
       continue;
     }
     operators.lastIndex = number.lastIndex = identifier.lastIndex = at;
     const token = number.exec(source) ?? identifier.exec(source) ?? operators.exec(source);
     if (token) {
-      result.push(token[0]);
+      emit(token[0]);
       at += token[0].length;
     } else {
       const point = String.fromCodePoint(source.codePointAt(at));
-      result.push(point);
+      emit(point);
       at += point.length;
     }
   }
   return result;
+}
+
+function opaqueTokens(source) {
+  return preprocessingTokens(source).map(({ text }) => text);
+}
+
+function tokenGaps(source) {
+  return preprocessingTokens(source).map(({ text, separated }) => [separated, text]);
+}
+
+/** Macro definitions are lexical directives, never text inside comments/literals.
+ * Include all project definitions because replacement lists and forwarded macro
+ * arguments can themselves be stringified by another macro.
+ */
+function projectMacros(sources) {
+  const names = new Set();
+  for (const source of sources) {
+    if (!source.isWellFormed()) continue;
+    const logical = source.replace(/\\\r?\n/g, "");
+    const parts = [];
+    let cursor = 0;
+    for (const token of cppTokens(logical)) {
+      if (/^[A-Za-z_]\w*$/.test(token.text)) continue;
+      parts.push(logical.slice(cursor, token.start), token.text.replace(/[^\r\n]/g, " "));
+      cursor = token.end;
+    }
+    parts.push(logical.slice(cursor));
+    for (const match of parts
+      .join("")
+      .matchAll(/^[\t ]*#[\t ]*define[\t ]+([\p{ID_Start}_][\p{ID_Continue}_]*)/gmu))
+      names.add(match[1]);
+  }
+  return names;
+}
+
+function macroArguments(source) {
+  const tokens = preprocessingTokens(source);
+  // The CST argument-list node owns its outer parentheses. Only parentheses
+  // protect commas from the preprocessor; brackets and braces do not.
+  const inner =
+    tokens[0]?.text === "(" && tokens.at(-1)?.text === ")" ? tokens.slice(1, -1) : tokens;
+  const arguments_ = [[]];
+  let depth = 0;
+  for (const token of inner) {
+    if (token.text === "(") depth++;
+    else if (token.text === ")") depth--;
+    if (token.text === "," && depth === 0) arguments_.push([]);
+    else {
+      const current = arguments_.at(-1);
+      current.push([current.length > 0 && token.separated, token.text]);
+    }
+  }
+  return arguments_;
 }
 
 const containers = new Set([
@@ -177,7 +237,7 @@ function canonicalChildren(node) {
   return result;
 }
 
-function render(root) {
+function render(root, macros) {
   const lines = [],
     errors = [];
   const stack = [{ node: root }];
@@ -201,7 +261,7 @@ function render(root) {
       continue;
     }
     if (type === "preproc_arg") {
-      lines.push(JSON.stringify([type, opaqueTokens(node.text)]));
+      lines.push(JSON.stringify([type, tokenGaps(node.text)]));
       continue;
     }
     if (!node.childCount) {
@@ -209,6 +269,13 @@ function render(root) {
       continue;
     }
     lines.push(JSON.stringify([type]));
+    if (type === "call_expression") {
+      const callee = node.childForFieldName("function");
+      const name = callee?.text.match(/([\p{ID_Start}_][\p{ID_Continue}_]*)$/u)?.[1];
+      const arguments_ = node.childForFieldName("arguments");
+      if (name && macros.has(name) && arguments_)
+        lines.push(JSON.stringify(["macro-argument-gaps", macroArguments(arguments_.text)]));
+    }
     stack.push({ close: type });
     const children = canonicalChildren(node);
     for (let index = children.length - 1; index >= 0; index--)
@@ -221,7 +288,7 @@ function render(root) {
  * Invalid UTF-8 uses an explicit byte-preserving representation, never U+FFFD.
  * No candidate file is modified or repaired by this function.
  */
-export async function canonicalizeCpp(source) {
+export async function canonicalizeCpp(source, { macros } = {}) {
   if (typeof source !== "string") throw new TypeError("Canonical C++ input must be source text");
   if (!source.isWellFormed())
     return {
@@ -235,7 +302,7 @@ export async function canonicalizeCpp(source) {
   try {
     tree = parser.parse(source);
     if (!tree) throw new Error("The canonical parser did not produce a syntax tree");
-    return render(tree.rootNode);
+    return render(tree.rootNode, macros ?? projectMacros([source]));
   } finally {
     tree?.delete();
     parser.delete();
@@ -263,14 +330,21 @@ export async function canonicalizeProject(tree) {
     throw new TypeError("Canonical project input must be a source tree");
   const files = [],
     errors = [];
+  const sources = new Map();
   for (const file of Object.keys(tree).sort()) {
     validateFile(file);
     let source = tree[file];
     if (Buffer.isBuffer(source)) source = decodeSourceBytes(source);
     if (typeof source !== "string")
       throw new TypeError("Canonical project contents must be source text or bytes");
+    sources.set(file, source);
+  }
+  const macros = projectMacros(
+    [...sources].filter(([file]) => cppExtension.test(file)).map(([, source]) => source),
+  );
+  for (const [file, source] of sources) {
     const result = cppExtension.test(file)
-      ? await canonicalizeCpp(source)
+      ? await canonicalizeCpp(source, { macros })
       : {
           text:
             JSON.stringify(["opaque-bytes", encodeSourceBytes(source).toString("base64")]) + "\n",

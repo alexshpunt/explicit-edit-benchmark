@@ -12,10 +12,15 @@ import {
 } from "../grading/canonical-diff.mjs";
 import { CANONICAL_SCORE_POLICY } from "../grading/canonical-score.mjs";
 import { canonicalizeTrustedProject } from "./canonical-candidate.mjs";
-import { loadRestoringPreparation } from "./restoring-preparation.mjs";
+import {
+  loadRestoringPreparation,
+  loadRestoringInputs,
+  RESTORING_INPUTS_VERSION,
+} from "./restoring-preparation.mjs";
+import { atomicOrder } from "../tasks/atomic-effects.mjs";
 import { validateRestoringProof } from "./restoring-proof.mjs";
 
-export const CANONICAL_PREPARATION_VERSION = "renderer-canonical-preparation-v1";
+export const CANONICAL_PREPARATION_VERSION = "renderer-canonical-preparation-v2";
 export const CANONICAL_MULTI_AGENT_PROTOCOL = "shared-project-canonical-diff-v1";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -149,7 +154,197 @@ async function artifactBytes(output, artifact, expectedFile, signal) {
 
 function artifactNames(index) {
   const prefix = `round-${String(index + 1).padStart(4, "0")}`;
-  return { snapshot: `${prefix}.snapshot.json`, diff: `${prefix}.diff.json` };
+  return {
+    snapshot: `${prefix}.snapshot.json`,
+    diff: `${prefix}.diff.json`,
+    source: `${prefix}.source.json`,
+  };
+}
+
+function requireReusableCache(condition) {
+  if (!condition)
+    throw Object.assign(
+      new Error("Canonical preparation needs to be prepared again with raw source artifacts"),
+      { code: "CANONICAL_CACHE_REPREPARE" },
+    );
+}
+
+function validateRawTree(tree) {
+  assert.ok(
+    tree && typeof tree === "object" && !Array.isArray(tree),
+    "Invalid trusted source tree",
+  );
+  for (const [file, source] of Object.entries(tree)) {
+    assert.ok(
+      file.length > 0 &&
+        !file.startsWith("/") &&
+        !file.includes("\\") &&
+        !/[\x00-\x1f\x7f]/.test(file) &&
+        !/^[A-Za-z]:/.test(file) &&
+        file.split("/").every((part) => part && part !== "." && part !== ".."),
+      "Invalid trusted source path",
+    );
+    assert.equal(
+      Buffer.from(file, "utf8").toString("utf8"),
+      file,
+      "Invalid trusted source path encoding",
+    );
+    assert.equal(typeof source, "string", "Invalid trusted source content");
+    assert.equal(
+      Buffer.from(source, "utf8").toString("utf8"),
+      source,
+      "Invalid trusted source encoding",
+    );
+  }
+  return tree;
+}
+
+async function sourceArtifact(output, artifact, file, identity, signal) {
+  requireReusableCache(artifact);
+  let bytes;
+  try {
+    bytes = await artifactBytes(output, artifact, file, signal);
+  } catch (error) {
+    if (error.code === "ENOENT") requireReusableCache(false);
+    throw error;
+  }
+  const text = bytes.toString("utf8");
+  assert.ok(Buffer.from(text, "utf8").equals(bytes), "Invalid raw source artifact encoding");
+  const tree = validateRawTree(JSON.parse(text));
+  assert.equal(
+    treeIdentity(tree),
+    identity,
+    "Cached raw source differs from the retained endpoint",
+  );
+  return tree;
+}
+
+/** Recreate original dispatch metadata using proof-bound sources, never edits. */
+function workloadFromSources(loaded, proof, initial, endpoints) {
+  assert.equal(loaded.schedule.length, proof.identity.totalRounds, "Retained round count differs");
+  assert.equal(
+    treeIdentity(loaded.initial),
+    proof.identity.initial,
+    "Trusted initial source differs",
+  );
+  validateRawTree(initial);
+  assert.deepEqual(initial, loaded.initial, "Retained initial source differs from preparation");
+  assert.equal(
+    hash(JSON.stringify(loaded.initialContract)),
+    proof.identity.contractHashes.initial,
+    "Initial contract differs from retained evidence",
+  );
+  assert.equal(endpoints.size, loaded.schedule.length, "Retained source coverage differs");
+  const parents = new Set(loaded.atomicWorkload.nodes.map((node) => node.taskId));
+  const assigned = new Set(),
+    roundIds = new Set(),
+    previous = new Set(),
+    rounds = new Map();
+  let tree = initial;
+  for (const [index, round] of loaded.schedule.entries()) {
+    assert.ok(!roundIds.has(round.id), "Repeated atomic barrier");
+    roundIds.add(round.id);
+    for (const { task } of round.assignments) {
+      assert.ok(parents.has(task), "Unknown atomic scoring group");
+      assert.ok(!assigned.has(task), "Repeated atomic scoring group");
+      assigned.add(task);
+    }
+    const selected = new Set(round.assignments.map((assignment) => assignment.task));
+    const nodes = loaded.atomicWorkload.nodes
+      .filter((node) => selected.has(node.taskId))
+      .map((node) => ({
+        ...node,
+        dependencies: node.dependencies.filter((id) => !previous.has(id)),
+      }));
+    atomicOrder(nodes);
+    const endpoint = proof.identity.roundEndpoints[index];
+    assert.equal(endpoint.round, round.id, "Retained round order differs");
+    tree = validateRawTree(endpoints.get(round.id));
+    assert.equal(
+      treeIdentity(tree),
+      endpoint.identity,
+      "Retained raw source differs from its proof endpoint",
+    );
+    rounds.set(round.id, { nodes, expectedTree: tree });
+    for (const node of nodes) previous.add(node.id);
+  }
+  assert.deepEqual([...assigned].sort(), [...parents].sort(), "Atomic barrier coverage differs");
+  assert.equal(previous.size, loaded.atomicWorkload.nodes.length, "Atomic inventory differs");
+  assert.equal(treeIdentity(tree), loaded.manifest.final, "Retained final source differs");
+  return {
+    ...loaded,
+    contractHashes: structuredClone(proof.identity.contractHashes),
+    plannedAtoms: loaded.schedule.map(({ id }) => ({
+      round: id,
+      totalAtoms: rounds.get(id).nodes.length,
+    })),
+    atomicIntervals: { rounds, tree },
+  };
+}
+
+async function cachedWorkload(loaded, manifest, proof, output, signal) {
+  const initial = await sourceArtifact(
+    output,
+    manifest.initial.source,
+    "initial.source.json",
+    proof.identity.initial,
+    signal,
+  );
+  const endpoints = new Map();
+  for (const [index, round] of loaded.schedule.entries()) {
+    const row = manifest.rounds[index],
+      endpoint = proof.identity.roundEndpoints[index];
+    assert.equal(row.round, round.id, "Canonical round order differs");
+    assert.equal(endpoint.round, round.id, "Retained round order differs");
+    assert.equal(row.endSourceIdentity, endpoint.identity, "Canonical source endpoint differs");
+    endpoints.set(
+      round.id,
+      await sourceArtifact(
+        output,
+        row.source,
+        artifactNames(index).source,
+        endpoint.identity,
+        signal,
+      ),
+    );
+  }
+  return workloadFromSources(loaded, proof, initial, endpoints);
+}
+
+function retainedWorkload(loaded, retained, proofBytes) {
+  assert.ok(retained && typeof retained === "object" && !Array.isArray(retained));
+  assert.deepEqual(Object.keys(retained).sort(), [
+    "initial",
+    "inputFingerprint",
+    "proofSha256",
+    "rounds",
+    "version",
+  ]);
+  assert.equal(retained.version, "renderer-retained-source-endpoints-v2");
+  assert.equal(retained.proofSha256, hash(proofBytes), "Retained source proof bytes differ");
+  assert.equal(
+    retained.inputFingerprint,
+    loaded.inputFingerprint,
+    "Retained source preparation inputs differ",
+  );
+  const proof = JSON.parse(proofBytes.toString("utf8"));
+  validateRestoringProof(proof, proof.identity);
+  assert.ok(Array.isArray(retained.rounds));
+  assert.equal(retained.rounds.length, loaded.schedule.length);
+  const endpoints = new Map();
+  for (const [index, row] of retained.rounds.entries()) {
+    assert.deepEqual(Object.keys(row).sort(), ["identity", "round", "tree"]);
+    assert.equal(row.round, loaded.schedule[index].id, "Retained source order differs");
+    assert.equal(
+      row.identity,
+      proof.identity.roundEndpoints[index].identity,
+      "Retained source identity differs",
+    );
+    endpoints.set(row.round, row.tree);
+  }
+  const result = workloadFromSources(loaded, proof, retained.initial, endpoints);
+  authorize(proofBytes, workloadScope(result));
+  return result;
 }
 
 /** Cache an already validated workload's trusted endpoints. The retained proof
@@ -159,6 +354,8 @@ function artifactNames(index) {
 export async function buildCanonicalCache(loaded, outputPath, { proofBytes, signal } = {}) {
   signal?.throwIfAborted();
   const scope = workloadScope(loaded);
+  assert.match(loaded.inputFingerprint, hashPattern, "Immutable input fingerprint is required");
+  validateRawTree(loaded.initial);
   assert.equal(treeIdentity(loaded.initial), scope.initial, "Trusted initial source differs");
   const authorization = authorize(proofBytes, scope);
   const verifierSha256 = await suiteVerifier();
@@ -172,8 +369,15 @@ export async function buildCanonicalCache(loaded, outputPath, { proofBytes, sign
     jsonBytes(initial),
     signal,
   );
+  const initialSource = await saveArtifact(
+    output,
+    "initial.source.json",
+    jsonBytes(loaded.initial),
+    signal,
+  );
   const manifest = {
     version: CANONICAL_PREPARATION_VERSION,
+    inputs: { version: RESTORING_INPUTS_VERSION, sha256: loaded.inputFingerprint },
     protocol: CANONICAL_MULTI_AGENT_PROTOCOL,
     verifierSha256,
     ...representation(initial),
@@ -182,14 +386,14 @@ export async function buildCanonicalCache(loaded, outputPath, { proofBytes, sign
     scope,
     feasibility: referenceArtifact,
     authorization,
-    initial: { ...initialArtifact, identity: initial.sha256 },
+    initial: { ...initialArtifact, identity: initial.sha256, source: initialSource },
     rounds: [],
   };
   let previous = initial;
   let previousSource = scope.initial;
   for (const [index, { id }] of loaded.schedule.entries()) {
     signal?.throwIfAborted();
-    const tree = loaded.atomicIntervals.rounds.get(id).expectedTree;
+    const tree = validateRawTree(loaded.atomicIntervals.rounds.get(id).expectedTree);
     const expectedSnapshot = await canonicalizeTrustedProject(tree);
     let preparedDiff;
     try {
@@ -206,6 +410,7 @@ export async function buildCanonicalCache(loaded, outputPath, { proofBytes, sign
       signal,
     );
     const diff = await saveArtifact(output, names.diff, jsonBytes(preparedDiff), signal);
+    const source = await saveArtifact(output, names.source, jsonBytes(tree), signal);
     manifest.rounds.push({
       round: id,
       startSourceIdentity: previousSource,
@@ -215,6 +420,7 @@ export async function buildCanonicalCache(loaded, outputPath, { proofBytes, sign
       totalHunks: preparedDiff.totalHunks,
       snapshot,
       diff,
+      source,
     });
     previous = expectedSnapshot;
     previousSource = treeIdentity(tree);
@@ -230,9 +436,9 @@ export async function buildCanonicalCache(loaded, outputPath, { proofBytes, sign
   return manifest;
 }
 
-/** Validate cached endpoints without reparsing their trusted C++ source. Each
+/** Validate raw and canonical endpoints without trusted-workload replay. Each
  * stored diff is rechecked against its baseline and canonical endpoint. The
- * caller supplies the workload after its immutable preparation was validated.
+ * caller supplies immutable inputs or the full legacy preparation result.
  */
 export async function readCanonicalCache(loaded, canonicalPath, { signal } = {}) {
   signal?.throwIfAborted();
@@ -256,7 +462,19 @@ export async function readCanonicalCache(loaded, canonicalPath, { signal } = {})
   } finally {
     await manifestDescriptor.close();
   }
-  assert.equal(manifest.version, CANONICAL_PREPARATION_VERSION);
+  requireReusableCache(
+    manifest.version === CANONICAL_PREPARATION_VERSION &&
+      manifest.inputs &&
+      manifest.initial?.source &&
+      Array.isArray(manifest.rounds) &&
+      manifest.rounds.every((row) => row.source),
+  );
+  assert.match(loaded.inputFingerprint, hashPattern, "Immutable input fingerprint is required");
+  assert.deepEqual(
+    manifest.inputs,
+    { version: RESTORING_INPUTS_VERSION, sha256: loaded.inputFingerprint },
+    "Immutable preparation inputs differ",
+  );
   assert.equal(manifest.protocol, CANONICAL_MULTI_AGENT_PROTOCOL);
   assert.deepEqual(manifest.diffPolicy, CANONICAL_DIFF_POLICY, "Canonical diff policy differs");
   assert.deepEqual(manifest.scorePolicy, CANONICAL_SCORE_POLICY, "Canonical score policy differs");
@@ -272,10 +490,15 @@ export async function readCanonicalCache(loaded, canonicalPath, { signal } = {})
     expectedRepresentation,
     "Canonical parser or inventory policy differs",
   );
+  const proofBytes = await artifactBytes(output, manifest.feasibility, "feasibility.json", signal);
+  const proof = JSON.parse(proofBytes.toString("utf8"));
+  validateRestoringProof(proof, proof.identity);
+  assert.equal(manifest.rounds.length, loaded.schedule.length, "Canonical round coverage differs");
+  if (loaded.atomicIntervals) authorize(proofBytes, workloadScope(loaded));
+  loaded = await cachedWorkload(loaded, manifest, proof, output, signal);
   const scope = workloadScope(loaded);
   assert.equal(treeIdentity(loaded.initial), scope.initial, "Trusted initial source differs");
   assert.deepEqual(manifest.scope, scope, "Canonical workload scope differs");
-  const proofBytes = await artifactBytes(output, manifest.feasibility, "feasibility.json", signal);
   const authorization = authorize(proofBytes, scope);
   assert.deepEqual(manifest.authorization, authorization, "Canonical feasibility binding differs");
   const initialReference = { file: manifest.initial.file, sha256: manifest.initial.sha256 };
@@ -342,21 +565,30 @@ export async function readCanonicalCache(loaded, canonicalPath, { signal } = {})
 export async function prepareCanonical(
   preparationPath,
   outputPath,
-  { agents, proofPath, signal } = {},
+  { agents, proofPath, signal, trustedEndpoints } = {},
 ) {
   signal?.throwIfAborted();
   assert.ok(
     typeof proofPath === "string" && proofPath.length > 0,
     "A retained reference proof is required",
   );
-  const loaded = await loadRestoringPreparation(preparationPath, { agents, roundCredit: false });
-  signal?.throwIfAborted();
-  const proofBytes = await readFile(proofPath);
+  const retained = trustedEndpoints === undefined ? undefined : structuredClone(trustedEndpoints);
+  let loaded, proofBytes;
+  if (retained === undefined) {
+    loaded = await loadRestoringPreparation(preparationPath, { agents, roundCredit: false });
+    signal?.throwIfAborted();
+    proofBytes = await readFile(proofPath);
+  } else {
+    proofBytes = await readFile(proofPath);
+    const inputs = await loadRestoringInputs(preparationPath, { agents });
+    signal?.throwIfAborted();
+    loaded = retainedWorkload(inputs, retained, proofBytes);
+  }
   return buildCanonicalCache(loaded, outputPath, { proofBytes, signal });
 }
 
-/** Load the new protocol's cache through the complete immutable workload checks.
- * Legacy restoring execution retains its own default credit preparation path.
+/** Load immutable inputs and proof-bound raw endpoints without applying edits.
+ * Legacy restoring execution retains its complete default replay/credit path.
  */
 export async function loadCanonicalPreparation(
   preparationPath,
@@ -364,6 +596,7 @@ export async function loadCanonicalPreparation(
   { agents, signal } = {},
 ) {
   signal?.throwIfAborted();
-  const loaded = await loadRestoringPreparation(preparationPath, { agents, roundCredit: false });
+  const loaded = await loadRestoringInputs(preparationPath, { agents });
+  signal?.throwIfAborted();
   return readCanonicalCache(loaded, canonicalPath, { signal });
 }

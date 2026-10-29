@@ -12,18 +12,21 @@ import { ATOMIC_DISPATCH_POLICY } from "./atomic-stream.mjs";
 import { MULTI_AGENT_POLICY } from "../results.mjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+export const RESTORING_INPUTS_VERSION = "renderer-restoring-inputs-v1";
 
-/** Validate immutable workload inputs without accepting a historical execution proof.
- * Restoring execution seals separate requirements and needs its own execution proof.
+/** Validate immutable files and derive the original schedule without applying edits.
+ * The fingerprint includes the manifest's exact bytes, every file read through it,
+ * and the complete initial source identity. It does not authorize an execution.
  */
-export async function loadRestoringPreparation(
-  preparationPath,
-  { agents, roundCredit = true } = {},
-) {
-  assert.equal(typeof roundCredit, "boolean", "Invalid round credit preparation mode");
+export async function loadRestoringInputs(preparationPath, { agents } = {}) {
   const preparation = path.resolve(preparationPath);
-  const json = async (file) => JSON.parse(await readFile(file, "utf8"));
-  const manifest = await json(path.join(preparation, "manifest.json"));
+  const files = [];
+  const input = async (file) => {
+    const bytes = await readFile(path.join(preparation, file));
+    files.push({ file, sha256: digest(bytes) });
+    return bytes;
+  };
+  const manifest = JSON.parse((await input("manifest.json")).toString("utf8"));
   assert.equal(manifest.version, "renderer-concurrent-v2");
   assert.deepEqual(
     manifest.policy,
@@ -40,12 +43,12 @@ export async function loadRestoringPreparation(
     digest(JSON.stringify(ATOMIC_DISPATCH_POLICY)),
     "Atomic dispatch policy changed",
   );
-  const bytes = await readFile(path.join(preparation, "tasks.json"));
+  const bytes = await input("tasks.json");
   assert.equal(digest(bytes), manifest.workloadSha256);
   const taskList = JSON.parse(bytes);
   assert.equal(taskList.length, manifest.tasks);
-  const atomicBytes = await readFile(path.join(preparation, "atomic/tasks.json"));
-  const batchBytes = await readFile(path.join(preparation, "atomic/batches.json"));
+  const atomicBytes = await input("atomic/tasks.json");
+  const batchBytes = await input("atomic/batches.json");
   assert.equal(digest(atomicBytes), manifest.atomic.workloadSha256, "Atomic workload changed");
   assert.equal(
     digest(batchBytes),
@@ -63,12 +66,12 @@ export async function loadRestoringPreparation(
   );
   const atomicBatches = JSON.parse(batchBytes);
   assert.ok(Array.isArray(atomicBatches), "Invalid private atomic binding batches");
-  const graphBytes = await readFile(path.join(preparation, "graph.json"));
+  const graphBytes = await input("graph.json");
   assert.equal(digest(graphBytes), manifest.graphSha256);
   const graph = JSON.parse(graphBytes);
   const transitions = [];
   for (const task of taskList) {
-    const content = await readFile(path.join(preparation, "transitions", task.id + ".json"));
+    const content = await input(`transitions/${task.id}.json`);
     assert.equal(digest(content), manifest.transitionHashes[task.id]);
     transitions.push(JSON.parse(content));
   }
@@ -76,11 +79,53 @@ export async function loadRestoringPreparation(
   agents ??= graph.width;
   const schedule = rotatingSchedule(graph, agents);
   const scheduleSha256 = digest(JSON.stringify(schedule));
-  const initialBytes = await readFile(path.join(preparation, "contracts/initial.json"));
+  const initialBytes = await input("contracts/initial.json");
   assert.equal(digest(initialBytes), manifest.initialContractSha256);
   const initialContract = JSON.parse(initialBytes);
   const initial = await readTree(path.join(preparation, "initial"));
   assert.equal(treeIdentity(initial), manifest.initial);
+  files.sort((left, right) => (left.file < right.file ? -1 : left.file > right.file ? 1 : 0));
+  const inputFingerprint = digest(
+    JSON.stringify({ version: RESTORING_INPUTS_VERSION, files, initial: manifest.initial }),
+  );
+  return {
+    manifest,
+    taskList,
+    atomicWorkload,
+    atomicBatches,
+    graph,
+    agents,
+    schedule,
+    scheduleSha256,
+    initial,
+    initialContract,
+    transitions,
+    inputFingerprint,
+  };
+}
+
+/** Preserve legacy restoration preparation, including full trusted replay and
+ * its default credit preparation. Canonical cache loading uses the input reader.
+ */
+export async function loadRestoringPreparation(
+  preparationPath,
+  { agents, roundCredit = true } = {},
+) {
+  assert.equal(typeof roundCredit, "boolean", "Invalid round credit preparation mode");
+  const inputs = await loadRestoringInputs(preparationPath, { agents });
+  const {
+    manifest,
+    taskList,
+    atomicWorkload,
+    atomicBatches,
+    graph,
+    schedule,
+    scheduleSha256,
+    initial,
+    initialContract,
+    transitions,
+    inputFingerprint,
+  } = inputs;
   const contracts = checkpointContracts(initial, initialContract, taskList, transitions, schedule);
   const atomicIntervals = atomicCheckpoints(
     initial,
@@ -95,7 +140,6 @@ export async function loadRestoringPreparation(
     manifest.final,
     "Atomic schedule changed the final restoration",
   );
-
   let requiredSourceFiles = Object.keys(initial);
   for (const round of schedule) {
     requiredSourceFiles = sourceFilesAfter(
@@ -121,7 +165,7 @@ export async function loadRestoringPreparation(
     atomicWorkload,
     atomicBatches,
     graph,
-    agents,
+    agents: inputs.agents,
     schedule,
     scheduleSha256,
     initial,
@@ -130,5 +174,6 @@ export async function loadRestoringPreparation(
     contractHashes,
     atomicIntervals,
     plannedAtoms,
+    inputFingerprint,
   };
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -18,6 +18,11 @@ Separate from the existing 226-task benchmark and its Score.
   run PREPARATION NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls [--agents auto|N] [--batch-size N]
   verify-restoring PREPARATION NEW_OUTPUT [--agents auto|N] [--batch-size N] [--reference-batch-size N] [--build-weight W] [--result-weight W]
   run-restoring PREPARATION NEW_OUTPUT --config PRIVATE_JSON --proof NEW_PROOF --allow-model-calls [--agents auto|N] [--batch-size N] [--build-weight W] [--result-weight W] [--agent-lifecycle persistent|per-delivery] [--max-concurrent-agents N]
+  prepare-canonical PREPARATION NEW_CACHE --proof RETAINED_PROOF [--agents auto|N] [--trusted-endpoints PRIVATE_JSON]
+  run-canonical PREPARATION NEW_OUTPUT --canonical CACHE --config PRIVATE_JSON --allow-model-calls [--agents auto|N] [--batch-size N] [--max-concurrent-agents N]
+  export-canonical RUN_DIRECTORY NEW_RESULT_JSON
+  validate-canonical RESULT_JSON
+  inspect-canonical RUN_DIRECTORY
   export RUN_DIRECTORY NEW_RESULT_JSON
   validate RESULT_JSON
 
@@ -41,10 +46,91 @@ Both modes require native Baseline Pi 1.3.0 and have no delivery deadline.
 For 15 agents delivering 10 edits, reference verification may batch 100 edits:
   verify-restoring PREPARATION PROOF_OUTPUT --agents 15 --batch-size 10 --reference-batch-size 100
   run-restoring PREPARATION RUN_OUTPUT --agents 15 --batch-size 10 --config PRIVATE_JSON --proof PROOF_OUTPUT/verification.json --allow-model-calls
+Canonical commands use full-project fixed-hunk scoring and round-ready agent pools.
+prepare-canonical caches trusted endpoints from retained feasibility evidence; it
+never executes a new reference. run-canonical closes all namespaces before grading
+and permits one structural, one build and one image correction. Its default live
+native process cap is 30, separate from the original graph schedule's --agents.
+Canonical results remain separate from historical scores. inspect-canonical reads
+a terminal run without publishing it. See docs/renderer-canonical-diff.md.
 export creates a safe local result. Nothing uploads or publishes automatically.
 See docs/multi-agent.md for prerequisites, private config and result interpretation.
 `;
 
+async function canonicalCommand(command, values, positionals) {
+  if (["export-canonical", "validate-canonical", "inspect-canonical"].includes(command)) {
+    const { canonicalMultiAgentResult, validateCanonicalResult } =
+      await import("../src/suites/explicit-edit-multi-agent/canonical-results.mjs");
+    const file =
+      command === "validate-canonical" ? positionals[0] : path.join(positionals[0], "report.json");
+    const value = JSON.parse(await readFile(file, "utf8"));
+    const result = command === "validate-canonical" ? value : canonicalMultiAgentResult(value);
+    validateCanonicalResult(result);
+    if (command === "export-canonical")
+      await writeFile(positionals[1], JSON.stringify(result, null, 2) + "\n", {
+        flag: "wx",
+        mode: 0o600,
+      });
+    console.log(
+      `${result.status.toUpperCase()}: ${result.score.score.toFixed(3)}% ${result.status === "complete" ? "final canonical Score" : "partial canonical aggregate"}; ${result.score.firstStructuralScore.toFixed(3)}% first structural Score`,
+    );
+    return;
+  }
+  const positive = (name) => {
+    if (values[name] === undefined) return undefined;
+    const value = Number(values[name]);
+    assert.ok(
+      Number.isSafeInteger(value) && value > 0,
+      "Canonical numeric options must be positive safe integers",
+    );
+    return value;
+  };
+  const agents = values.agents === "auto" ? undefined : positive("agents");
+  const batchSize = positive("batch-size");
+  const maxConcurrentAgents = positive("max-concurrent-agents");
+  if (command === "prepare-canonical")
+    assert.ok(values.proof, "Canonical preparation requires retained feasibility evidence");
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  process.once("SIGINT", cancel);
+  process.once("SIGTERM", cancel);
+  try {
+    if (command === "prepare-canonical") {
+      const { prepareCanonical } =
+        await import("../src/suites/explicit-edit-multi-agent/execution/canonical-preparation.mjs");
+      const manifest = await prepareCanonical(...positionals, {
+        agents,
+        proofPath: values.proof,
+        trustedEndpoints: values["trusted-endpoints"]
+          ? JSON.parse(await readFile(values["trusted-endpoints"], "utf8"))
+          : undefined,
+        signal: controller.signal,
+      });
+      console.log(
+        `Prepared ${manifest.rounds.length} canonical rounds; ${manifest.rounds.reduce((sum, row) => sum + row.totalHunks, 0)} reference hunks`,
+      );
+    } else {
+      const { runCanonical } =
+        await import("../src/suites/explicit-edit-multi-agent/execution/canonical-run.mjs");
+      const report = await runCanonical(...positionals, {
+        canonicalPath: values.canonical,
+        agents,
+        batchSize,
+        maxConcurrentAgents,
+        configPath: values.config,
+        allowModelCalls: values["allow-model-calls"],
+        signal: controller.signal,
+      });
+      console.log(
+        `${report.status.toUpperCase()}: ${report.score.score.toFixed(3)}% ${report.status === "complete" ? "canonical Score" : "partial canonical aggregate"}; ${report.rounds.length}/${report.plan.length} measured rounds`,
+      );
+      if (report.status !== "complete") process.exitCode = 1;
+    }
+  } finally {
+    process.removeListener("SIGINT", cancel);
+    process.removeListener("SIGTERM", cancel);
+  }
+}
 function progressLabel(result) {
   if (result.protocol === RESTORING_MULTI_AGENT_PROTOCOL)
     return `${result.score.final.score.toFixed(3)}% final round Score; ${result.score.first.score.toFixed(3)}% first round Score; ${result.progress.observedRounds}/${result.progress.totalRounds} restored rounds`;
@@ -59,7 +145,7 @@ export async function multiAgentMain(args) {
   }
   const [command, ...rest] = args;
   const restoring = ["verify-restoring", "run-restoring"].includes(command);
-  const run = command === "run" || command === "run-restoring";
+  const run = ["run", "run-restoring", "run-canonical"].includes(command);
   const restoringOptions = {
     agents: { type: "string", default: "auto" },
     "batch-size": { type: "string" },
@@ -87,6 +173,22 @@ export async function multiAgentMain(args) {
       proof: { type: "string" },
       "allow-model-calls": { type: "boolean", default: false },
     },
+    "prepare-canonical": {
+      agents: { type: "string", default: "auto" },
+      proof: { type: "string" },
+      "trusted-endpoints": { type: "string" },
+    },
+    "run-canonical": {
+      agents: { type: "string", default: "auto" },
+      "batch-size": { type: "string" },
+      "max-concurrent-agents": { type: "string" },
+      canonical: { type: "string" },
+      config: { type: "string" },
+      "allow-model-calls": { type: "boolean", default: false },
+    },
+    "export-canonical": {},
+    "validate-canonical": {},
+    "inspect-canonical": {},
     export: {},
     validate: {},
   };
@@ -99,13 +201,19 @@ export async function multiAgentMain(args) {
   });
   assert.equal(
     positionals.length,
-    ["prepare", "validate"].includes(command) ? 1 : 2,
+    ["prepare", "validate", "validate-canonical", "inspect-canonical"].includes(command) ? 1 : 2,
     "Wrong positional arguments; use --help",
   );
   if (run) {
     assert.equal(values["allow-model-calls"], true, "Live execution requires --allow-model-calls");
     assert.ok(values.config, "Live execution requires --config PRIVATE_JSON");
     if (restoring) assert.ok(values.proof, "Restoring execution requires --proof NEW_PROOF");
+    if (command === "run-canonical")
+      assert.ok(values.canonical, "Canonical execution requires --canonical CACHE");
+  }
+  if (command.endsWith("-canonical")) {
+    await canonicalCommand(command, values, positionals);
+    return;
   }
   if (command === "prepare") {
     const { prepareMultiAgent } =

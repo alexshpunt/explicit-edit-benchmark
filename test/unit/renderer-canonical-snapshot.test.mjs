@@ -93,8 +93,46 @@ test("canonical C++ does not move definitions between preprocessor branches or l
   assert.notEqual(await text(before), await text(after));
 });
 
+test("canonical C++ preserves macro argument gaps that change stringification", async () => {
+  const source = (argument) =>
+    `#define stringify(x) #x\nconst char* value(){return stringify(${argument});}\n`;
+  assert.notEqual(await text(source("alpha + beta")), await text(source("alpha+beta")));
+});
+
+test("macro argument gaps collapse comments and whitespace width without losing separation", async () => {
+  const source = (argument) =>
+    `#define stringify(x) #x\nconst char* value(){return stringify(${argument});}\n`;
+  assert.equal(
+    await text(source(" alpha /* note */ +  beta ")),
+    await text(source("alpha + beta")),
+  );
+  assert.notEqual(await text(source("alpha + beta")), await text(source("alpha+ beta")));
+});
+
+test("project macro arguments retain gaps through a definition in another header", async () => {
+  const project = (argument) => ({
+    "macros.h": "#define stringify(x) #x\n#define expand(x) stringify(x)\n",
+    "main.cpp": `#include "macros.h"\nconst char* value(){return expand(${argument});}\n`,
+  });
+  assert.notEqual(
+    (await canonicalizeProject(project("alpha + beta"))).sha256,
+    (await canonicalizeProject(project("alpha+beta"))).sha256,
+  );
+});
+
+test("ordinary function call layout still normalizes in a project with macros", async () => {
+  const source = (call) =>
+    `#define stringify(x) #x\nint sum(int a,int b){return a+b;}\nint value(){return ${call};}\n`;
+  assert.equal(await text(source("sum(1 + 2, 3)")), await text(source("sum ( 1+2 ,3 )")));
+  const literal = 'const char* note = R"x(\n#define sum(x) #x\n)x";\n';
+  assert.equal(
+    await text(literal + "int f(){return sum(1+2);}"),
+    await text(literal + "int f(){return sum(1 + 2);}"),
+  );
+});
 test("canonical C++ keeps opaque macro tokens, literals and maximal-munch operators", async () => {
-  assert.equal(await text("#define VALUE ( 1 + 2 )\n"), await text("#define VALUE (1+2)\n"));
+  // A replacement list can later be expanded into a stringifying macro argument.
+  assert.notEqual(await text("#define VALUE ( 1 + 2 )\n"), await text("#define VALUE (1+2)\n"));
   assert.notEqual(await text("#define VALUE (a + + b)\n"), await text("#define VALUE (a ++ b)\n"));
   assert.notEqual(await text("#define VALUE (1e+2)\n"), await text("#define VALUE (1e +2)\n"));
   assert.notEqual(await text("#define VALUE (0xFF)\n"), await text("#define VALUE (0 xFF)\n"));

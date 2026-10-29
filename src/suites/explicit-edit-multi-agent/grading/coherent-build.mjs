@@ -9,14 +9,34 @@ import { GradeFailure } from "./failure.mjs";
 
 const exec = promisify(execFile);
 
+const completeSourceBuild = `set -euo pipefail
+export LC_ALL=C
+if ! /usr/bin/find -P /workspace \\( -type f -o -type l \\) -name '*.cpp' -print0 | /usr/bin/sort -z > /tmp/translation-units; then
+  exit 125
+fi
+mapfile -d '' -t sources < /tmp/translation-units || exit 125
+for source in "\${sources[@]}"; do
+  if [[ ! -f "$source" ]]; then
+    printf '%s:1:1: error: translation unit is not a regular file\\n' "$source" >&2
+    exit 1
+  fi
+done
+exec /usr/bin/clang++ "$@" "\${sources[@]}" -o /build/renderer
+`;
+
 /** Build a read-only candidate snapshot and render both scenes twice in separate
  * namespaces. Trusted contracts, pixels, host files and credentials are not mounts.
  * Output logs remain private evidence. The concurrent controller may project located
  * candidate compiler diagnostics into task-scoped feedback; raw commands and logs
  * are never agent input.
  */
-export async function buildCoherentCandidate(source, evidence, tree, { signal } = {}) {
-  return buildAndRender(source, evidence, tree, { signal });
+export async function buildCoherentCandidate(
+  source,
+  evidence,
+  tree,
+  { signal, completeInventory = false } = {},
+) {
+  return buildAndRender(source, evidence, tree, { signal, completeInventory });
 }
 
 /** Preserve independent build/output evidence without turning verifier failures
@@ -27,7 +47,7 @@ export async function measureCoherentCandidate(
   source,
   evidence,
   tree,
-  { expectedPixels, signal } = {},
+  { expectedPixels, signal, completeInventory = false } = {},
 ) {
   assert.ok(
     Array.isArray(expectedPixels) &&
@@ -42,6 +62,7 @@ export async function measureCoherentCandidate(
   try {
     const pixels = await buildAndRender(source, evidence, tree, {
       signal,
+      completeInventory,
       onBuild: () => {
         buildPassed = true;
       },
@@ -63,7 +84,8 @@ export async function measureCoherentCandidate(
   }
 }
 
-async function buildAndRender(source, evidence, tree, { signal, onBuild }) {
+async function buildAndRender(source, evidence, tree, { signal, onBuild, completeInventory }) {
+  assert.equal(typeof completeInventory, "boolean", "Invalid physical source inventory option");
   await mkdir(evidence);
   const build = path.join(evidence, "build");
   await mkdir(build);
@@ -123,7 +145,10 @@ async function buildAndRender(source, evidence, tree, { signal, onBuild }) {
       );
       signal?.throwIfAborted();
       throw new GradeFailure(
-        error.killed || error.signal || typeof error.code !== "number"
+        error.killed ||
+          error.signal ||
+          typeof error.code !== "number" ||
+          (completeInventory && log === "compile.log" && [125, 126, 127].includes(error.code))
           ? "infrastructure"
           : category,
         error.message,
@@ -139,30 +164,27 @@ async function buildAndRender(source, evidence, tree, { signal, onBuild }) {
   );
   if (!/clang version 18\./.test(version) || process.platform !== "linux" || process.arch !== "x64")
     throw new GradeFailure("infrastructure", "Coherent grading requires Linux x64 and Clang 18");
-  await command(
-    [
-      ...base(),
-      "--bind",
-      build,
-      "/build",
-      "/usr/bin/clang++",
-      "-std=c++17",
-      "-O0",
-      "-ffp-contract=off",
-      "-pthread",
-      "-I",
-      "/workspace/support",
-      ...Object.keys(tree)
-        .filter((file) => file.endsWith(".cpp"))
-        .sort()
-        .map((file) => `/workspace/${file}`),
-      "-o",
-      "/build/renderer",
-    ],
-    "build",
-    "compile.log",
-    300000,
-  );
+  const compilerFlags = [
+    "-std=c++17",
+    "-O0",
+    "-ffp-contract=off",
+    "-pthread",
+    "-I",
+    "/workspace/support",
+  ];
+  const compile = completeInventory
+    ? ["/usr/bin/bash", "-c", completeSourceBuild, "physical-candidate-build", ...compilerFlags]
+    : [
+        "/usr/bin/clang++",
+        ...compilerFlags,
+        ...Object.keys(tree)
+          .filter((file) => file.endsWith(".cpp"))
+          .sort()
+          .map((file) => `/workspace/${file}`),
+        "-o",
+        "/build/renderer",
+      ];
+  await command([...base(), "--bind", build, "/build", ...compile], "build", "compile.log", 300000);
   onBuild?.();
   const passes = [];
   for (const pass of ["scene", "repeat"]) {
