@@ -34,7 +34,7 @@ async function language() {
           version: "0.23.4",
           sha256: createHash("sha256").update(grammarBytes).digest("hex"),
         },
-        serialization: "cst-token-lines-v2",
+        serialization: "cst-syntax-unit-lines-v3",
         macroLayout: "project-definitions-and-arguments-token-gaps-v1",
       },
     };
@@ -237,14 +237,41 @@ function canonicalChildren(node) {
   return result;
 }
 
+// Keep complete CST records, but give declarations and expressions one diff line.
+// Scope and statement boundaries stay separate; function bodies are never omitted.
+const syntaxLineUnits = new Set([
+  "declaration",
+  "field_declaration",
+  "function_declarator",
+  "template_parameter_list",
+  "expression_statement",
+  "return_statement",
+  "break_statement",
+  "continue_statement",
+  "throw_statement",
+  "static_assert_declaration",
+  "alias_declaration",
+  "using_declaration",
+  "condition_clause",
+]);
+
 function render(root, macros) {
   const lines = [],
     errors = [];
+  let unit;
+  const emit = (record) => {
+    if (unit) unit.push(record);
+    else lines.push(JSON.stringify(record));
+  };
   const stack = [{ node: root }];
   while (stack.length) {
     const item = stack.pop();
     if (item.close) {
-      lines.push(JSON.stringify(["end", item.close]));
+      emit(["end", item.close]);
+      if (item.unit) {
+        lines.push(JSON.stringify(["unit", unit]));
+        unit = undefined;
+      }
       continue;
     }
     const node = item.node,
@@ -253,30 +280,32 @@ function render(root, macros) {
     if (node.isError || node.isMissing)
       errors.push({ kind: node.isMissing ? "missing" : "syntax", type });
     if (node.isMissing) {
-      lines.push(JSON.stringify(["missing", type]));
+      emit(["missing", type]);
       continue;
     }
     if (literals.has(type)) {
-      lines.push(JSON.stringify([type, node.text]));
+      emit([type, node.text]);
       continue;
     }
     if (type === "preproc_arg") {
-      lines.push(JSON.stringify([type, tokenGaps(node.text)]));
+      emit([type, tokenGaps(node.text)]);
       continue;
     }
     if (!node.childCount) {
-      lines.push(JSON.stringify([type, type === "\n" ? "\n" : node.text]));
+      emit([type, type === "\n" ? "\n" : node.text]);
       continue;
     }
-    lines.push(JSON.stringify([type]));
+    const startsUnit = !unit && (syntaxLineUnits.has(type) || type.endsWith("_expression"));
+    if (startsUnit) unit = [];
+    emit([type]);
     if (type === "call_expression") {
       const callee = node.childForFieldName("function");
       const name = callee?.text.match(/([\p{ID_Start}_][\p{ID_Continue}_]*)$/u)?.[1];
       const arguments_ = node.childForFieldName("arguments");
       if (name && macros.has(name) && arguments_)
-        lines.push(JSON.stringify(["macro-argument-gaps", macroArguments(arguments_.text)]));
+        emit(["macro-argument-gaps", macroArguments(arguments_.text)]);
     }
-    stack.push({ close: type });
+    stack.push({ close: type, unit: startsUnit });
     const children = canonicalChildren(node);
     for (let index = children.length - 1; index >= 0; index--)
       stack.push({ node: children[index] });

@@ -535,20 +535,30 @@ export async function readCanonicalCache(loaded, canonicalPath, { signal } = {})
       expectedRepresentation,
     );
     assert.equal(expectedSnapshot.sha256, row.endCanonicalIdentity);
-    const preparedDiff = JSON.parse(
+    const storedDiff = JSON.parse(
       (await artifactBytes(output, row.diff, names.diff, signal)).toString("utf8"),
     );
-    assert.deepEqual(preparedDiff.start, snapshotView(previous), "Canonical diff baseline differs");
-    assert.equal(preparedDiff.totalHunks, row.totalHunks);
+    assert.deepEqual(storedDiff.start, snapshotView(previous), "Canonical diff baseline differs");
+    assert.equal(storedDiff.totalHunks, row.totalHunks);
+    assert.notDeepEqual(
+      snapshotView(previous),
+      snapshotView(expectedSnapshot),
+      "Canonical endpoint differs from its cached reference",
+    );
+    const preparedDiff = prepareCanonicalDiff(previous, expectedSnapshot);
+    assert.deepEqual(
+      storedDiff,
+      preparedDiff,
+      "Cached canonical diff differs from its pinned recomputation",
+    );
     const comparison = compareCanonicalDiff(preparedDiff, expectedSnapshot);
     assert.equal(
       comparison.differenceIds.length,
       0,
       "Canonical endpoint differs from its cached reference",
     );
-    // Reuse the validated previous snapshot's strings instead of retaining a
-    // second deserialized copy of the entire baseline in every cached diff.
-    preparedDiff.start = snapshotView(previous);
+    // The newly compiled frozen baseline already reuses the previous snapshot's
+    // strings, and its process-local receipt proves the pinned hunk grouping.
     rounds.set(id, { expectedSnapshot, preparedDiff });
     previous = expectedSnapshot;
     previousSource = row.endSourceIdentity;

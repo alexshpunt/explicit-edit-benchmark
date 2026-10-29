@@ -125,9 +125,11 @@ with p.open('r+') as f:
         removed=[];added=[]
         for line in expected['lines']:
             if line[:1] not in ('-','+'): continue
-            token=json.loads(line[1:])
-            if len(token)==2 and token[0] in ('identifier','type_identifier','field_identifier'):
-                (removed if line[0]=='-' else added).append(token[1])
+            record=json.loads(line[1:])
+            tokens=record[1] if record[0]=='unit' else [record]
+            for token in tokens:
+                if len(token)==2 and token[0] in ('identifier','type_identifier','field_identifier'):
+                    (removed if line[0]=='-' else added).append(token[1])
         assert len(removed)==len(added) and removed
         for before,after in dict(zip(removed,added)).items():
             text=re.sub(r'\\b'+re.escape(before)+r'\\b',after,text)

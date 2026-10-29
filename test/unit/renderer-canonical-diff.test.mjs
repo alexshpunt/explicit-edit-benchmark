@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { promisify } from "node:util";
 import {
   CANONICAL_DIFF_POLICY,
   canonicalProjectDiff,
@@ -8,6 +11,7 @@ import {
   compareCanonicalSnapshots,
 } from "../../src/suites/explicit-edit-multi-agent/grading/canonical-diff.mjs";
 
+const execute = promisify(execFile);
 const snapshot = (files) => ({ version: "fixture-canonical-v1", files });
 const source = Array.from({ length: 60 }, (_, index) => `record-${index}`).join("\n") + "\n";
 function changed(...indices) {
@@ -225,6 +229,142 @@ test("serialized preparation retains its identities and rejects modified baselin
     compareCanonicalDiff(changedReference, snapshot({ "item.cpp": changed(10, 45) })),
   );
 });
+
+test("proven and deserialized comparisons preserve complete output for exact, unchanged and partial projects", () => {
+  const start = snapshot({ "item.cpp": source, "remove.cpp": "gone\n" });
+  const endpoint = snapshot({ "item.cpp": changed(10, 45), "added.h": "" });
+  const reference = prepareCanonicalDiff(start, endpoint);
+  const deserialized = JSON.parse(JSON.stringify(reference));
+  assert.equal(reference.totalHunks, 4);
+  assert.equal(Object.isFrozen(reference), true);
+  assert.equal(Object.isFrozen(reference.start.files), true);
+  assert.equal(Object.isFrozen(reference.expectedHunks), true);
+  assert.ok(
+    reference.expectedHunks.every((hunk) => Object.isFrozen(hunk) && Object.isFrozen(hunk.lines)),
+  );
+  const candidates = [
+    [endpoint, 4],
+    [start, 0],
+    [snapshot({ "item.cpp": changed(10), "remove.cpp": "gone\n" }), 1],
+    [snapshot({ "item.cpp": changed(10, 45), "added.h": "", "extra.cpp": "extra\n" }), 4],
+  ];
+  for (const [candidate, passed] of candidates) {
+    const observed = compareCanonicalDiff(reference, candidate);
+    assert.equal(observed.passedHunks, passed);
+    assert.deepEqual(observed, compareCanonicalDiff(deserialized, candidate));
+    assert.equal(Object.isFrozen(observed.actualHunks), true);
+    assert.ok(
+      observed.actualHunks.every((hunk) => Object.isFrozen(hunk) && Object.isFrozen(hunk.lines)),
+    );
+    assert.ok(observed.actualHunks.every((hunk, index) => hunk.id === `actual:${index}`));
+  }
+});
+
+test("a serialized claimed reference identity cannot authorize unrelated expected hunks", () => {
+  const reference = prepared();
+  const partial = snapshot({ "item.cpp": changed(10) });
+  const claimed = JSON.parse(JSON.stringify(reference));
+  claimed.referenceIdentity = prepareCanonicalDiff(reference.start, partial).referenceIdentity;
+  const result = compareCanonicalDiff(claimed, partial);
+  assert.equal(result.totalHunks, 2);
+  assert.equal(result.passedHunks, 1);
+  assert.equal(result.mismatches.length, 1);
+  assert.equal(result.mismatches[0].status, "missing");
+});
+
+test("resealing a serialized context-trimmed hunk does not prove pinned grouping", () => {
+  const forged = JSON.parse(JSON.stringify(prepared()));
+  const hunk = forged.expectedHunks[0];
+  assert.equal(hunk.lines[0][0], " ");
+  hunk.lines.shift();
+  hunk.oldStart++;
+  hunk.newStart++;
+  hunk.oldLines--;
+  hunk.newLines--;
+  forged.expectedDiffIdentity = createHash("sha256")
+    .update(
+      JSON.stringify(
+        forged.expectedHunks.map((item) => [
+          item.file,
+          item.index,
+          item.id,
+          item.oldStart,
+          item.oldLines,
+          item.newStart,
+          item.newLines,
+          item.lines,
+        ]),
+      ),
+    )
+    .digest("hex");
+  const result = compareCanonicalDiff(forged, snapshot({ "item.cpp": changed(10, 45) }));
+  assert.equal(result.totalHunks, 2);
+  assert.equal(result.passedHunks, 1);
+  assert.equal(result.mismatches.length, 1);
+  assert.equal(result.mismatches[0].status, "wrong");
+});
+
+test("exact proven endpoints and unchanged inputs reuse compiled hunks while untrusted and partial inputs still diff", async () => {
+  const module = new URL(
+    "../../src/suites/explicit-edit-multi-agent/grading/canonical-diff.mjs",
+    import.meta.url,
+  ).href;
+  const child = `
+import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+const target = process.argv[1];
+const key = Symbol.for("explicit-edit.canonical-diff-replay-test");
+const state = { forbidden: false, calls: 0, installed: false };
+globalThis[key] = state;
+registerHooks({
+  load(url, context, nextLoad) {
+    const loaded = nextLoad(url, context);
+    if (url !== target) return loaded;
+    const source = typeof loaded.source === "string" ? loaded.source : Buffer.from(loaded.source).toString("utf8");
+    assert.match(source, /function projectDiff\\(/);
+    state.installed = true;
+    return { ...loaded, source: source + "\\nconst replayTestOriginal = projectDiff; projectDiff = (...args) => { const state = globalThis[Symbol.for(\\"explicit-edit.canonical-diff-replay-test\\")]; state.calls++; if (state.forbidden) throw Object.assign(new Error(), { code: \\"CANONICAL_DIFF_REPLAY_TEST\\" }); return replayTestOriginal(...args); };\\n" };
+  },
+});
+try {
+  const { prepareCanonicalDiff, compareCanonicalDiff } = await import(target);
+  const snapshot = (text) => ({ version: "reuse-fixture-v1", files: { "item.cpp": text } });
+  const lines = Array.from({length: 60}, (_, i) => "row-" + i);
+  const start = snapshot(lines.join("\\n") + "\\n");
+  const changed = [...lines]; changed[10] = "new-10"; changed[45] = "new-45";
+  const endpoint = snapshot(changed.join("\\n") + "\\n");
+  const reference = prepareCanonicalDiff(start, endpoint);
+  const plain = JSON.parse(JSON.stringify(reference));
+  const exact = compareCanonicalDiff(plain, endpoint);
+  const noop = compareCanonicalDiff(plain, start);
+  assert.equal(exact.passedHunks, 2); assert.equal(noop.passedHunks, 0);
+  assert.equal(state.installed, true);
+  const beforeFast = state.calls; state.forbidden = true;
+  assert.deepEqual(compareCanonicalDiff(reference, endpoint), exact);
+  assert.deepEqual(compareCanonicalDiff(reference, start), noop);
+  assert.equal(state.calls, beforeFast);
+  const partialLines = [...lines]; partialLines[10] = "new-10";
+  const partial = snapshot(partialLines.join("\\n") + "\\n");
+  for (const [prepared, candidate] of [
+    [plain, endpoint], [new Proxy(reference, {}), endpoint], [reference, partial],
+  ]) assert.throws(() => compareCanonicalDiff(prepared, candidate), { code: "CANONICAL_DIFF_REPLAY_TEST" });
+  const invalid = structuredClone(plain); invalid.start.files["item.cpp"] = "tampered\\n";
+  assert.throws(() => compareCanonicalDiff(invalid, start), { code: "ERR_ASSERTION" });
+  assert.throws(() => compareCanonicalDiff(reference, { ...endpoint, version: "wrong-version" }), { code: "ERR_ASSERTION" });
+  assert.equal(state.calls, beforeFast + 3);
+  console.log(JSON.stringify({ status: "passed", replayedFastComparisons: 0, guardedFallbacks: 3 }));
+} catch (error) {
+  console.log(JSON.stringify({ status: "failed", code: error?.code ?? null, installed: state.installed, calls: state.calls }));
+}
+`;
+  const { stdout } = await execute(process.execPath, ["--input-type=module", "-e", child, module]);
+  assert.deepEqual(JSON.parse(stdout), {
+    status: "passed",
+    replayedFastComparisons: 0,
+    guardedFallbacks: 3,
+  });
+});
+
 test("an empty reference diff is diagnosed instead of providing a zero denominator or free score", () => {
   const start = snapshot({ "item.cpp": source });
   assert.deepEqual(canonicalProjectDiff(start, start).hunks, []);

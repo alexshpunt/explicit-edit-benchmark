@@ -8,6 +8,52 @@ import { decodeSourceBytes } from "../../src/suites/explicit-edit-multi-agent/cp
 
 const text = async (source) => (await canonicalizeCpp(source)).text;
 
+test("canonical statements retain every token in bounded syntax-unit lines before large moves", async () => {
+  const declarations = Array.from({ length: 2000 }, (_, i) => `int field_${i} = ${i};`);
+  const source = (items) => `int value(){${items.join("\n")}return field_0;}\n`;
+  const baseline = await canonicalizeCpp(source(declarations));
+  const rows = baseline.text
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const units = rows.filter((row) => row[0] === "unit");
+  const definitions = units.filter((row) => row[1][0][0] === "declaration");
+  assert.equal(definitions.length, declarations.length);
+  for (const [i, row] of definitions.entries()) {
+    assert.ok(row[1].some((token) => token[0] === "identifier" && token[1] === `field_${i}`));
+    assert.ok(row[1].some((token) => token[0] === "number_literal" && token[1] === String(i)));
+    assert.deepEqual(row[1].at(-1), ["end", "declaration"]);
+  }
+  const { prepareCanonicalDiff } =
+    await import("../../src/suites/explicit-edit-multi-agent/grading/canonical-diff.mjs");
+  const reference = await canonicalizeCpp(source(declarations.slice(0, 500)));
+  const prepared = prepareCanonicalDiff(
+    { version: "syntax-unit-fixture", files: { "value.cpp": baseline.text } },
+    { version: "syntax-unit-fixture", files: { "value.cpp": reference.text } },
+  );
+  assert.equal(prepared.totalHunks, 1);
+  assert.equal(baseline.errors.length, 0);
+  assert.equal(reference.errors.length, 0);
+});
+
+test("separated statement changes remain independent ordinary canonical hunks", async () => {
+  const source = Array.from({ length: 80 }, (_, i) => `int field_${i} = ${i};`).join("\n");
+  const project = async (body) => canonicalizeProject({ "value.cpp": `void value(){${body}}\n` });
+  const start = await project(source);
+  const reference = await project(source.replace("field_11 = 11", "field_11 = 12"));
+  const actual = await project(
+    source.replace("field_11 = 11", "field_11 = 12").replace("field_61 = 61", "field_61 = 62"),
+  );
+  const { compareCanonicalSnapshots } =
+    await import("../../src/suites/explicit-edit-multi-agent/grading/canonical-diff.mjs");
+  const compared = compareCanonicalSnapshots(start, reference, actual);
+  assert.equal(compared.totalHunks, 1);
+  assert.equal(compared.passedHunks, 1);
+  assert.equal(compared.actualHunks.length, 2);
+  assert.equal(compared.mismatches.length, 1);
+  assert.equal(compared.mismatches[0].kind, "extra");
+});
+
 test("canonical C++ ignores layout and comments without losing literal contents", async () => {
   const before = "int value(int x) { /* note */ return x + 1; } // end\n";
   const after = "int\nvalue ( int x )\n{ return x+1 ; }\n";

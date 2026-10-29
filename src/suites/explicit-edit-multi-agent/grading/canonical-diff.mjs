@@ -23,6 +23,10 @@ assert.equal(
 const order = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
+// Only preparation after a real pinned diff can mint this in-memory receipt.
+// Neither a serialized checksum nor a copied/proxied prepared object carries it.
+const provenReferenceDiffs = new WeakMap();
+
 function projectPath(file) {
   assert.equal(typeof file, "string", "Invalid canonical project path");
   assert.ok(
@@ -141,7 +145,7 @@ export function prepareCanonicalDiff(start, reference) {
       code: "CANONICAL_DIFF_EMPTY_REFERENCE",
     });
   }
-  return Object.freeze({
+  const prepared = Object.freeze({
     version: CANONICAL_DIFF_POLICY.version,
     policy: CANONICAL_DIFF_POLICY,
     canonicalVersion: baseline.version,
@@ -152,6 +156,8 @@ export function prepareCanonicalDiff(start, reference) {
     expectedHunks: expected.hunks,
     expectedDiffIdentity: hunkStorageIdentity(expected.hunks),
   });
+  provenReferenceDiffs.set(prepared, expected);
+  return prepared;
 }
 
 function hunkSignature(hunk) {
@@ -232,6 +238,28 @@ function validatePrepared(prepared) {
   return baseline;
 }
 
+function candidateDiff(prepared, baseline, candidate) {
+  const afterIdentity = identity(candidate);
+  if (afterIdentity === prepared.startIdentity)
+    return Object.freeze({
+      version: CANONICAL_DIFF_POLICY.version,
+      policy: CANONICAL_DIFF_POLICY,
+      canonicalVersion: baseline.version,
+      beforeIdentity: prepared.startIdentity,
+      afterIdentity,
+      hunks: Object.freeze([]),
+    });
+  const proven = provenReferenceDiffs.get(prepared);
+  if (proven && afterIdentity === proven.afterIdentity)
+    return Object.freeze({
+      ...proven,
+      hunks: Object.freeze(
+        proven.hunks.map((hunk) => freezeHunk(hunk, hunk.file, hunk.index, "actual")),
+      ),
+    });
+  return projectDiff(baseline, candidate, "actual");
+}
+
 /** Compare ordinary hunks from one common baseline. Unmatched reference hunks
  * are disagreements; unmatched actual hunks add penalties only outside all
  * reference baseline ranges. Association does not reason about source semantics.
@@ -244,7 +272,7 @@ export function compareCanonicalDiff(prepared, actual) {
     prepared.canonicalVersion,
     "Canonical representation version changed",
   );
-  const observed = projectDiff(baseline, candidate, "actual");
+  const observed = candidateDiff(prepared, baseline, candidate);
   const expected = prepared.expectedHunks;
   const actualHunks = observed.hunks;
   const signatures = new Map();

@@ -439,13 +439,13 @@ export async function runCanonical(
   } catch (error) {
     controller.abort(error);
     report.status =
-      externalSignal?.aborted || error.name === "AbortError" || error.category === "cancelled"
+      externalSignal?.aborted || error?.name === "AbortError" || error?.category === "cancelled"
         ? "cancelled"
         : "error";
     report.terminal = {
-      category: error.category ?? (report.status === "cancelled" ? "cancelled" : "infrastructure"),
-      name: error.name,
-      message: error.message,
+      category: error?.category ?? (report.status === "cancelled" ? "cancelled" : "infrastructure"),
+      name: error?.name ?? (report.status === "cancelled" ? "AbortError" : "Error"),
+      message: error?.message ?? String(error),
     };
   } finally {
     releaseCandidateWorkspace(workspace);
