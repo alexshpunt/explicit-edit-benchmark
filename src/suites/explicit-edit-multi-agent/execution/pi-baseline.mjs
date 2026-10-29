@@ -315,11 +315,20 @@ export async function startPiParticipant(
       const request = pending.get(event.id);
       if (!request) return;
       pending.delete(event.id);
+      if (
+        request.type === "prompt" &&
+        active?.completion === "turn" &&
+        event.success &&
+        event.data?.disposition === "started"
+      )
+        active.started = true;
       if (event.success) request.resolve(event.data);
       else request.reject(new ExecutionFailure("driver_exit", event.error));
     } else if (event.type === "extension_error") {
       fail(new ExecutionFailure("driver_exit", event.error ?? "Baseline extension failed"));
-    } else if (event.type === "agent_settled") active?.resolve();
+    } else if (event.type === "agent_settled") {
+      if (active && (active.completion !== "turn" || active.started)) active.resolve();
+    }
   };
   const readLines = (stream, consume) => {
     const decoder = new StringDecoder("utf8");
@@ -375,6 +384,7 @@ export async function startPiParticipant(
         reject(new ExecutionFailure("driver_exit", `RPC ${type} response timed out`));
       }, 15000);
       pending.set(id, {
+        type,
         resolve: (value) => {
           clearTimeout(timer);
           resolve(value);
@@ -393,6 +403,12 @@ export async function startPiParticipant(
     } catch (error) {
       if (error.code !== "ESRCH") throw error;
     }
+  };
+  const terminate = async () => {
+    closing = true;
+    kill();
+    await exited;
+    fail(new ExecutionFailure("driver_exit", "Pi terminated"));
   };
   const close = async () => {
     if (stopped) {
@@ -461,6 +477,8 @@ export async function startPiParticipant(
       },
       events,
       close,
+      /** Stop the owned process boundary without running graceful shutdown hooks. */
+      terminate,
       /** Inspect the existing process with RPC only; never prompt or replace it. */
       async assertIdle() {
         if (active)
@@ -475,10 +493,11 @@ export async function startPiParticipant(
           ...(processIdentity ? { process: processIdentity } : {}),
         };
       },
-      async execute(prompt, { signal } = {}) {
+      async execute(prompt, { signal, completion = "idle" } = {}) {
         if (active) throw Error("Overlapping Baseline requests are forbidden");
         if (terminal || stopped)
           throw terminal ?? new ExecutionFailure("driver_exit", "Pi is closed");
+        assert.ok(["idle", "turn"].includes(completion), "Unsupported Pi completion mode");
         const begin = events.length;
         const previousContexts = contexts;
         const started = performance.now();
@@ -490,7 +509,7 @@ export async function startPiParticipant(
         });
         // Attach immediately: a process can fail before the acceptance response arrives.
         settled.catch(() => {});
-        active = { resolve, reject };
+        active = { resolve, reject, completion, started: false };
         const abort = () => {
           fail(new DOMException("Baseline cancelled", "AbortError"));
           kill();
@@ -536,6 +555,9 @@ export async function startPiParticipant(
             profile.baseline ? observation.systemEmpty : observation.systemEmpty === false,
             "No observed model call under the selected system profile",
           );
+          // Round pools either dispatch the next packet immediately or terminate the
+          // namespace. Do not add an idle RPC window after the native turn ended.
+          if (completion === "turn") return result();
           const stateNow = await idleState();
           return { ...result(), messageCount: stateNow.messageCount };
         } catch (error) {

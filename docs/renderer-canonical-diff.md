@@ -1,0 +1,148 @@
+# Canonical-diff round scoring
+
+This methodology is under implementation. It is separate from accepted-prefix and
+restoring atom-score observations. Historical evidence, proofs and scores retain
+their original interpretation.
+
+## What is measured
+
+The measured object is the shared project at each round boundary. Original task
+identifiers and the identity of the agent that performed an edit do not establish
+credit. The scripted reference demonstrates the original workload's feasibility
+under its recorded schedule; it is not proof of arbitrary parallel schedules.
+
+The verifier creates the same deterministic canonical representation of the
+trusted round start, trusted round end and measured candidate. It compares the
+expected and actual changes from the same trusted start. The scoring unit is a
+hunk under one pinned diff algorithm and configuration, not an original atom or
+an inferred semantic edit. Different hunk sizes are an accepted property of this
+metric.
+
+Full function and method bodies participate in comparison. There is no separate
+preservation veto that zeros a round for changes outside an assigned footprint.
+Unexpected changes are disagreements in the same canonical-diff comparison.
+
+## Canonical representation
+
+Canonicalization changes only the representation used for comparison. It never
+rewrites, repairs or replaces the measured working files.
+
+- Keep project-relative file identity, lexical scopes and nesting.
+- Sort the placement of structural definition blocks by deterministic keys within
+  the appropriate container. Function, method and class placement can normalize;
+  their bodies are retained.
+- Preserve parameter order, signatures, statement order, expression operand order,
+  literals and other content inside definitions. Member layout and preprocessor
+  boundaries must not be accidentally erased by moving sortable blocks.
+- Remove comments and normalize insignificant formatting using a parser, not
+  unrestricted text replacement. Preserve whitespace that belongs to literals.
+- Exclude parser memory addresses, source offsets and absolute machine paths.
+- Record recoverable syntax errors explicitly. A parser crash, missing dependency
+  or broken analyzer configuration is an infrastructure failure, not evidence of
+  model damage. A malformed candidate is a measured input, not a reason to heal
+  its source before comparison.
+
+The initial implementation uses a pinned C++ grammar and parser. Other project
+file kinds need explicit, deterministic handling; unsupported content must never
+silently disappear from the snapshot. Parser and canonicalizer identity are part
+of preparation and result identity.
+
+## Hunk comparison
+
+Both diffs use the same canonical round-start text. Pin the diff implementation,
+context size, file ordering, newline policy and hunk matching rules. Diff metadata
+must not incorporate temporary paths or incidental absolute output line offsets.
+
+An unchanged candidate must miss every required reference hunk. An exact canonical
+endpoint must have no disagreements. An unexpected independent actual hunk adds a
+disagreement. A wrong replacement of a reference hunk must not automatically count
+as both a missing expected edit and an unrelated extra edit.
+
+Use deterministic baseline-range association for mismatching hunks, without
+matching original tasks or reasoning about agent intent. Hunk grouping remains
+part of the pinned metric. Empty expected round diffs require an explicit
+preparation diagnosis; do not invent a denominator or award free credit.
+
+Precompute trusted canonical endpoints and reference diffs once. Parse each new
+measured candidate without regenerating the trusted workload or a full reference
+execution.
+
+## Execution and correction budgets
+
+Each round uses a work-conserving pool, bounded by the configured native-process
+limit. Dispatch ready dependency-respecting work in configurable packets, initially
+10 original edits. A process receives successive packets and retains its history
+while it has immediately available work. Do not grade packets individually.
+
+When a process has finished and has no further ready assignment, terminate its
+whole owned PID namespace immediately. Do not leave idle model processes alive
+while another process finishes or while grading starts. A later assignment can
+start a new process under the same live cap. All participants must be confirmed
+closed before candidate capture, compilation, rendering or trusted restoration.
+Harnesses may run their own subprocesses during work; there is no executable-name
+allowlist or general descendant prohibition.
+
+Assignments state that other agents share the project without revealing team
+counts. Agents must preserve concurrent work, stay within their assignment, avoid
+project builds and lint runs, and react only to diagnostics relevant to their own
+changes. Native IDE tools, instructions and diagnostic services remain enabled.
+
+After original work:
+
+1. Capture and canonicalize the shared candidate. Compare its actual diff with the
+   reference diff and retain the independent first-pass evidence.
+2. If disagreements exist, turn them into correction tasks, batch them and give
+   one structural correction pass to a new pool. The original executor is not
+   relevant. Close the pool and compare the complete candidate again.
+3. Build the actual candidate. A failed build permits one build-correction pass.
+   Close that pool and build again.
+4. If the build permits rendering, compare the repeated scene outputs. A mismatch
+   permits one image-correction pass. Close that pool, rebuild and compare again.
+
+There are at most four editing waves: original, structural correction, build
+correction and image correction. Successful stages do not trigger a correction.
+Auth, provider, cancellation and infrastructure failures remain separate stops;
+they do not authorize a model retry, fallback or an extra correction.
+
+Every later code-changing pass also produces a canonical comparison. Newly
+introduced structural disagreements incur penalties without opening another
+structural correction budget. A later repair cannot retain credit by destroying
+previously correct structure. Repeated observation of an unchanged disagreement
+alone must not create repeated penalties.
+
+## Score
+
+Let `N` be the number of reference hunks and `D0` the number of reference hunks
+that are missing or wrong, plus independent unexpected actual hunks. The raw
+initial balance is `N - D0`.
+
+For the one structural correction pass, add `0.5` for each supplied disagreement
+resolved, subtract `1` for each supplied disagreement still unresolved, and
+subtract `1` for each newly introduced disagreement. Later integration repairs
+also subtract for newly introduced structural disagreements. Preserve the raw
+balance and its ledger; clamp only each reported normalized score to `[0, 1]`.
+For example, 10 expected hunks with 3 initial disagreements have a first balance
+of 7; fixing all 3 produces 8.5, or 85%, before integration factors.
+
+Build and image factors are independently:
+
+| Outcome                                    | Factor |
+| ------------------------------------------ | -----: |
+| Passes without a correction for that stage |      1 |
+| Passes after the single allowed correction |   0.75 |
+| Still fails                                |    0.5 |
+
+If the final candidate does not build, its image factor is `0.5` because image
+matching cannot be established. A later change that breaks the build cannot keep
+an earlier successful build factor. Rendering infrastructure failure must not be
+reported as a measured pixel mismatch.
+
+```text
+round Score = normalized structural balance * build factor * image factor
+run Score = 100 * sum(round Scores) / full planned round count
+```
+
+Keep first-pass, structural-correction and final evidence separately. Unobserved
+rounds remain in the planned denominator. An interrupted run is not a completed
+model result. Duration, actual native concurrency, inference usage and correction
+counts remain separately reported observations.
