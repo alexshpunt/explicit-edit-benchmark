@@ -55,8 +55,10 @@ const options = {
 function replacePixels(before, after) {
   return `python3 - <<'PY'\nfrom pathlib import Path\np=Path('/workspace/main.cpp')\ns=p.read_text()\nbefore=${JSON.stringify(before)}\nassert s.count(before)==1\np.write_text(s.replace(before,${JSON.stringify(after)}))\nPY`;
 }
-for (const scenario of ["exact", "missed-first", "four-waves"]) {
+for (const scenario of ["exact", "missed-first", "wrong-first", "four-waves"]) {
   const missedFirst = scenario === "missed-first";
+  const wrongFirst = scenario === "wrong-first";
+  const structuralCorrection = missedFirst || wrongFirst;
   const fourWaves = scenario === "four-waves";
   test(
     `the canonical runner measures actual native edits, fresh corrections and trusted round resets (${scenario})`,
@@ -76,6 +78,7 @@ for (const scenario of ["exact", "missed-first", "four-waves"]) {
       const provider = await providerFixture(root, (body) => {
         if (body.messages.at(-1).role === "tool") return {};
         userCounts.push(body.messages.filter(({ role }) => role === "user").length);
+        const damageOriginal = first && wrongFirst;
         if (first && fourWaves) {
           first = false;
           return { command: replacePixels("pixels[i] = float(", "pixels[i] = float(;") };
@@ -95,6 +98,10 @@ for (const scenario of ["exact", "missed-first", "four-waves"]) {
         const assignments = publicData.filter(
           (row) => row.mapping?.length && row.selectors?.length,
         );
+        if (damageOriginal) {
+          assert.ok(assignments.length && assignments[0].mapping.length);
+          assignments[0].mapping[0].to += "_feedback_wrong";
+        }
         const corrections = publicData.filter((row) => row.stage === "structural-correction");
         assert.ok(assignments.length || corrections.length);
         return {
@@ -120,16 +127,23 @@ with p.open('r+') as f:
             else:
                 text=re.sub(r'\\b'+re.escape(before)+r'\\b',after,text)
     for correction in requests['corrections']:
-        expected=correction['expected']
-        assert expected is not None
-        removed=[];added=[]
-        for line in expected['lines']:
+        delta=correction['diff']
+        assert delta['version']=='canonical-diff-of-diffs-v1'
+        assert delta['direction']=='actual-to-expected'
+        removed=[];added=[];actual_changed=[];expected_changed=[]
+        for nested_line in delta['hunk']['lines']:
+            line=nested_line[1:]
             if line[:1] not in ('-','+'): continue
             record=json.loads(line[1:])
             tokens=record[1] if record[0]=='unit' else [record]
             for token in tokens:
                 if len(token)==2 and token[0] in ('identifier','type_identifier','field_identifier'):
-                    (removed if line[0]=='-' else added).append(token[1])
+                    if nested_line[:1] in (' ','+'):
+                        (removed if line[0]=='-' else added).append(token[1])
+                    if line[0]=='+' and nested_line[:1]=='-': actual_changed.append(token[1])
+                    if line[0]=='+' and nested_line[:1]=='+': expected_changed.append(token[1])
+        if actual_changed:
+            removed,added=actual_changed,expected_changed
         assert len(removed)==len(added) and removed
         for before,after in dict(zip(removed,added)).items():
             text=re.sub(r'\\b'+re.escape(before)+r'\\b',after,text)
@@ -163,12 +177,21 @@ PY`,
       });
       assert.equal(report.status, "complete");
       assert.equal(report.rounds.length, prepared.scope.totalRounds);
-      assert.equal(captures, prepared.scope.totalRounds + (fourWaves ? 3 : Number(missedFirst)));
+      assert.equal(
+        captures,
+        prepared.scope.totalRounds + (fourWaves ? 3 : Number(structuralCorrection)),
+      );
       assert.ok(report.agentsClosed.every(Boolean));
-      assert.equal(report.repairs, fourWaves ? 3 : Number(missedFirst));
-      assert.equal(report.score.score, fourWaves ? 80 : missedFirst ? 90 : 100);
-      assert.equal(report.score.firstStructuralScore, missedFirst || fourWaves ? 80 : 100);
-      assert.equal(report.rounds[0].stages.length, fourWaves ? 4 : missedFirst ? 2 : 1);
+      assert.equal(report.repairs, fourWaves ? 3 : Number(structuralCorrection));
+      assert.equal(report.score.score, fourWaves ? 80 : structuralCorrection ? 90 : 100);
+      assert.equal(report.score.firstStructuralScore, structuralCorrection || fourWaves ? 80 : 100);
+      assert.equal(report.rounds[0].stages.length, fourWaves ? 4 : structuralCorrection ? 2 : 1);
+      if (wrongFirst) {
+        assert.ok(
+          report.rounds[0].stages[0].comparison.mismatches.some(({ status }) => status === "wrong"),
+        );
+        assert.deepEqual(report.rounds[0].stages[1].comparison.differenceIds, []);
+      }
       if (fourWaves) {
         assert.deepEqual(
           report.rounds[0].stages.map(({ stage }) => stage),
@@ -194,7 +217,7 @@ PY`,
       const stageSessions = report.participants.filter(
         ({ round }) => round === report.rounds[0].round,
       );
-      if (missedFirst || fourWaves)
+      if (structuralCorrection || fourWaves)
         assert.equal(
           new Set(stageSessions.map(({ participant }) => participant.sessionId)).size,
           stageSessions.length,

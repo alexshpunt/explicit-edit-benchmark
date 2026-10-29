@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { applyPatch } from "diff";
 import { compareCanonicalSnapshots } from "../../src/suites/explicit-edit-multi-agent/grading/canonical-diff.mjs";
 import {
   canonicalCorrectionNodes,
@@ -9,7 +10,120 @@ import {
 
 const view = (files) => ({ version: "canonical-diagnostic-fixture-v1", files });
 
-test("structural corrections carry each supplied mismatch and only its related canonical hunks", () => {
+function deltaText(hunks, file) {
+  return hunks
+    .filter((hunk) => hunk.file === file)
+    .map(
+      (hunk) =>
+        [JSON.stringify(["hunk", hunk.oldStart, hunk.oldLines, hunk.newLines]), ...hunk.lines].join(
+          "\n",
+        ) + "\n",
+    )
+    .join("");
+}
+
+function assertFeedbackReconstructs(checked, nodes) {
+  const files = new Set(checked.mismatches.map(({ file }) => file));
+  assert.deepEqual(
+    [...new Set(nodes.flatMap(({ differenceIds }) => differenceIds))].sort(),
+    [...checked.differenceIds].sort(),
+  );
+  for (const file of files) {
+    const feedback = nodes
+      .map(({ prompt }) => JSON.parse(prompt))
+      .filter(({ location }) => location.canonicalPath === file);
+    assert.ok(feedback.length > 0);
+    for (const item of feedback) {
+      assert.equal(item.diff.version, "canonical-diff-of-diffs-v1");
+      assert.equal(item.diff.direction, "actual-to-expected");
+      assert.equal(item.diff.context, 3);
+    }
+    const patch = {
+      oldFileName: file,
+      newFileName: file,
+      hunks: feedback.map(({ diff }) => diff.hunk),
+    };
+    assert.equal(
+      applyPatch(deltaText(checked.actualHunks, file), patch),
+      deltaText(checked.expectedHunks, file),
+    );
+  }
+}
+
+test("a nearly correct large addition receives only its actual-to-expected diff hunks", () => {
+  const lines = Array.from({ length: 9000 }, (_, index) =>
+    JSON.stringify([
+      "unit",
+      [
+        ["declaration"],
+        ["identifier", "fixture_identifier_" + index],
+        ["number_literal", String(index)],
+        ["end", "declaration"],
+      ],
+    ]),
+  );
+  const expected = lines.join("\n") + "\n";
+  const actual = expected.replace('"fixture_identifier_4500"', '"incorrect_identifier_4500"');
+  const checked = compareCanonicalSnapshots(
+    view({}),
+    view({ "source/large.h": expected }),
+    view({ "source/large.h": actual }),
+  );
+  assert.equal(checked.mismatches.length, 1);
+  assert.ok(JSON.stringify(checked.expectedHunks).length > 1000000);
+  const nodes = canonicalCorrectionNodes(checked);
+  assert.ok(Buffer.byteLength(canonicalAssignmentPrompt(nodes)) < 16384);
+  assertFeedbackReconstructs(checked, nodes);
+});
+
+test("distant errors inside one original hunk become separate diff-of-diffs assignments", () => {
+  const expected = Array.from({ length: 100 }, (_, index) => "declaration " + index + "\n").join(
+    "",
+  );
+  const actual = expected
+    .replace("declaration 10\n", "wrong 10\n")
+    .replace("declaration 80\n", "wrong 80\n");
+  const checked = compareCanonicalSnapshots(
+    view({}),
+    view({ "source/large.h": expected }),
+    view({ "source/large.h": actual }),
+  );
+  assert.equal(checked.mismatches.length, 1);
+  const nodes = canonicalCorrectionNodes(checked);
+  assert.equal(nodes.length, 2);
+  assertFeedbackReconstructs(checked, nodes);
+});
+
+test("feedback preserves complete missing changes rather than truncating a large absent file", () => {
+  const expected = Array.from(
+    { length: 12000 },
+    (_, index) => "required content " + index + "\n",
+  ).join("");
+  const checked = compareCanonicalSnapshots(
+    view({}),
+    view({ "source/absent.h": expected }),
+    view({}),
+  );
+  assertFeedbackReconstructs(checked, canonicalCorrectionNodes(checked));
+});
+
+test("merged actual hunks do not make feedback undo already correct changes", () => {
+  const first = Array.from({ length: 60 }, (_, index) => "line " + index + "\n").join("");
+  const expected = first
+    .replace("line 10\n", "required 10\n")
+    .replace("line 20\n", "required 20\n");
+  const actual = expected.replace("line 15\n", "unexpected 15\n");
+  const checked = compareCanonicalSnapshots(
+    view({ "source/main.cpp": first }),
+    view({ "source/main.cpp": expected }),
+    view({ "source/main.cpp": actual }),
+  );
+  assert.equal(checked.actualHunks.length, 1);
+  assert.equal(checked.expectedHunks.length, 2);
+  assertFeedbackReconstructs(checked, canonicalCorrectionNodes(checked));
+});
+
+test("structural corrections cover every supplied mismatch with reconstructible diff-of-diffs hunks", () => {
   const first = Array.from({ length: 20 }, (_, index) => `line ${index}\n`).join("");
   const end = first.replace("line 1\n", "changed 1\n").replace("line 18\n", "changed 18\n");
   const checked = compareCanonicalSnapshots(
@@ -18,23 +132,22 @@ test("structural corrections carry each supplied mismatch and only its related c
     view({ "source/main.cpp": first, "source/extra.bin": "extra\n" }),
   );
   const nodes = canonicalCorrectionNodes(checked);
-  assert.equal(nodes.length, 3);
-  assert.equal(new Set(nodes.map(({ id }) => id)).size, 3);
-  assert.deepEqual(
-    nodes.flatMap(({ differenceIds }) => differenceIds).sort(),
-    [...checked.differenceIds].sort(),
-  );
+  assert.equal(nodes.length, 2);
+  assert.equal(new Set(nodes.map(({ id }) => id)).size, 2);
+  assertFeedbackReconstructs(checked, nodes);
   for (const node of nodes) {
     assert.deepEqual(node.dependencies, []);
     const data = JSON.parse(node.prompt);
-    assert.equal(data.mismatch.id, node.differenceIds[0]);
     assert.deepEqual(
-      data.actual,
-      data.mismatch.actualIndices.map((index) => checked.actualHunks[index]),
+      data.mismatches.map(({ id }) => id),
+      node.differenceIds,
     );
-    if (data.mismatch.kind === "expected")
-      assert.deepEqual(data.expected, checked.expectedHunks[data.mismatch.expectedIndex]);
-    else assert.equal(data.expected, null);
+    assert.deepEqual(
+      data.mismatches,
+      checked.mismatches.filter(({ id }) => node.differenceIds.includes(id)),
+    );
+    assert.equal(Object.hasOwn(data, "expected"), false);
+    assert.equal(Object.hasOwn(data, "actual"), false);
   }
 });
 

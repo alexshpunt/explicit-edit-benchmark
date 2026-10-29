@@ -128,6 +128,36 @@ Precompute trusted canonical endpoints and reference diffs once. Parse each new
 measured candidate without regenerating the trusted workload or a full reference
 execution.
 
+## Structural correction feedback
+
+Scoring disagreements and correction assignments are separate units. Feedback
+`canonical-diff-of-diffs-v1` takes a second ordinary diff, in the direction
+**actual changes to expected changes**, with the same pinned implementation and
+three context lines. Each hunk of that second diff is one correction assignment;
+the scoring ledger keeps its original disagreement identities.
+
+For each affected file, serialize its complete actual and expected canonical
+deltas, including already-matching hunks. Each original hunk contributes a JSON
+header `["hunk", oldStart, oldLines, newLines]`, then its complete patch lines,
+with LF separators. Exclude output offsets and controller IDs. Compare the two
+serialized deltas once per file; do not repeat an entire associated hunk for each
+disagreement or compare an isolated expected fragment against a spanning actual
+hunk. Either shortcut can repeat large amounts of correct content or ask an agent
+to undo correct changes.
+
+The assignment carries the physical file location, related scoring disagreements,
+and one second-diff hunk. Its outer minus/plus markers describe actual-to-expected
+differences; its inner markers describe baseline-to-candidate/reference changes.
+Second-diff line numbers address the serialized change text, not C++ source lines.
+These records locate edits in real source; they are not a C++ patch. Filename
+bytes remain lossless, including non-UTF-8 paths.
+
+A second diff removes matching content, not missing content. A completely absent
+large addition still requires its complete expected delta. Neither this feedback
+contract nor engineering integration checks establish that every correction
+packet fits a particular model's context window. Do not truncate required changes,
+silently split the configured packet, or claim model readiness from a small fixture.
+
 ## Execution and correction budgets
 
 Each round uses a work-conserving pool, bounded by the configured native-process
