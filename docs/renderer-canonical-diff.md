@@ -180,9 +180,10 @@ Harnesses may run their own subprocesses during work; there is no executable-nam
 allowlist or general descendant prohibition.
 
 Assignments state that other agents share the project without revealing team
-counts. Agents must preserve concurrent work, stay within their assignment, avoid
-project builds and lint runs, and react only to diagnostics relevant to their own
-changes. Native IDE tools, instructions and diagnostic services remain enabled.
+counts. Agents must preserve concurrent work and stay within their assignment.
+Original and structural-correction agents avoid project-wide builds and lint runs;
+integration-correction agents may run the supplied validation command. Native IDE
+tools, instructions and diagnostic services remain enabled.
 
 After original work:
 
@@ -204,6 +205,14 @@ There are at most four editing waves: original, structural correction, build
 correction and image correction. Successful stages do not trigger a correction.
 Auth, provider, cancellation and infrastructure failures remain separate stops;
 they do not authorize a model retry, fallback or an extra correction.
+
+Build and image correction feedback identifies the failed stage and supplies a
+Bash validation command; it does not repeat task prompts or compiler diagnostics.
+The build command discovers the current translation units and uses the verifier's
+compiler flags. The image command also renders both scenes twice and compares the
+resulting pixel hashes against the two expected hashes. It exposes those hashes,
+not the reference pixels or source. The controller still performs independent
+verification after the correction wave.
 
 Every later code-changing pass also produces a canonical comparison. Newly
 introduced structural disagreements incur penalties without opening another

@@ -8,7 +8,6 @@ import { writeTree } from "../generation/generator.mjs";
 import { encodeSourceBytes } from "../cpp/source-bytes.mjs";
 import { scoreCanonicalRounds } from "../grading/canonical-score.mjs";
 import { measureCoherentCandidate } from "../grading/coherent-build.mjs";
-import { compilerDiagnostics } from "../grading/repair-diagnostics.mjs";
 import {
   CANONICAL_MULTI_AGENT_PROTOCOL,
   loadCanonicalPreparation,
@@ -217,11 +216,7 @@ export async function runCanonical(
   };
   /** @type {Awaited<ReturnType<typeof captureCandidate>> | undefined} */
   let boundary;
-  /** @type {Awaited<ReturnType<typeof captureCandidate>> | undefined} */
-  let lastCaptured;
   let nextSession = 0;
-  const publicTasks = new Map(loaded.taskList.map((task) => [task.id, task]));
-  const requirements = [];
   async function releaseBoundary() {
     if (boundary) await assertCandidateUnchanged(workspace, boundary, { signal });
     releaseCandidateWorkspace(workspace);
@@ -257,28 +252,20 @@ export async function runCanonical(
     for (const round of loaded.schedule) {
       signal.throwIfAborted();
       const interval = loaded.atomicIntervals.rounds.get(round.id);
-      for (const { task } of round.assignments)
-        requirements.push({ id: task, prompt: publicTasks.get(task).prompt });
       const roundOutput = path.join(output, "rounds", round.id);
       await mkdir(roundOutput, { mode: 0o700 });
       const prepared = loaded.canonical.rounds.get(round.id).preparedDiff;
       const outcome = await runCanonicalRound({
         prepared,
         signal,
-        executeWave: async ({ stage, comparison, integration }) => {
+        executeWave: async ({ stage, comparison }) => {
           await releaseBoundary();
           const nodes =
             stage === "original"
               ? interval.nodes
               : stage === "structural-correction"
                 ? canonicalCorrectionNodes(comparison)
-                : canonicalIntegrationNodes(stage, {
-                    diagnostics: compilerDiagnostics(
-                      integration?.failure?.cause?.stderr,
-                      lastCaptured?.lexicalTree ?? {},
-                    ),
-                    requirements,
-                  });
+                : canonicalIntegrationNodes(stage, { expectedPixels: loaded.manifest.pixels });
           const sessions = new Map();
           const records = new Map();
           log(`EDIT ${round.id}/${stage}`);
@@ -380,7 +367,6 @@ export async function runCanonical(
             includeAllFiles: true,
           });
           boundary = captured;
-          lastCaptured = captured;
           const snapshot = await canonicalizeCapturedCandidate(captured);
           await assertCandidateUnchanged(workspace, captured, { signal });
           await writeFile(path.join(evidence, "canonical.json"), JSON.stringify(snapshot) + "\n", {

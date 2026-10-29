@@ -173,21 +173,25 @@ test("a successful comparison creates no structural repair assignment", () => {
   assert.deepEqual(canonicalCorrectionNodes(checked), []);
 });
 
-test("integration corrections retain candidate diagnostics and already-public requirements", () => {
-  const diagnostics = [
-    { file: "main.cpp", line: 7, severity: "error", message: "fixture diagnostic" },
-  ];
-  const requirements = [{ id: "public-task", prompt: "fixture requirement" }];
+test("integration feedback contains only the stage and its executable validation", () => {
+  const expectedPixels = ["a".repeat(64), "b".repeat(64)];
   for (const stage of ["build-correction", "image-correction"]) {
-    const nodes = canonicalIntegrationNodes(stage, { diagnostics, requirements });
+    const nodes = canonicalIntegrationNodes(stage, { expectedPixels });
     assert.equal(nodes.length, 1);
     const data = JSON.parse(nodes[0].prompt);
+    assert.deepEqual(Object.keys(data).sort(), ["stage", "validation"]);
     assert.equal(data.stage, stage);
-    assert.deepEqual(data.diagnostics, diagnostics);
-    assert.deepEqual(data.requirements, requirements);
+    assert.equal(typeof data.validation, "string");
+    assert.ok(data.validation.length > 0);
     assert.deepEqual(nodes[0].dependencies, []);
+    const prompt = canonicalAssignmentPrompt(nodes);
+    assert.ok(prompt.includes("integration check failed"));
+    assert.ok(!prompt.includes("Do not run project-wide builds"));
+    assert.ok(!prompt.includes("structural-correction data"));
+    assert.ok(Buffer.byteLength(prompt) < 5000);
   }
-  assert.throws(() => canonicalIntegrationNodes("original", { diagnostics, requirements }));
+  assert.throws(() => canonicalIntegrationNodes("original", { expectedPixels }));
+  assert.throws(() => canonicalIntegrationNodes("image-correction", { expectedPixels: [] }));
 });
 
 test("assignment composition retains supplied task values without requiring their prose", () => {
