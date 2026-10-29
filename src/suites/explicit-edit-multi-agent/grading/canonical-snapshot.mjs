@@ -6,7 +6,7 @@ import { cppTokens } from "../cpp/cpp-tokens.mjs";
 import { decodeSourceBytes, encodeSourceBytes } from "../cpp/source-bytes.mjs";
 
 const require = createRequire(import.meta.url);
-const version = "renderer-canonical-snapshot-v1";
+const version = "renderer-canonical-snapshot-v2";
 const cppExtension = /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|ipp|inl|tcc|inc)$/i;
 const literals = new Set([
   "string_literal",
@@ -34,7 +34,7 @@ async function language() {
           version: "0.23.4",
           sha256: createHash("sha256").update(grammarBytes).digest("hex"),
         },
-        serialization: "cst-syntax-unit-lines-v3",
+        serialization: "ordered-cpp-source-v4",
         macroLayout: "project-definitions-and-arguments-token-gaps-v1",
       },
     };
@@ -47,6 +47,21 @@ async function language() {
  * and numbers keep `+ +` distinct from `++` instead of stripping all whitespace.
  */
 function preprocessingTokens(source) {
+  // Remove phase-2 continuations outside literal bytes before tokenization.
+  const pieces = [];
+  let cursor = 0;
+  for (const token of cppTokens(source)) {
+    if (
+      /^[A-Za-z_]\w*$/.test(token.text) ||
+      token.text.startsWith("//") ||
+      token.text.startsWith("/*")
+    )
+      continue;
+    pieces.push(source.slice(cursor, token.start).replace(/\\\r?\n/g, ""), token.text);
+    cursor = token.end;
+  }
+  pieces.push(source.slice(cursor).replace(/\\\r?\n/g, ""));
+  source = pieces.join("");
   const protectedTokens = new Map(
     cppTokens(source)
       .filter((token) => !/^[A-Za-z_]\w*$/.test(token.text))
@@ -191,7 +206,40 @@ function sortable(node) {
   );
 }
 
-function canonicalChildren(node) {
+function nodeKey(node) {
+  return `${node.type}:${node.startIndex}:${node.endIndex}`;
+}
+
+function definitionKey(node, cache) {
+  const key = nodeKey(node);
+  if (cache.keys.has(key)) return cache.keys.get(key);
+  const tokens = [],
+    stack = [node];
+  while (stack.length) {
+    const current = stack.pop();
+    if (current.type === "comment" || current.isMissing) continue;
+    if (current.type === "preproc_arg") {
+      tokens.push(tokenGaps(current.text));
+      continue;
+    }
+    if (
+      literals.has(current.type) ||
+      current.type === "user_defined_literal" ||
+      !current.childCount
+    ) {
+      tokens.push(current.text);
+      continue;
+    }
+    const children = canonicalChildren(current, cache);
+    for (let index = children.length - 1; index >= 0; index--) stack.push(children[index]);
+  }
+  const value = JSON.stringify(tokens);
+  cache.keys.set(key, value);
+  return value;
+}
+function canonicalChildren(node, cache) {
+  const key = nodeKey(node);
+  if (cache.children.has(key)) return cache.children.get(key);
   const children = node.children.filter((child) => child.type !== "comment");
   if (!containers.has(node.type)) return children;
   // A standalone class definition and its trailing semicolon are one block.
@@ -219,7 +267,7 @@ function canonicalChildren(node) {
       .filter((unit) => unit.sortable)
       .map((unit) => ({
         ...unit,
-        key: JSON.stringify(unit.nodes.flatMap((part) => opaqueTokens(part.text))),
+        key: JSON.stringify(unit.nodes.map((part) => definitionKey(part, cache))),
       }));
     ordered.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     let next = 0;
@@ -234,16 +282,15 @@ function canonicalChildren(node) {
     } else segment.push(unit);
   }
   flush();
+  cache.children.set(key, result);
   return result;
 }
 
-// Keep complete CST records, but give declarations and expressions one diff line.
-// Scope and statement boundaries stay separate; function bodies are never omitted.
-const syntaxLineUnits = new Set([
+// Break complete source statements, never individual parser records. The parser
+// chooses definition order; its nodes and bookkeeping are not serialized.
+const sourceLines = new Set([
   "declaration",
   "field_declaration",
-  "function_declarator",
-  "template_parameter_list",
   "expression_statement",
   "return_statement",
   "break_statement",
@@ -252,65 +299,109 @@ const syntaxLineUnits = new Set([
   "static_assert_declaration",
   "alias_declaration",
   "using_declaration",
-  "condition_clause",
+  "function_definition",
+  "namespace_definition",
+  "template_declaration",
 ]);
 
 function render(root, macros) {
+  const cache = { children: new Map(), keys: new Map() };
   const lines = [],
     errors = [];
-  let unit;
-  const emit = (record) => {
-    if (unit) unit.push(record);
-    else lines.push(JSON.stringify(record));
+  let current = "",
+    indent = 0,
+    parentheses = 0,
+    brackets = 0;
+  const flush = () => {
+    if (current) lines.push("  ".repeat(Math.min(indent, 64)) + current);
+    current = "";
   };
+  const append = (value, joined = false) => {
+    if (current && !joined) current += " ";
+    current += value;
+  };
+  const emit = (node) => {
+    const value = node.text;
+    if (node.type === "\n") {
+      flush();
+      return;
+    }
+    if (value.startsWith("#")) flush();
+    if (value === "}") {
+      flush();
+      indent = Math.max(0, indent - 1);
+    }
+    append(value);
+    if (value === "(") parentheses++;
+    else if (value === ")") parentheses = Math.max(0, parentheses - 1);
+    else if (value === "[") brackets++;
+    else if (value === "]") brackets = Math.max(0, brackets - 1);
+    else if (value === "{") {
+      flush();
+      indent++;
+    } else if (value === ";" && !parentheses && !brackets) flush();
+  };
+  // Keep diagnostics independently, including inside atomic literals/macro args.
+  const diagnosticStack = [root];
+  while (diagnosticStack.length) {
+    const node = diagnosticStack.pop();
+    if (node.isError || node.isMissing)
+      errors.push({ kind: node.isMissing ? "missing" : "syntax", type: node.type });
+    for (let index = node.childCount - 1; index >= 0; index--)
+      diagnosticStack.push(node.child(index));
+  }
+  const gaps = (tokens) =>
+    tokens.map(([separated, value]) => (separated ? " " : "") + value).join("");
   const stack = [{ node: root }];
   while (stack.length) {
     const item = stack.pop();
-    if (item.close) {
-      emit(["end", item.close]);
-      if (item.unit) {
-        lines.push(JSON.stringify(["unit", unit]));
-        unit = undefined;
-      }
-      continue;
-    }
     const node = item.node,
       type = node.type;
-    if (type === "comment") continue;
-    if (node.isError || node.isMissing)
-      errors.push({ kind: node.isMissing ? "missing" : "syntax", type });
-    if (node.isMissing) {
-      emit(["missing", type]);
+    const directive =
+      type.startsWith("preproc_") &&
+      !["preproc_arg", "preproc_params", "preproc_defined"].includes(type);
+    if (item.close) {
+      if ((sourceLines.has(type) && !parentheses && !brackets) || directive) flush();
       continue;
     }
-    if (literals.has(type)) {
-      emit([type, node.text]);
+    if (type === "comment" || node.isMissing) continue;
+    if (sourceLines.has(type) && !parentheses && !brackets) flush();
+    if (item.macroArguments) {
+      append("(" + macroArguments(node.text).map(gaps).join(",") + ")");
+      continue;
+    }
+    if (type === "preproc_params") {
+      append(opaqueTokens(node.text).join(" "), true);
       continue;
     }
     if (type === "preproc_arg") {
-      emit([type, tokenGaps(node.text)]);
+      append(gaps(tokenGaps(node.text)));
+      continue;
+    }
+    if (literals.has(type) || type === "user_defined_literal") {
+      append(node.text);
       continue;
     }
     if (!node.childCount) {
-      emit([type, type === "\n" ? "\n" : node.text]);
+      emit(node);
       continue;
     }
-    const startsUnit = !unit && (syntaxLineUnits.has(type) || type.endsWith("_expression"));
-    if (startsUnit) unit = [];
-    emit([type]);
-    if (type === "call_expression") {
-      const callee = node.childForFieldName("function");
-      const name = callee?.text.match(/([\p{ID_Start}_][\p{ID_Continue}_]*)$/u)?.[1];
-      const arguments_ = node.childForFieldName("arguments");
-      if (name && macros.has(name) && arguments_)
-        emit(["macro-argument-gaps", macroArguments(arguments_.text)]);
+    if (directive) flush();
+    const callee = type === "call_expression" ? node.childForFieldName("function") : null;
+    const name = callee?.text.match(/([\p{ID_Start}_][\p{ID_Continue}_]*)$/u)?.[1];
+    const arguments_ = name && macros.has(name) ? node.childForFieldName("arguments") : null;
+    stack.push({ node, close: true });
+    const children = canonicalChildren(node, cache);
+    for (let index = children.length - 1; index >= 0; index--) {
+      const child = children[index];
+      stack.push({
+        node: child,
+        macroArguments: arguments_ && child.startIndex === arguments_.startIndex,
+      });
     }
-    stack.push({ close: type, unit: startsUnit });
-    const children = canonicalChildren(node);
-    for (let index = children.length - 1; index >= 0; index--)
-      stack.push({ node: children[index] });
   }
-  return { text: lines.join("\n") + "\n", errors };
+  flush();
+  return { text: lines.length ? lines.join("\n") + "\n" : "", errors };
 }
 
 /** Input is a lossless source lexical view, as returned by decodeSourceBytes.
@@ -379,7 +470,12 @@ export async function canonicalizeProject(tree) {
             JSON.stringify(["opaque-bytes", encodeSourceBytes(source).toString("base64")]) + "\n",
           errors: [],
         };
-    files.push([file, JSON.stringify(["file", file]) + "\n" + result.text]);
+    files.push([
+      file,
+      cppExtension.test(file) && source.isWellFormed()
+        ? result.text
+        : JSON.stringify(["file", file]) + "\n" + result.text,
+    ]);
     for (const error of result.errors) errors.push({ file, ...error });
   }
   const canonicalizer = (await language()).identity;

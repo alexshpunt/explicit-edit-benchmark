@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { canonicalizeProject } from "../grading/canonical-snapshot.mjs";
 import { decodeSourceBytes, encodeSourceBytes } from "../cpp/source-bytes.mjs";
 
-export const CANONICAL_PROJECT_VERSION = "renderer-canonical-project-v1";
+export const CANONICAL_PROJECT_VERSION = "renderer-canonical-project-v2";
 export const CANONICAL_CANDIDATE_POLICY = Object.freeze({
   version: "renderer-canonical-entry-inventory-v1",
   paths: "source-relative-or-byte-encoded",

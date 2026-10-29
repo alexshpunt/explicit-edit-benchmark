@@ -51,19 +51,12 @@ function assertFeedbackReconstructs(checked, nodes) {
 }
 
 test("a nearly correct large addition receives only its actual-to-expected diff hunks", () => {
-  const lines = Array.from({ length: 9000 }, (_, index) =>
-    JSON.stringify([
-      "unit",
-      [
-        ["declaration"],
-        ["identifier", "fixture_identifier_" + index],
-        ["number_literal", String(index)],
-        ["end", "declaration"],
-      ],
-    ]),
-  );
-  const expected = lines.join("\n") + "\n";
-  const actual = expected.replace('"fixture_identifier_4500"', '"incorrect_identifier_4500"');
+  const suffix = "_".repeat(80);
+  const expected = Array.from(
+    { length: 9000 },
+    (_, index) => `int fixture_identifier_${index}${suffix} = ${index} ;\n`,
+  ).join("");
+  const actual = expected.replace("fixture_identifier_4500", "incorrect_identifier_4500");
   const checked = compareCanonicalSnapshots(
     view({}),
     view({ "source/large.h": expected }),

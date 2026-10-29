@@ -8,32 +8,39 @@ import { decodeSourceBytes } from "../../src/suites/explicit-edit-multi-agent/cp
 
 const text = async (source) => (await canonicalizeCpp(source)).text;
 
-test("canonical statements retain every token in bounded syntax-unit lines before large moves", async () => {
+test("canonical C++ is ordered source code with complete statement lines before large moves", async () => {
   const declarations = Array.from({ length: 2000 }, (_, i) => `int field_${i} = ${i};`);
   const source = (items) => `int value(){${items.join("\n")}return field_0;}\n`;
   const baseline = await canonicalizeCpp(source(declarations));
-  const rows = baseline.text
-    .trimEnd()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  const units = rows.filter((row) => row[0] === "unit");
-  const definitions = units.filter((row) => row[1][0][0] === "declaration");
-  assert.equal(definitions.length, declarations.length);
-  for (const [i, row] of definitions.entries()) {
-    assert.ok(row[1].some((token) => token[0] === "identifier" && token[1] === `field_${i}`));
-    assert.ok(row[1].some((token) => token[0] === "number_literal" && token[1] === String(i)));
-    assert.deepEqual(row[1].at(-1), ["end", "declaration"]);
-  }
+  const statements = new Set(
+    baseline.text
+      .trim()
+      .split("\n")
+      .map((line) => line.trim()),
+  );
+  for (let i = 0; i < declarations.length; i++)
+    assert.ok(statements.has(`int field_${i} = ${i} ;`));
+  assert.ok(Buffer.byteLength(baseline.text) < Buffer.byteLength(source(declarations)) * 2);
+  assert.equal((await canonicalizeCpp(baseline.text)).text, baseline.text);
   const { prepareCanonicalDiff } =
     await import("../../src/suites/explicit-edit-multi-agent/grading/canonical-diff.mjs");
   const reference = await canonicalizeCpp(source(declarations.slice(0, 500)));
   const prepared = prepareCanonicalDiff(
-    { version: "syntax-unit-fixture", files: { "value.cpp": baseline.text } },
-    { version: "syntax-unit-fixture", files: { "value.cpp": reference.text } },
+    { version: "ordered-code-fixture", files: { "value.cpp": baseline.text } },
+    { version: "ordered-code-fixture", files: { "value.cpp": reference.text } },
   );
   assert.equal(prepared.totalHunks, 1);
   assert.equal(baseline.errors.length, 0);
   assert.equal(reference.errors.length, 0);
+});
+
+test("canonical source sorts definitions and is directly compilable C++ rather than parser JSON", async () => {
+  const code = await text("int z(){return 7;} int a(){return 3;}");
+  assert.equal(code, "int a ( ) {\n  return 3 ;\n}\nint z ( ) {\n  return 7 ;\n}\n");
+  const snapshot = await canonicalizeProject({
+    "main.cpp": "int z(){return 7;} int a(){return 3;}",
+  });
+  assert.equal(snapshot.files["main.cpp"], code);
 });
 
 test("separated statement changes remain independent ordinary canonical hunks", async () => {
@@ -60,7 +67,7 @@ test("canonical C++ ignores layout and comments without losing literal contents"
   assert.equal(await text(before), await text(after));
   for (const literal of ['"a  b // literal"', 'R"xx( a  b\n/* literal */ café 🙂 )xx"', "' '"]) {
     const snapshot = await text(`const auto value = ${literal};`);
-    assert.ok(snapshot.includes(JSON.stringify(literal)));
+    assert.ok(snapshot.includes(literal));
     assert.notEqual(snapshot, await text(`const auto value = ${literal.replace(" ", "  ")};`));
   }
 });
@@ -77,6 +84,13 @@ test("canonical C++ sorts function and class definition placement inside a names
   );
 });
 
+test("reopened namespaces have stable ordering after their nested definitions normalize", async () => {
+  const one = "namespace N { int z(){return 1;} int a(){return 2;} }";
+  const two = "namespace N { int m(){return 3;} }";
+  const code = await text(one + two);
+  assert.equal(code, await text(code));
+  assert.equal(code, await text(two + one));
+});
 test("canonical C++ sorts method placement but preserves member layout and access", async () => {
   const first =
     "struct A { int z(){return 1;} int x; int y; int a(){return 2;} private: int p(){return 3;} };";
@@ -137,6 +151,13 @@ test("canonical C++ does not move definitions between preprocessor branches or l
   const before = "int z(){return 1;}\n#define VALUE 2\nint a(){return VALUE;}\n";
   const after = "int a(){return VALUE;}\n#define VALUE 2\nint z(){return 1;}\n";
   assert.notEqual(await text(before), await text(after));
+});
+
+test("inactive preprocessor branches normalize blank layout without accumulating newlines", async () => {
+  const source = "#if 0\n\n\nint value(){return 3;}\n#endif\n";
+  const code = await text(source);
+  assert.equal(code, await text(code));
+  assert.equal(code, await text(source.replace("\n\n\n", "\n")));
 });
 
 test("canonical C++ preserves macro argument gaps that change stringification", async () => {

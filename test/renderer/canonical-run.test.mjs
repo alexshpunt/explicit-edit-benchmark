@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readlink, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { cppTokens } from "../../src/suites/explicit-edit-multi-agent/cpp/cpp-tokens.mjs";
 import { prepareCanonical } from "../../src/suites/explicit-edit-multi-agent/execution/canonical-preparation.mjs";
 import { runCanonical } from "../../src/suites/explicit-edit-multi-agent/execution/canonical-run.mjs";
 import { startPiParticipant } from "../../src/suites/explicit-edit-multi-agent/execution/pi-baseline.mjs";
@@ -22,6 +23,27 @@ function rows(body) {
     } catch {
       return [];
     }
+  });
+}
+
+// This fixture performs identifier renames only, not arbitrary source patches.
+function correctionSourceLines(correction) {
+  return correction.diff.hunk.lines.flatMap((nestedLine) => {
+    const outer = nestedLine[0],
+      inner = nestedLine[1],
+      source = nestedLine.slice(2);
+    if (![" ", "+", "-"].includes(outer) || !["+", "-"].includes(inner)) return [];
+    // File-presence/byte/physical records are not C++ and cannot name rename targets.
+    if (/^\["(?:file|opaque-bytes|physical-entry)",/.test(source)) return [];
+    return [
+      {
+        outer,
+        inner,
+        identifiers: cppTokens(source)
+          .map(({ text }) => text)
+          .filter((text) => /^[A-Za-z_]\w*$/.test(text)),
+      },
+    ];
   });
 }
 
@@ -102,7 +124,9 @@ for (const scenario of ["exact", "missed-first", "wrong-first", "four-waves"]) {
           assert.ok(assignments.length && assignments[0].mapping.length);
           assignments[0].mapping[0].to += "_feedback_wrong";
         }
-        const corrections = publicData.filter((row) => row.stage === "structural-correction");
+        const corrections = publicData
+          .filter((row) => row.stage === "structural-correction")
+          .map((correction) => ({ ...correction, sourceLines: correctionSourceLines(correction) }));
         assert.ok(assignments.length || corrections.length);
         return {
           command: `python3 - <<'PY'
@@ -131,17 +155,12 @@ with p.open('r+') as f:
         assert delta['version']=='canonical-diff-of-diffs-v1'
         assert delta['direction']=='actual-to-expected'
         removed=[];added=[];actual_changed=[];expected_changed=[]
-        for nested_line in delta['hunk']['lines']:
-            line=nested_line[1:]
-            if line[:1] not in ('-','+'): continue
-            record=json.loads(line[1:])
-            tokens=record[1] if record[0]=='unit' else [record]
-            for token in tokens:
-                if len(token)==2 and token[0] in ('identifier','type_identifier','field_identifier'):
-                    if nested_line[:1] in (' ','+'):
-                        (removed if line[0]=='-' else added).append(token[1])
-                    if line[0]=='+' and nested_line[:1]=='-': actual_changed.append(token[1])
-                    if line[0]=='+' and nested_line[:1]=='+': expected_changed.append(token[1])
+        for line in correction['sourceLines']:
+            for token in line['identifiers']:
+                if line['outer'] in (' ','+'):
+                    (removed if line['inner']=='-' else added).append(token)
+                if line['inner']=='+' and line['outer']=='-': actual_changed.append(token)
+                if line['inner']=='+' and line['outer']=='+': expected_changed.append(token)
         if actual_changed:
             removed,added=actual_changed,expected_changed
         assert len(removed)==len(added) and removed

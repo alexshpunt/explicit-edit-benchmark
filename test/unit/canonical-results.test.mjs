@@ -240,7 +240,7 @@ function fixture({
     usage,
     preparation: {
       manifestSha256: digest("preparation"),
-      canonicalVersion: "renderer-canonical-project-v1",
+      canonicalVersion: "renderer-canonical-project-v2",
       canonicalizer: {},
       inventory: CANONICAL_RUN_POLICY.candidate,
     },

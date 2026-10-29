@@ -105,7 +105,7 @@ test(
     const actual = await canonicalizeCapturedCandidate(captured);
     const expected = await canonicalizeTrustedProject(tree);
     assert.deepEqual(actual, expected);
-    assert.equal(actual.version, "renderer-canonical-project-v1");
+    assert.equal(actual.version, "renderer-canonical-project-v2");
     assert.match(actual.sha256, /^[a-f0-9]{64}$/);
     const { sha256, ...sealed } = actual;
     assert.equal(sha256, createHash("sha256").update(JSON.stringify(sealed)).digest("hex"));
