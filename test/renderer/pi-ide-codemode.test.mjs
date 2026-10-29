@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, watch } from "node:fs";
-import { mkdtemp, mkdir, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, open, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
@@ -264,6 +264,9 @@ test(
       return { command: `printf '%s\\n' '${value}' >> /workspace/edits.txt` };
     });
     const first = await f.start("original-one");
+    // Pin the retired namespace object so Linux cannot recycle its inode before comparison.
+    const namespacePin = await open(`/proc/${first.initial.process.agentHostPid}/ns/pid`, "r");
+    t.after(() => namespacePin.close());
     const firstReceipt = await first.driver.execute(JSON.stringify({ value: "first-delivery" }));
     assert.equal(firstReceipt.failedToolCalls, 0);
     await f.close(first);
