@@ -75,7 +75,10 @@ function decode(bytes) {
  * Preserve raw bytes before interpreting source. The separate mirror retains file
  * and symlink contents; its private manifest also records unsupported entry types.
  */
-async function inspect(workspace, { source, signal, observe = false } = {}) {
+async function inspect(
+  workspace,
+  { source, signal, observe = false, includeAllFiles = false } = {},
+) {
   signal?.throwIfAborted();
   const root = await open(
     workspace,
@@ -87,6 +90,7 @@ async function inspect(workspace, { source, signal, observe = false } = {}) {
     tree = {},
     lexicalTree = {};
   const watchers = [];
+  const contents = includeAllFiles ? new Map() : undefined;
   let before,
     journal = null,
     version,
@@ -141,6 +145,7 @@ async function inspect(workspace, { source, signal, observe = false } = {}) {
           await handle.close();
         }
         entry.sha256 = hash(bytes);
+        contents?.set(entry.pathBytes, bytes);
         if (mirrored) await writeFile(mirrored, bytes, { flag: "wx", mode: 0o600 });
         if (pathname !== null && /\.(?:cpp|h)$/.test(pathname)) {
           const text = decode(bytes);
@@ -200,6 +205,7 @@ async function inspect(workspace, { source, signal, observe = false } = {}) {
     );
     return {
       ...(journal ? { journal, version } : {}),
+      ...(contents ? { contents } : {}),
       tree,
       lexicalTree,
       files: files.sort(),
@@ -220,7 +226,15 @@ async function inspect(workspace, { source, signal, observe = false } = {}) {
   }
 }
 
-export async function captureCandidate(workspace, evidence, { signal } = {}) {
+/** Opt-in contents retain the already captured bytes of every regular entry.
+ * Legacy callers keep the original C++-only text views and return shape.
+ */
+export async function captureCandidate(
+  workspace,
+  evidence,
+  { signal, includeAllFiles = false } = {},
+) {
+  assert.equal(typeof includeAllFiles, "boolean", "Invalid complete candidate capture option");
   const root = path.resolve(workspace),
     output = path.resolve(evidence);
   const relative = path.relative(root, output);
@@ -231,7 +245,12 @@ export async function captureCandidate(workspace, evidence, { signal } = {}) {
   await mkdir(output, { mode: 0o700 });
   const source = path.join(output, "source");
   await mkdir(source, { mode: 0o700 });
-  const { journal, version, ...candidate } = await inspect(root, { source, signal, observe: true });
+  const { journal, version, ...candidate } = await inspect(root, {
+    source,
+    signal,
+    observe: true,
+    includeAllFiles,
+  });
   await writeFile(
     path.join(output, "manifest.json"),
     JSON.stringify(candidate.manifest, null, 2) + "\n",

@@ -93,7 +93,7 @@ export function canonicalStructuralScore({
       resolved: [],
       unresolved: [],
       introduced: initial,
-      change: -initial.length,
+      change: 0 - initial.length,
       ...first,
     },
   ];

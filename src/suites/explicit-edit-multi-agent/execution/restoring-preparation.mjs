@@ -16,7 +16,11 @@ const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 /** Validate immutable workload inputs without accepting a historical execution proof.
  * Restoring execution seals separate requirements and needs its own execution proof.
  */
-export async function loadRestoringPreparation(preparationPath, { agents } = {}) {
+export async function loadRestoringPreparation(
+  preparationPath,
+  { agents, roundCredit = true } = {},
+) {
+  assert.equal(typeof roundCredit, "boolean", "Invalid round credit preparation mode");
   const preparation = path.resolve(preparationPath);
   const json = async (file) => JSON.parse(await readFile(file, "utf8"));
   const manifest = await json(path.join(preparation, "manifest.json"));
@@ -84,7 +88,7 @@ export async function loadRestoringPreparation(preparationPath, { agents } = {})
     atomicBatches,
     schedule,
     contracts,
-    { roundCredit: true },
+    { roundCredit },
   );
   assert.equal(
     treeIdentity(atomicIntervals.tree),
