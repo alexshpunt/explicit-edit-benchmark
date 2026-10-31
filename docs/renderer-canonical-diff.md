@@ -228,6 +228,13 @@ closure and integration checks remain unchanged. The default still runs all roun
 
 ## Execution and correction budgets
 
+Hard provider refusals stop the observation rather than entering recovery. HTTP
+401/402/403 and explicit exhausted account credit or quota errors take precedence
+over a misleading `server_error` wrapper. The controller preserves completed tool
+effects and the native failure receipt, stops new admissions, and closes the
+failed participant before native automatic retries. Temporary throughput limits (`429`),
+connection errors and transient server failures retain the existing recovery path.
+
 Each round uses a work-conserving pool, bounded by the configured native-process
 limit. Dispatch ready dependency-respecting work in configurable packets, initially
 10 original edits. A process receives successive packets and retains its history

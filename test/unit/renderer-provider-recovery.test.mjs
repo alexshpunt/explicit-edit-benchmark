@@ -6,10 +6,48 @@ import { runRoundPool } from "../../src/suites/explicit-edit-multi-agent/executi
 import {
   PROVIDER_RECOVERY_POLICY,
   admitProviderDelivery,
+  isTerminalProviderError,
   createProviderRecovery,
 } from "../../src/suites/explicit-edit-multi-agent/execution/provider-recovery.mjs";
 
 const options = { timeout: 10000 };
+
+test("hard account refusals outrank misleading temporary server errors", () => {
+  for (const message of [
+    'opencode-go API error (402): {"type":"server_error","message":"Upstream request failed: Insufficient account funds"}',
+    'provider API error (402): {"type":"server_error"}',
+    '402 Payment Required: {"type":"server_error"}',
+    'HTTP 503: {"type":"server_error","message":"Not enough credits"}',
+    'HTTP 429: {"code":"insufficient_quota","type":"rate_limit_error"}',
+    'HTTP 429: {"code":"billing_hard_limit_reached"}',
+    'HTTP 429: {"message":"GoUsageLimitError"}',
+    'HTTP 429: {"type":"server_error","message":"FreeUsageLimitError"}',
+    'HTTP 429: {"message":"Free usage exceeded, subscribe to Go"}',
+    'HTTP 429: {"message":"You exceeded your current quota, please check your plan and billing details"}',
+    'HTTP 429: {"message":"Daily usage limit exceeded"}',
+    'HTTP 401: {"type":"server_error"}',
+    'HTTP 403: {"type":"server_error"}',
+    '{"status_code":402,"message":"server_error"}',
+  ])
+    assert.equal(isTerminalProviderError(message), true, message);
+});
+
+test("temporary throttling and transport errors remain recoverable", () => {
+  for (const message of [
+    undefined,
+    null,
+    {},
+    0,
+    "",
+    "Connection error.",
+    "WebSocket error",
+    'HTTP 429: {"code":"rate_limit_exceeded","message":"Output token rate limit exceeded. Please retry after a brief wait."}',
+    'HTTP 429: {"message":"Too many requests"}',
+    'provider API error (503): {"type":"server_error"}',
+    "context_length_exceeded",
+  ])
+    assert.equal(isTerminalProviderError(message), false);
+});
 
 function fixture(t, extra = {}) {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });

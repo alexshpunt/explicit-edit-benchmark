@@ -8,6 +8,25 @@ export const PROVIDER_RECOVERY_POLICY = Object.freeze({
   terminalFailure: "stop-new-requests-and-drain-inflight",
 });
 
+/** Hard account refusals override retryable wrappers such as server_error. */
+export function isTerminalProviderError(message) {
+  if (typeof message !== "string") return false;
+  return (
+    /^(?:401|402|403)\b/.test(message) ||
+    /\b(?:API error|HTTP(?: error)?|status(?:[_ ]code)?)\s*["':(=\s]*(?:401|402|403)\b/i.test(
+      message,
+    ) ||
+    /\b(?:insufficient_quota|billing_hard_limit_reached|credit_balance_too_low|quota_exhausted|GoUsageLimitError|FreeUsageLimitError)\b/i.test(
+      message,
+    ) ||
+    /\b(?:insufficient|not enough)\s+(?:account\s+)?(?:funds|credits?|balance)\b/i.test(message) ||
+    /\bcredit balance\s+(?:is\s+)?(?:too low|exhausted)\b/i.test(message) ||
+    /\bexceeded your current quota\b/i.test(message) ||
+    /\bfree usage exceeded\b/i.test(message) ||
+    /\b(?:daily|monthly)\s+(?:usage\s+)?(?:quota|limit)\s+(?:exceeded|exhausted)\b/i.test(message)
+  );
+}
+
 /** Admit a delivery before any native execution or receipt exists. */
 export async function admitProviderDelivery(recovery, options) {
   try {

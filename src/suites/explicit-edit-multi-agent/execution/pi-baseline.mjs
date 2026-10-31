@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { ExecutionFailure } from "./request-chain.mjs";
 import { assertProcessBoundary, waitForProcessBoundaryExit } from "./process-boundary.mjs";
 import { resolvePiParticipantProfile } from "./pi-profile.mjs";
+import { isTerminalProviderError } from "./provider-recovery.mjs";
 import { missingProfileTools } from "../../../../scripts/pi-codemode-profile.mjs";
 export { startPiParticipant as startBaseline };
 
@@ -422,13 +423,26 @@ export async function startPiParticipant(
       else request.reject(new ExecutionFailure("driver_exit", event.error));
     } else if (event.type === "extension_error") {
       fail(new ExecutionFailure("driver_exit", event.error ?? "Baseline extension failed"));
+    } else if (
+      event.type === "message_end" &&
+      !terminal &&
+      event.message?.role === "assistant" &&
+      event.message.stopReason === "error" &&
+      isTerminalProviderError(event.message.errorMessage)
+    ) {
+      const error = new ExecutionFailure("provider_failure", event.message.errorMessage);
+      trace({ type: "provider_terminal_failure", ...expected, reason: event.message.errorMessage });
+      onProviderFailure?.(error);
+      fail(error);
+      // Do not let a misleading server_error wrapper start native retries or recovery.
+      kill();
     } else if (event.type === "agent_start") {
       nativeBegin = events.length - 1;
     } else if (event.type === "agent_settled") {
       const failed = events
         .slice(nativeBegin)
         .findLast((entry) => entry.type === "message_end" && entry.message?.role === "assistant");
-      if (failed && ["error", "aborted"].includes(failed.message.stopReason)) {
+      if (!terminal && failed && ["error", "aborted"].includes(failed.message.stopReason)) {
         const error = new ExecutionFailure(
           "provider_failure",
           failed.message.errorMessage ?? failed.message.stopReason,

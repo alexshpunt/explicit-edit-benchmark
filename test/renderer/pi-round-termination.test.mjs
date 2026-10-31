@@ -661,6 +661,71 @@ test(
   },
 );
 
+for (const refusal of [
+  {
+    kind: "billing",
+    status: 402,
+    error: JSON.stringify({
+      type: "server_error",
+      message: "Upstream request failed: Insufficient account funds",
+    }),
+  },
+  { kind: "payment-status", status: 402, error: "server_error" },
+  { kind: "quota", status: 429, error: "insufficient_quota" },
+  { kind: "free-quota", status: 429, error: "FreeUsageLimitError: server_error" },
+])
+  test(
+    `a hard ${refusal.kind} response stops the real participant without retrying completed effects`,
+    options(baselineRuntime),
+    async (t) => {
+      const failures = [];
+      let recoveries = 0;
+      const recovery = createProviderRecovery({ cooldownMs: 25 });
+      const f = await fixture(
+        t,
+        baselineRuntime,
+        (body) =>
+          body.messages.at(-1).role === "tool"
+            ? { status: refusal.status, error: refusal.error }
+            : { command: "printf 'once\\n' >> /workspace/billing-effect.txt" },
+        "baseline-agent",
+        {
+          onRecovery() {
+            recoveries++;
+            throw Error("A hard refusal entered recovery");
+          },
+          onProviderFailure(error) {
+            failures.push(error);
+            recovery.stop(error);
+          },
+        },
+      );
+      const { driver, initial } = await f.start("billing-refusal");
+      let captured;
+      await assert.rejects(
+        driver.execute("Perform the assigned file edit", { signal: t.signal }),
+        (error) => {
+          captured = error;
+          return error.category === "provider_failure";
+        },
+      );
+      assert.equal(captured.execution.toolCalls, 1);
+      assert.equal(await readFile(path.join(f.workspace, "billing-effect.txt"), "utf8"), "once\n");
+      assert.equal(f.provider.requests.length, 2);
+      assert.equal(recoveries, 0);
+      assert.equal(failures.length, 1);
+      await assert.rejects(recovery.admit({ signal: t.signal }), { category: "provider_failure" });
+      await assert.rejects(driver.execute("Must not start another delivery"), {
+        category: "provider_failure",
+      });
+      assert.equal(driver.events.filter(({ type }) => type === "auto_retry_start").length, 0);
+      await driver.terminate();
+      assert.equal(driver.closed, true);
+      assert.deepEqual(await liveNamespaceProcesses(initial.process), []);
+      assert.deepEqual(f.provider.errors, []);
+    },
+  );
+
 for (const failure of [
   { kind: "authentication", status: 401, error: "fixture-access-denied" },
   { kind: "quota", status: 429, error: "GoUsageLimitError" },
@@ -691,11 +756,8 @@ for (const failure of [
       const { driver, initial } = await f.start("idle-refusal");
       const prompt = JSON.stringify({ value: "idle-original" });
       await driver.execute(prompt, { completion: "turn", signal: t.signal });
-      const failed = waitForTrace(
-        t,
-        path.join(f.root, "idle-refusal.jsonl"),
-        driver,
-        (events) => events.filter(({ type }) => type === "agent_settled").length === 2,
+      const failed = waitForTrace(t, path.join(f.root, "idle-refusal.jsonl"), driver, (events) =>
+        events.some(({ type }) => type === "provider_terminal_failure"),
       );
       await writeFile(path.join(f.workspace, "release-background"), "release\n");
       await failed;
