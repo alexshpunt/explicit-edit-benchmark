@@ -3,7 +3,9 @@ import { setMaxListeners } from "node:events";
 import { atomicOrder } from "../tasks/atomic-effects.mjs";
 
 export const ROUND_POOL_POLICY = Object.freeze({
-  version: "renderer-round-pool-v1",
+  version: "renderer-round-pool-v3",
+  providerFailure: "stop-new-deliveries-and-drain-inflight-without-peer-abort",
+  initializationConcurrency: 8,
   assignment: "first-ready-work-conserving",
   dependencyCompletion: "returned-packet-or-earlier-in-same-packet",
   lifecycle: "reuse-ready-worker-terminate-otherwise",
@@ -26,6 +28,7 @@ export async function runRoundPool(
   nodes,
   {
     maxAgents,
+    maxStartingAgents = Math.min(maxAgents, ROUND_POOL_POLICY.initializationConcurrency),
     batchSize = 10,
     createDriver,
     executeBatch,
@@ -37,6 +40,12 @@ export async function runRoundPool(
   } = {},
 ) {
   assert.ok(Number.isSafeInteger(maxAgents) && maxAgents > 0, "Invalid round participant limit");
+  assert.ok(
+    Number.isSafeInteger(maxStartingAgents) &&
+      maxStartingAgents > 0 &&
+      maxStartingAgents <= maxAgents,
+    "Invalid participant initialization limit",
+  );
   assert.ok(Number.isSafeInteger(batchSize) && batchSize > 0, "Invalid round packet size");
   for (const callback of [createDriver, executeBatch, onParticipant, onDelivery, onClosed, usage])
     assert.equal(typeof callback, "function", "Invalid round pool callback");
@@ -59,6 +68,7 @@ export async function runRoundPool(
   const workers = new Map();
   const owned = new Map();
   const closing = new Map();
+  const starting = new Set();
   const notifications = [];
   const identities = { sessionId: new Set(), lifetime: new Set() };
   let changed = Promise.withResolvers();
@@ -91,16 +101,14 @@ export async function runRoundPool(
     }
   }
 
-  function fail(error) {
-    if (failureState.error === null) {
-      failureState.error = asError(error);
-      controller.abort(failureState.error);
-    }
+  function fail(error, { abortPeers = true } = {}) {
+    failureState.error ??= asError(error);
+    if (abortPeers && !controller.signal.aborted) controller.abort(failureState.error);
     wake();
   }
 
   function takePacket() {
-    if (controller.signal.aborted) return [];
+    if (controller.signal.aborted || failureState.error !== null) return [];
     const packet = [];
     const withinPacket = new Set();
     while (packet.length < batchSize) {
@@ -211,6 +219,8 @@ export async function runRoundPool(
       }
       await abortable(onParticipant(record));
       controller.signal.throwIfAborted();
+      starting.delete(record);
+      wake();
       let packet = firstPacket;
       while (packet.length) {
         controller.signal.throwIfAborted();
@@ -244,7 +254,7 @@ export async function runRoundPool(
           };
           if (error?.execution !== undefined) delivery.receipt = error.execution;
           else if (error?.receipt !== undefined) delivery.receipt = error.receipt;
-          fail(error);
+          fail(error, { abortPeers: error?.category !== "provider_failure" });
           throw error;
         } finally {
           notify(onDelivery, { event: "end", ...delivery });
@@ -254,7 +264,7 @@ export async function runRoundPool(
       }
     } catch (error) {
       record.status = "error";
-      fail(error);
+      fail(error, { abortPeers: error?.category !== "provider_failure" });
     } finally {
       try {
         await retire(record);
@@ -274,8 +284,10 @@ export async function runRoundPool(
     };
     records.push(record);
     slots[agent] = record;
+    starting.add(record);
     const task = runWorker(record, packet).finally(() => {
       workers.delete(agent);
+      starting.delete(record);
       // A failed shutdown cannot free capacity for a replacement process.
       if (!owned.has(record)) slots[agent] = undefined;
       wake();
@@ -287,15 +299,21 @@ export async function runRoundPool(
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   try {
-    while (failureState.error === null) {
+    while (!controller.signal.aborted) {
       const progress = changed.promise;
       for (let agent = 0; agent < slots.length; agent++) {
         if (slots[agent]) continue;
+        if (starting.size >= maxStartingAgents) break;
         const packet = takePacket();
         if (packet.length) launch(agent, packet);
       }
       if (!workers.size) {
-        assert.equal(completed.size, ordered.length, "Round stopped before its work graph drained");
+        if (failureState.error === null)
+          assert.equal(
+            completed.size,
+            ordered.length,
+            "Round stopped before its work graph drained",
+          );
         break;
       }
       await progress;

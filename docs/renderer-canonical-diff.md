@@ -36,7 +36,11 @@ original graph schedule; `--max-concurrent-agents` bounds the new process pool.
 The participant configuration uses the isolated native runtime fields documented
 in the Multi-Agent run guide. Omit its legacy `agentLifecycle` field or set it to
 `round-ready-pool`; canonical execution does not accept a persistent or per-packet
-lifetime override. Native IDE instructions, tools and language services remain on.
+lifetime override. At most eight participants initialize concurrently, capped by
+`--max-concurrent-agents`; initialization releases its slot before the participant
+starts editing. This prevents a cold-start burst without lowering the live process
+limit. The round-pool policy records the initialization bound. Native IDE
+instructions, tools and language services remain on.
 
 Export and inspection accept terminal runs only. They recompute scores from stage
 evidence, preserve the full planned denominator and do not publish anything.
@@ -134,35 +138,93 @@ Precompute trusted canonical endpoints and reference diffs once. Parse each new
 measured candidate without regenerating the trusted workload or a full reference
 execution.
 
+## Agent instructions
+
+Structured operations and scoring records stay inside the controller. Original
+assignments are rendered from operations at delivery, including when preparation
+contains older cached prompt text. Agents receive imperative editing instructions:
+which file to change, which complete declaration or binding to select, what to
+move or rename, and which includes and directives to retain. Namespace, owner,
+signature, occurrence and placement constraints remain complete. There are no
+JSON target tables or serialized selector records in these instructions.
+
 ## Structural correction feedback
 
-Scoring disagreements and correction assignments are separate units. Feedback
-`canonical-diff-of-diffs-v1` takes a second ordinary diff, in the direction
-**actual changes to expected changes**, with the same pinned implementation and
-three context lines. Each hunk of that second diff is one correction assignment;
-the scoring ledger keeps its original disagreement identities.
+The expected and actual changes are diffs from the same trusted round start.
+For each file with disagreements, compare those two complete diffs, including
+already matching hunks. Each resulting diff-of-diffs hunk is one correction
+assignment. The outer minus and plus lines represent actual and expected diff
+lines; the inner markers represent changes relative to the shared round start.
+The assignment names the project-relative file and gives the complete hunk. Its
+coordinates refer to the serialized diffs, not physical source line numbers.
+The agent locates and edits the source; the controller does not reconstruct a
+physical replacement, match definition owners, or apply a canonical patch.
+Scoring retains its original disagreement identities and hunk denominator.
 
-For each affected file, serialize its complete actual and expected canonical
-deltas, including already-matching hunks. Each original hunk contributes a JSON
-header `["hunk", oldStart, oldLines, newLines]`, then its complete patch lines,
-with LF separators. Exclude output offsets and controller IDs. Compare the two
-serialized deltas once per file; do not repeat an entire associated hunk for each
-disagreement or compare an isolated expected fragment against a spanning actual
-hunk. Either shortcut can repeat large amounts of correct content or ask an agent
-to undo correct changes.
+Assignments of at most 4096 UTF-8 bytes are sent inline; larger assignments are
+stored in full in a participant's read-only `/feedback/*.txt` file outside the
+candidate workspace. Earlier files remain available while the session is reused.
+Hunks are not truncated.
 
-The assignment carries the physical file location, related scoring disagreements,
-and one second-diff hunk. Its outer minus/plus markers describe actual-to-expected
-differences; its inner markers describe baseline-to-candidate/reference changes.
-Second-diff line numbers address the serialized change text, not C++ source lines.
-These records locate edits in real source; they are not a C++ patch. Filename
-bytes remain lossless, including non-UTF-8 paths.
+### Experimental CST correction backend
 
-A second diff removes matching content, not missing content. A completely absent
-large addition still requires its complete expected delta. Neither this feedback
-contract nor engineering integration checks establish that every correction
-packet fits a particular model's context window. Do not truncate required changes,
-silently split the configured packet, or claim model readiness from a small fixture.
+The private run configuration accepts `cppCorrectionCommand`, an argument array
+whose first element is an absolute executable path. The same option is available
+to `runCanonical` callers. It opts regular UTF-8 C++ source/header disagreements
+into an external Mergiraf 0.20.0 correspondence helper. The setting is not passed
+to participant processes. Without it, the diff-of-diffs backend remains in use.
+
+This requires a separately built instrumented helper, **not** the ordinary
+`mergiraf` merge CLI. The helper is not bundled or installed by this repository.
+Mergiraf's GPL-3.0-only license, internal matching API and runtime distribution
+need separate consideration before adopting or distributing that helper.
+
+For each supported file, the controller writes immutable copies of the common
+start, captured actual and trusted expected sources outside the candidate. It
+invokes the configured command without a shell, appending these four arguments:
+
+```text
+BASE.cpp ACTUAL.cpp EXPECTED.cpp NEW_OUTPUT_DIRECTORY
+```
+
+The helper must create `probe.ndjson` in that new directory using the
+`lpt944-mergiraf-pcs-probe-v1` protocol. Its header identifies Mergiraf `0.20.0`,
+roles `B`/`A`/`E`, `recoveryPolicy: opaque-cst-regions` and `mergeExecuted: false`.
+Records carry all three original sources; occurrence-specific native nodes and
+class leaders; ordered children, fields, leaf text and UTF-8 byte spans; direct
+matchings; ordered parent-child-successor triples; directed actual-to-expected
+triple additions/removals and value updates; retained parser diagnostics; and a
+complete summary with inventory/delta counts. A successful process exit alone is
+not sufficient. The controller independently checks source identity, node and
+matching uniqueness, spans, all ordered relations, and complete directed AST
+reconstruction. Parse recovery must retain diagnostics and opaque source regions.
+Timeout, cancellation, invalid output or failed reconstruction aborts preparation;
+there is no silent fallback after a supported file's helper fails.
+
+The controller aligns proven unchanged CST subtrees before comparing source gaps.
+Assignments contain the full changed source fragments, surrounding context and
+occurrence-specific locations for preserved code. Unchanged-subtree labels are
+instructions to preserve existing code, not text to insert. Gaps participating in
+the same subtree move belong to one assignment. The controller does not apply
+these changes to the candidate. Correction agents still edit the shared project;
+scoring, native-process closure and independent integration checks are unchanged.
+
+Absent files, physical entries, byte-path filenames, non-C++ files and invalid
+UTF-8 endpoints retain the existing diff-of-diffs backend. The private
+`structural-feedback/report.json` names each file's chosen backend. Native output,
+executable/input hashes, diagnostics, validated plans and complete assignments
+remain in that private evidence directory. Do not publish those files as results.
+
+### Diagnostic start at a later round
+
+`run-canonical --from-round N` (or the `runCanonical` option `fromRound`) starts
+with the exact trusted endpoint of round `N - 1` and runs the remaining rounds.
+It creates fresh participant histories; it does not resume a frozen in-flight
+candidate or import earlier results. A start after round one is explicitly marked
+`diagnostic-continuation` and cannot be exported as a measured observation. The
+full original plan and denominator remain intact: skipped rounds receive no
+credit in the diagnostic partial aggregate. Per-round grading and all correction,
+closure and integration checks remain unchanged. The default still runs all rounds.
 
 ## Execution and correction budgets
 
@@ -203,13 +265,57 @@ After original work:
 
 There are at most four editing waves: original, structural correction, build
 correction and image correction. Successful stages do not trigger a correction.
-Auth, provider, cancellation and infrastructure failures remain separate stops;
-they do not authorize a model retry, fallback or an extra correction.
+Transient transport failures first use the harness's bounded native recovery.
+Controller-managed recovery requires Pi 1.4 or newer. An exhausted retryable
+failure holds the current delivery at the native pre-settlement boundary. The controller pauses new deliveries for
+a shared 60-second cooldown, then releases one held session as a probe. Other
+in-flight participants may finish; they are not cancelled. A successful probe
+reopens admission. Another exhausted failure starts another cooldown. There is
+no automatic recovery deadline; explicit cancellation still closes every owned
+process.
 
-Build and image correction feedback identifies the failed stage and supplies a
-Bash validation command; it does not repeat task prompts or compiler diagnostics.
-The build command discovers the current translation units and uses the verifier's
-compiler flags. The image command also renders both scenes twice and compares the
+Recovery continues the same native run, process and conversation. Native context
+edits omit only the failed response and its paired tool results from future
+model context, retaining raw history and earlier completed tool effects/results.
+Do not redeliver the assignment, add a user message, start a fresh process or
+reset the shared project. Preserve failed native retry events and distinct
+controller wait, release and completion events. Recovery does not consume an
+editing wave or benchmark correction.
+
+Native IDE diagnostics and background-terminal notifications may start another
+native run after an assignment settles. Keep those runs enabled, including their
+automatic native compaction. Recovery belongs
+to the session, including native activity between deliveries. A terminal provider
+failure in that activity stops admission under the same policy.
+
+If a new assignment is rejected by the native busy preflight, it has not entered
+the conversation. Wait for a private native-idle notification, then submit that
+unaccepted assignment. Do not queue it into the existing run or replay an accepted
+assignment. The idle-control RPC is acknowledged immediately; waiting for native
+activity does not extend the RPC acknowledgement timeout. Only settlement after
+the assignment's own acceptance can complete its delivery. Record admission waits
+separately from provider recovery and benchmark corrections.
+
+Admission failures retain their shared cause, not another session's execution
+receipt. A delivery that never reaches native execution must not claim native
+calls or effects.
+
+Authentication, exhausted quota and other nonretryable failures do not enter
+controller recovery. Record the failed delivery without completing its graph
+nodes. Stop new deliveries and held recovery probes, but let healthy in-flight
+work finish without cancellation, then report the wave failure. Pending work
+and failed prerequisites remain uncompleted. Explicit cancellation and controller,
+integrity or shutdown failures still stop and clean up the pool. None of these
+failures authorizes a fresh benchmark attempt, provider fallback or extra
+correction.
+
+Build and image correction feedback identifies the failed stage and tells the
+agent to run `bash /feedback/check-build.sh` or `bash /feedback/check-images.sh`
+from the project root. The complete script is created immediately before delivery
+in that session's read-only feedback directory, not in the candidate project.
+It is not embedded in the prompt or created for stages the session was not assigned.
+The build script discovers the current translation units and uses the verifier's
+compiler flags. The image script also renders both scenes twice and compares the
 resulting pixel hashes against the two expected hashes. It exposes those hashes,
 not the reference pixels or source. The controller still performs independent
 verification after the correction wave.

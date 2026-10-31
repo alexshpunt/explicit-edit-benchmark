@@ -32,16 +32,21 @@ async function untilReleased(promise, signal) {
 }
 
 function headerTarget(prompt) {
-  const targets = prompt.split("\n").flatMap((line) => {
-    try {
-      const value = JSON.parse(line);
-      return typeof value.guard === "string" ? [value] : [];
-    } catch {
-      return [];
-    }
-  });
+  const targets = [
+    ...prompt.matchAll(
+      /Move the complete header block guarded by `([^`]+)`, from its opening #ifndef through its matching #endif, out of main\.cpp into `([^`]+)`\./g,
+    ),
+  ];
   assert.equal(targets.length, 1, "A participant receives exactly one current header target");
-  return targets[0];
+  const [, guard, file] = targets[0];
+  assert.ok(prompt.includes(`Replace that block in main.cpp with \`#include "${file}"\`.`));
+  assert.equal(prompt.includes('"guard":'), false);
+  assert.equal(
+    prompt.includes("Restore these direct project includes"),
+    false,
+    "This fixture requests no extra header includes",
+  );
+  return { file, guard, includes: [] };
 }
 
 // A tiny filesystem/namespace integration, not a benchmark preparation or proof.

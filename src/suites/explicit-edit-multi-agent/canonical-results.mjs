@@ -13,6 +13,7 @@ import {
   scoreCanonicalRounds,
 } from "./grading/canonical-score.mjs";
 import { ROUND_POOL_POLICY } from "./execution/round-pool.mjs";
+import { PROVIDER_RECOVERY_POLICY } from "./execution/provider-recovery.mjs";
 
 export const CANONICAL_RUN_VERSION = "renderer-canonical-run-v1";
 export const CANONICAL_RESULT_VERSION = "renderer-canonical-result-v1";
@@ -23,6 +24,7 @@ export const CANONICAL_RUN_POLICY = Object.freeze({
   diff: CANONICAL_DIFF_POLICY,
   score: CANONICAL_SCORE_POLICY,
   pool: ROUND_POOL_POLICY,
+  providerRecovery: PROVIDER_RECOVERY_POLICY,
   maxEditingWaves: 4,
   restoration: "trusted-round-end-after-saving-candidate",
 });

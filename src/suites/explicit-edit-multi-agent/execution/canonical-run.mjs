@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import { mkdir, readFile, readlink, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MULTI_AGENT_BENCHMARK } from "../results.mjs";
 import { CANONICAL_RUN_VERSION, CANONICAL_RUN_POLICY } from "../canonical-results.mjs";
 import { writeTree } from "../generation/generator.mjs";
 import { encodeSourceBytes } from "../cpp/source-bytes.mjs";
+import { coherentTaskPrompt } from "../tasks/coherent-tasks.mjs";
 import { scoreCanonicalRounds } from "../grading/canonical-score.mjs";
 import { measureCoherentCandidate } from "../grading/coherent-build.mjs";
 import {
@@ -17,9 +19,11 @@ import {
   canonicalAssignmentPrompt,
   canonicalCorrectionNodes,
   canonicalIntegrationNodes,
+  prepareCanonicalFeedback,
 } from "./canonical-diagnostics.mjs";
 import { runCanonicalRound } from "./canonical-round.mjs";
 import { runRoundPool } from "./round-pool.mjs";
+import { admitProviderDelivery, createProviderRecovery } from "./provider-recovery.mjs";
 import { startPiParticipant, finalizedUsage } from "./pi-baseline.mjs";
 import { resolvePiParticipantProfile } from "./pi-profile.mjs";
 import { restoringSourceIdentity } from "./restoring-identity.mjs";
@@ -29,6 +33,7 @@ import {
   releaseCandidateWorkspace,
 } from "./candidate-evidence.mjs";
 import { restoreCanonicalSource } from "./canonical-restore.mjs";
+import { prepareCanonicalCstCorrections } from "./canonical-cst-corrections.mjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const usageFields = ["input", "output", "cacheRead", "cacheWrite", "totalTokens", "cost"];
@@ -91,6 +96,25 @@ async function sampleNativeConcurrency(participants, atMs) {
   return { atMs, liveSessions };
 }
 
+/** Select a trusted start without importing historical measurements or changing the plan. */
+export function canonicalRunStart(loaded, fromRound = 1) {
+  assert.ok(
+    Number.isSafeInteger(fromRound) && fromRound >= 1 && fromRound <= loaded.schedule.length,
+    "Invalid canonical starting round",
+  );
+  const skippedRounds = loaded.schedule.slice(0, fromRound - 1).map(({ id }) => id);
+  const initial = skippedRounds.length
+    ? loaded.atomicIntervals.rounds.get(skippedRounds.at(-1))?.expectedTree
+    : loaded.initial;
+  assert.ok(initial && typeof initial === "object", "Missing trusted starting endpoint");
+  return {
+    initial,
+    schedule: loaded.schedule.slice(fromRound - 1),
+    skippedRounds,
+    mode: skippedRounds.length ? "diagnostic-continuation" : "measured",
+  };
+}
+
 /** Run the separate canonical-diff protocol. Configuration authorizes inference;
  * retained references authorize only the original workload's feasibility. All
  * grading happens after complete native namespace closure, never between packets.
@@ -105,6 +129,8 @@ export async function runCanonical(
     createDriver,
     maxConcurrentAgents,
     batchSize = 10,
+    cppCorrectionCommand,
+    fromRound = 1,
     allowModelCalls = false,
     signal: externalSignal,
     log = console.log,
@@ -126,8 +152,15 @@ export async function runCanonical(
     agents,
     signal: externalSignal,
   });
+  const start = canonicalRunStart(loaded, fromRound);
   const privateConfig = configPath ? JSON.parse(await readFile(configPath, "utf8")) : {};
-  const { agentLifecycle, maxConcurrentAgents: configuredCap, ...config } = privateConfig;
+  const {
+    agentLifecycle,
+    maxConcurrentAgents: configuredCap,
+    cppCorrectionCommand: configuredCorrectionCommand,
+    ...config
+  } = privateConfig;
+  const correctionCommand = cppCorrectionCommand ?? configuredCorrectionCommand;
   assert.ok(
     agentLifecycle === undefined || agentLifecycle === "round-ready-pool",
     "Canonical execution requires the round-ready lifecycle",
@@ -154,7 +187,17 @@ export async function runCanonical(
     version: CANONICAL_RUN_VERSION,
     benchmark: MULTI_AGENT_BENCHMARK,
     protocol: CANONICAL_MULTI_AGENT_PROTOCOL,
-    mode: "measured",
+    mode: start.mode,
+    ...(start.skippedRounds.length
+      ? {
+          continuation: {
+            fromRound,
+            skippedRounds: start.skippedRounds,
+            priorResultsImported: false,
+            freshParticipantHistories: true,
+          },
+        }
+      : {}),
     status: "running",
     policy: CANONICAL_RUN_POLICY,
     configuration: {
@@ -191,6 +234,7 @@ export async function runCanonical(
     rounds: [],
     participants: [],
     executions: [],
+    providerRecovery: [],
     checks: [],
     deliveries: 0,
     repairs: 0,
@@ -200,8 +244,20 @@ export async function runCanonical(
     score: scoreCanonicalRounds([], plan.length),
     initialCheck: null,
     terminal: null,
-    final: loaded.manifest.initial,
+    final: start.skippedRounds.length
+      ? loaded.canonical.manifest.rounds[fromRound - 2].endSourceIdentity
+      : loaded.manifest.initial,
   };
+  const recovery = createProviderRecovery({
+    onEvent(event) {
+      const row = { ...event, atMs: elapsed() };
+      appendFileSync(path.join(output, "provider-recovery.jsonl"), JSON.stringify(row) + "\n", {
+        mode: 0o600,
+      });
+      report.providerRecovery.push(row);
+      log(`RECOVERY ${event.type}`);
+    },
+  });
   let saving = Promise.resolve();
   const save = () => {
     saving = saving.then(async () => {
@@ -227,12 +283,12 @@ export async function runCanonical(
   try {
     signal.throwIfAborted();
     await save();
-    await writeTree(workspace, loaded.initial);
+    await writeTree(workspace, start.initial);
     boundary = await captureCandidate(workspace, path.join(output, "initial-candidate"), {
       signal,
       includeAllFiles: true,
     });
-    assertTrustedCapture(boundary, loaded.initial);
+    assertTrustedCapture(boundary, start.initial);
     const initial = await measureCoherentCandidate(
       boundary.source,
       path.join(output, "initial-verification"),
@@ -249,7 +305,8 @@ export async function runCanonical(
       "Trusted initial source failed integration verification",
     );
     await save();
-    for (const round of loaded.schedule) {
+    let trustedStart = start.initial;
+    for (const round of start.schedule) {
       signal.throwIfAborted();
       const interval = loaded.atomicIntervals.rounds.get(round.id);
       const roundOutput = path.join(output, "rounds", round.id);
@@ -259,15 +316,29 @@ export async function runCanonical(
         prepared,
         signal,
         executeWave: async ({ stage, comparison }) => {
-          await releaseBoundary();
           const nodes =
             stage === "original"
-              ? interval.nodes
+              ? interval.nodes.map((node) => ({
+                  ...node,
+                  prompt: coherentTaskPrompt("", node.operations),
+                }))
               : stage === "structural-correction"
-                ? canonicalCorrectionNodes(comparison)
+                ? correctionCommand
+                  ? await prepareCanonicalCstCorrections({
+                      comparison,
+                      startTree: trustedStart,
+                      expectedTree: interval.expectedTree,
+                      captured: boundary,
+                      command: correctionCommand,
+                      directory: path.join(roundOutput, "structural-feedback"),
+                      signal,
+                    })
+                  : canonicalCorrectionNodes(comparison)
                 : canonicalIntegrationNodes(stage, { expectedPixels: loaded.manifest.pixels });
+          await releaseBoundary();
           const sessions = new Map();
           const records = new Map();
+          const feedbackDirectories = new Map();
           log(`EDIT ${round.id}/${stage}`);
           await runRoundPool(nodes, {
             maxAgents: cap,
@@ -279,15 +350,24 @@ export async function runCanonical(
               const session = nextSession++;
               sessions.set(localSession, session);
               const state = path.join(output, "participants", `session-${session}`);
+              const feedbackDirectory = path.join(output, "feedback", `session-${session}`);
+              await mkdir(feedbackDirectory, { recursive: true, mode: 0o700 });
+              feedbackDirectories.set(localSession, feedbackDirectory);
               const driver = createDriver
                 ? await createDriver(workspace, state, agent, {
                     session,
                     round: round.id,
                     stage,
                     signal: participantSignal,
+                    feedbackDirectory,
+                    onRecovery: (request) => recovery.wait(request),
+                    onProviderFailure: (error) => recovery.stop(error),
                   })
                 : await startPiParticipant(workspace, state, config, {
                     signal: participantSignal,
+                    feedbackDirectory,
+                    onRecovery: (request) => recovery.wait(request),
+                    onProviderFailure: (error) => recovery.stop(error),
                     eventsFile: state + "-events.jsonl",
                     enforceProcessBoundary: true,
                   });
@@ -347,11 +427,17 @@ export async function runCanonical(
               }
               await save();
             },
-            executeBatch: (driver, members, { signal: deliverySignal }) =>
-              driver.execute(canonicalAssignmentPrompt(members), {
+            executeBatch: async (driver, members, { session, signal: deliverySignal }) => {
+              await admitProviderDelivery(recovery, { signal: deliverySignal });
+              const packet = await prepareCanonicalFeedback(
+                members,
+                feedbackDirectories.get(session),
+              );
+              return driver.execute(canonicalAssignmentPrompt(packet), {
                 completion: "turn",
                 signal: deliverySignal,
-              }),
+              });
+            },
           });
           assert.ok(
             [...records.values()].every(({ closed }) => closed),
@@ -417,6 +503,7 @@ export async function runCanonical(
         includeAllFiles: true,
       });
       assertTrustedCapture(boundary, interval.expectedTree);
+      trustedStart = interval.expectedTree;
       await onCase({ kind: "restored", round: round.id, identity: report.final });
       log(`CHECK ${round.id}: ${outcome.score.score.toFixed(3)}%`);
       await save();

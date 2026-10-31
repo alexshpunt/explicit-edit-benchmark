@@ -291,11 +291,83 @@ test("graph validation happens before any process is created", options, async ()
   }
 });
 
+test(
+  "bounded initialization still fills every active slot and reuses ready workers",
+  options,
+  async () => {
+    const f = fixture();
+    const allActive = gate();
+    let starting = 0,
+      peakStarting = 0,
+      arrivals = 0;
+    const result = await f.run(
+      Array.from({ length: 12 }, (_, index) => node(String(index))),
+      {
+        maxAgents: 10,
+        maxStartingAgents: 2,
+        async createDriver(agent, session) {
+          starting++;
+          peakStarting = Math.max(peakStarting, starting);
+          try {
+            await new Promise((resolve) => setImmediate(resolve));
+            return await f.createDriver(agent, session);
+          } finally {
+            starting--;
+          }
+        },
+        async executeBatch(driver, members) {
+          if (++arrivals === 10) allActive.resolve();
+          await allActive.promise;
+          driver.history.push(...members.map(({ id }) => id));
+        },
+      },
+    );
+    assert.equal(peakStarting, 2);
+    assert.equal(starting, 0);
+    assert.equal(f.peak, 10);
+    assert.equal(result.records.length, 10);
+    assert.equal(result.deliveries.length, 12);
+    assert.ok(result.deliveries.every(({ ids }) => ids.length === 1));
+    assert.ok(f.created.some(({ history }) => history.length > 1));
+    assert.ok(result.records.every(({ closed }) => closed));
+    assert.equal(f.live, 0);
+  },
+);
+
+test("cancelling bounded initialization never launches queued workers", options, async () => {
+  const f = fixture();
+  const entered = gate();
+  const controller = new AbortController();
+  const failure = new Error("fixture-cancel-bounded-start");
+  let calls = 0;
+  const running = f.run(
+    Array.from({ length: 10 }, (_, index) => node(String(index))),
+    {
+      maxAgents: 10,
+      maxStartingAgents: 2,
+      signal: controller.signal,
+      async createDriver(_agent, _session, { signal }) {
+        if (++calls === 2) entered.resolve();
+        await waitForAbort(signal);
+      },
+    },
+  );
+  running.catch(() => {});
+  await entered.promise;
+  controller.abort(failure);
+  await assert.rejects(running, (error) => error === failure);
+  assert.equal(calls, 2);
+  assert.equal(f.live, 0);
+});
+
 test("invalid capacities and callbacks cannot start workers", options, async () => {
   for (const extra of [
     { maxAgents: 0 },
     { maxAgents: 1.5 },
     { batchSize: 0 },
+    { maxStartingAgents: 0 },
+    { maxStartingAgents: 1.5 },
+    { maxStartingAgents: 3 },
     { executeBatch: undefined },
     { createDriver: undefined },
     { onDelivery: 1 },
@@ -468,6 +540,54 @@ test("fresh processes cannot reuse a native lifetime or session identity", optio
     assert.equal(f.live, 0);
   }
 });
+
+test(
+  "a provider failure drains in-flight work without aborting peers or submitting new work",
+  options,
+  async () => {
+    const f = fixture();
+    const peerStarted = gate();
+    const failed = gate();
+    const failure = Object.assign(new Error("fixture-provider-refusal"), {
+      category: "provider_failure",
+    });
+    let peerSignal;
+    const running = f.run([node("a"), node("b"), node("c", ["b"]), node("blocked", ["a"])], {
+      async executeBatch(driver, [member], { signal }) {
+        driver.history.push(member.id);
+        if (member.id === "a") {
+          await peerStarted.promise;
+          throw failure;
+        }
+        peerSignal = signal;
+        if (member.id === "b") {
+          peerStarted.resolve();
+          await Promise.race([failed.promise, waitForAbort(signal)]);
+        }
+        assert.equal(signal.aborted, false);
+        return { id: member.id };
+      },
+      onDelivery(event) {
+        if (event.event === "end" && event.ids.includes("a")) failed.resolve();
+      },
+    });
+    await assert.rejects(running, (error) => {
+      assert.equal(error, failure);
+      assert.equal(peerSignal.aborted, false);
+      assert.deepEqual(
+        error.roundPool.deliveries.map(({ ids, status }) => ({ ids, status })),
+        [
+          { ids: ["a"], status: "error" },
+          { ids: ["b"], status: "settled" },
+        ],
+      );
+      assert.ok(error.roundPool.records.every(({ closed }) => closed));
+      return true;
+    });
+    assert.deepEqual(f.created.flatMap(({ history }) => history).sort(), ["a", "b"]);
+    assert.equal(f.live, 0);
+  },
+);
 
 test("execution failure remains primary when cleanup also fails", options, async () => {
   const failure = new Error("fixture-execution-failure");

@@ -44,6 +44,10 @@ export async function providerFixture(
       res.write(
         `data: ${JSON.stringify({ id: `msg-${number}`, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`,
       );
+      if (result.streamError) {
+        res.end(`data: ${JSON.stringify({ error: { message: result.streamError } })}\n\n`);
+        return;
+      }
       res.write(
         `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }], usage: result.usage ?? { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } })}\n\n`,
       );

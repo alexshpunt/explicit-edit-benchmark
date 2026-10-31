@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
   canonicalAssignmentPrompt,
   canonicalIntegrationNodes,
+  prepareCanonicalFeedback,
 } from "../../src/suites/explicit-edit-multi-agent/execution/canonical-diagnostics.mjs";
 import { startPiParticipant } from "../../src/suites/explicit-edit-multi-agent/execution/pi-baseline.mjs";
 import { providerFixture } from "./provider-fixture.mjs";
@@ -78,7 +79,7 @@ async function fixture(t) {
 function validate(workspace, stage, expectedPixels = hashes()) {
   const node = canonicalIntegrationNodes(stage, { expectedPixels });
   assert.equal(node.length, 1);
-  const data = JSON.parse(node[0].prompt);
+  const data = node[0];
   assert.equal(data.stage, stage);
   assert.equal(typeof data.validation, "string");
   const result = spawnSync(
@@ -168,19 +169,81 @@ test(
 );
 
 test(
-  "a native Pi participant receives and executes integration validation",
+  "native Pi reads complete session feedback through an isolated read-only mount",
   { skip: !process.env.RENDERER_PI_RUNTIME || process.platform !== "linux", timeout: 180000 },
   async (t) => {
     const workspace = await fixture(t);
-    const root = await mkdtemp(path.join(os.tmpdir(), "canonical-native-feedback-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "canonical-native-structural-"));
+    const directories = [path.join(root, "feedback-a"), path.join(root, "feedback-b")];
+    for (const directory of directories) await mkdir(directory);
+    const makeNode = (letter) => ({
+      id: letter,
+      dependencies: [],
+      prompt: letter.repeat(9000),
+    });
+    let files;
     const provider = await providerFixture(root, (body) => {
       if (body.messages.at(-1).role === "tool") return {};
       const content = body.messages.findLast(({ role }) => role === "user").content;
       const prompt =
         typeof content === "string" ? content : content.map((part) => part.text ?? "").join("");
-      const data = JSON.parse(prompt.split("\n").find((line) => line.startsWith('{"stage":')));
-      const encoded = Buffer.from(data.validation).toString("base64");
-      return { command: `printf '%s' '${encoded}' | base64 -d | bash && touch verified` };
+      const index = files.findIndex((file) => prompt.includes(file));
+      assert.notEqual(index, -1);
+      const command = `python3 -c 'assert open("${files[index]}").read() == "${index}"*9000' && test ! -e '${files[1 - index]}' && ! (echo modified > '${files[index]}') && touch verified-${index}`;
+      return { command };
+    });
+    t.after(async () => {
+      provider.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const drivers = [];
+    try {
+      for (let i = 0; i < 2; i++) {
+        drivers.push(
+          await startPiParticipant(
+            workspace,
+            path.join(root, `participant-${i}`),
+            provider.config,
+            { feedbackDirectory: directories[i] },
+          ),
+        );
+      }
+      const packets = await Promise.all(
+        directories.map((directory, i) =>
+          prepareCanonicalFeedback([makeNode(String(i))], directory),
+        ),
+      );
+      files = packets.map((packet) => packet[0].feedbackFile);
+      for (let i = 0; i < 2; i++) {
+        await drivers[i].execute(canonicalAssignmentPrompt(packets[i]), {
+          completion: "turn",
+          signal: t.signal,
+        });
+        assert.ok((await stat(path.join(workspace, `verified-${i}`))).isFile());
+      }
+    } finally {
+      await Promise.all(drivers.map((driver) => driver.terminate()));
+    }
+    assert.equal(provider.errors.length, 0);
+  },
+);
+test(
+  "native IDE read can inspect a mounted structural feedback file",
+  { skip: !process.env.RENDERER_PI_IDE_RUNTIME || process.platform !== "linux", timeout: 180000 },
+  async (t) => {
+    const workspace = await fixture(t);
+    const root = await mkdtemp(path.join(os.tmpdir(), "canonical-ide-feedback-"));
+    const directory = path.join(root, "feedback");
+    await mkdir(directory);
+    let file;
+    let readResult;
+    const provider = await providerFixture(root, (body) => {
+      const last = body.messages.at(-1);
+      if (last.role === "tool") {
+        readResult = typeof last.content === "string" ? last.content : JSON.stringify(last.content);
+        return {};
+      }
+      return { toolCall: { name: "read", arguments: { path: file } } };
     });
     t.after(async () => {
       provider.close();
@@ -189,16 +252,92 @@ test(
     const driver = await startPiParticipant(
       workspace,
       path.join(root, "participant"),
-      provider.config,
+      {
+        ...provider.config,
+        runtime: process.env.RENDERER_PI_IDE_RUNTIME,
+        harness: "pi-agent-ide-codemode",
+      },
+      { feedbackDirectory: directory },
     );
-    t.after(() => driver.terminate());
-    const nodes = canonicalIntegrationNodes("image-correction", { expectedPixels: hashes() });
-    await driver.execute(canonicalAssignmentPrompt(nodes), {
-      completion: "turn",
-      signal: t.signal,
-    });
-    assert.equal(provider.errors.length, 0);
-    assert.ok(provider.requests.length >= 2);
-    assert.ok((await stat(path.join(workspace, "verified"))).isFile());
+    try {
+      const [packet] = await prepareCanonicalFeedback(
+        [
+          {
+            id: "large",
+            dependencies: [],
+            prompt: Array(500).fill("visible-feedback-line").join("\n"),
+          },
+        ],
+        directory,
+      );
+      file = packet.feedbackFile;
+      await driver.execute(canonicalAssignmentPrompt([packet]), {
+        completion: "turn",
+        signal: t.signal,
+      });
+      assert.match(readResult, /visible-feedback-line/);
+      assert.equal(provider.errors.length, 0);
+    } finally {
+      await driver.terminate();
+    }
   },
 );
+for (const stage of ["build-correction", "image-correction"]) {
+  for (const harness of ["baseline-agent", "pi-agent-ide-codemode"]) {
+    const runtime =
+      harness === "baseline-agent"
+        ? process.env.RENDERER_PI_RUNTIME
+        : process.env.RENDERER_PI_IDE_RUNTIME;
+    test(
+      `a native ${harness} participant executes the mounted ${stage} script`,
+      { skip: !runtime || process.platform !== "linux", timeout: 180000 },
+      async (t) => {
+        const workspace = await fixture(t);
+        const root = await mkdtemp(path.join(os.tmpdir(), "canonical-native-script-"));
+        const directory = path.join(root, "feedback");
+        await mkdir(directory);
+        const nodes = canonicalIntegrationNodes(stage, { expectedPixels: hashes() });
+        let packet;
+        const provider = await providerFixture(root, (body) => {
+          if (body.messages.at(-1).role === "tool") return {};
+          const content = body.messages.findLast(({ role }) => role === "user").content;
+          const prompt =
+            typeof content === "string" ? content : content.map((part) => part.text ?? "").join("");
+          assert.ok(prompt.includes(packet.validationFile));
+          assert.equal(prompt.includes(nodes[0].validation), false);
+          return {
+            command: `bash ${packet.validationFile} && ! (echo modified > ${packet.validationFile}) && test ! -e /workspace/feedback && touch verified`,
+          };
+        });
+        t.after(async () => {
+          provider.close();
+          await rm(root, { recursive: true, force: true });
+        });
+        const driver = await startPiParticipant(
+          workspace,
+          path.join(root, "participant"),
+          { ...provider.config, runtime, harness },
+          { feedbackDirectory: directory },
+        );
+        try {
+          assert.deepEqual(await readdir(directory), []);
+          [packet] = await prepareCanonicalFeedback(nodes, directory);
+          assert.equal(
+            await readFile(path.join(directory, path.basename(packet.validationFile)), "utf8"),
+            nodes[0].validation + "\n",
+          );
+          const result = await driver.execute(canonicalAssignmentPrompt([packet]), {
+            completion: "turn",
+            signal: t.signal,
+          });
+          assert.equal(result.failedToolCalls, 0);
+          assert.equal(provider.errors.length, 0);
+          assert.ok(provider.requests.length >= 2);
+          assert.ok((await stat(path.join(workspace, "verified"))).isFile());
+        } finally {
+          await driver.terminate();
+        }
+      },
+    );
+  }
+}

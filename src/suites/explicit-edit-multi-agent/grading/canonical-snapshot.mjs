@@ -45,11 +45,35 @@ async function language() {
 /** Opaque preprocessor replacements still contain C++ preprocessing tokens.
  * Reuse the project's protected literal/comment scanner; maximal-munch operators
  * and numbers keep `+ +` distinct from `++` instead of stripping all whitespace.
+ * @param {string} source
+ * @param {(token: {text: string, separated: boolean, start: number, end: number}) => void} [onToken]
  */
-function preprocessingTokens(source) {
+function preprocessingTokens(source, onToken) {
   // Remove phase-2 continuations outside literal bytes before tokenization.
   const pieces = [];
   let cursor = 0;
+  const origins = [];
+  const append = (start, end, strip) => {
+    if (!onToken) {
+      const piece = source.slice(start, end);
+      pieces.push(strip ? piece.replace(/\\\r?\n/g, "") : piece);
+      return;
+    }
+    for (let at = start; at < end; at++) {
+      if (strip && source[at] === "\\") {
+        if (source[at + 1] === "\n") {
+          at++;
+          continue;
+        }
+        if (source[at + 1] === "\r" && source[at + 2] === "\n") {
+          at += 2;
+          continue;
+        }
+      }
+      pieces.push(source[at]);
+      origins.push(at);
+    }
+  };
   for (const token of cppTokens(source)) {
     if (
       /^[A-Za-z_]\w*$/.test(token.text) ||
@@ -57,10 +81,11 @@ function preprocessingTokens(source) {
       token.text.startsWith("/*")
     )
       continue;
-    pieces.push(source.slice(cursor, token.start).replace(/\\\r?\n/g, ""), token.text);
+    append(cursor, token.start, true);
+    append(token.start, token.end, false);
     cursor = token.end;
   }
-  pieces.push(source.slice(cursor).replace(/\\\r?\n/g, ""));
+  append(cursor, source.length, true);
   source = pieces.join("");
   const protectedTokens = new Map(
     cppTokens(source)
@@ -69,15 +94,17 @@ function preprocessingTokens(source) {
   );
   const result = [];
   let gap = false;
-  const emit = (text) => {
-    result.push({ text, separated: result.length > 0 && gap });
+  const emit = (text, at) => {
+    const token = { text, separated: result.length > 0 && gap };
+    result.push(token);
+    onToken?.({ ...token, start: origins[at], end: origins[at + text.length - 1] + 1 });
     gap = false;
   };
   for (let at = 0; at < source.length;) {
     const protectedToken = protectedTokens.get(at);
     if (protectedToken) {
       if (protectedToken.text.startsWith("//") || protectedToken.text.startsWith("/*")) gap = true;
-      else emit(protectedToken.text);
+      else emit(protectedToken.text, at);
       at = protectedToken.end;
       continue;
     }
@@ -89,11 +116,11 @@ function preprocessingTokens(source) {
     operators.lastIndex = number.lastIndex = identifier.lastIndex = at;
     const token = number.exec(source) ?? identifier.exec(source) ?? operators.exec(source);
     if (token) {
-      emit(token[0]);
+      emit(token[0], at);
       at += token[0].length;
     } else {
       const point = String.fromCodePoint(source.codePointAt(at));
-      emit(point);
+      emit(point, at);
       at += point.length;
     }
   }
@@ -112,7 +139,7 @@ function tokenGaps(source) {
  * Include all project definitions because replacement lists and forwarded macro
  * arguments can themselves be stringified by another macro.
  */
-function projectMacros(sources) {
+export function projectMacros(sources) {
   const names = new Set();
   for (const source of sources) {
     if (!source.isWellFormed()) continue;
@@ -133,24 +160,83 @@ function projectMacros(sources) {
   return names;
 }
 
-function macroArguments(source) {
-  const tokens = preprocessingTokens(source);
-  // The CST argument-list node owns its outer parentheses. Only parentheses
-  // protect commas from the preprocessor; brackets and braces do not.
-  const inner =
-    tokens[0]?.text === "(" && tokens.at(-1)?.text === ")" ? tokens.slice(1, -1) : tokens;
-  const arguments_ = [[]];
+function splitMacroArguments(tokens) {
+  // Only parentheses protect commas from the preprocessor; brackets, braces and
+  // template syntax do not. Keep physical separator tokens for the sidecar.
+  const wrapped = tokens[0]?.text === "(" && tokens.at(-1)?.text === ")";
+  const inner = wrapped ? tokens.slice(1, -1) : tokens;
+  const groups = [[]],
+    commas = [];
   let depth = 0;
   for (const token of inner) {
     if (token.text === "(") depth++;
     else if (token.text === ")") depth--;
-    if (token.text === "," && depth === 0) arguments_.push([]);
-    else {
-      const current = arguments_.at(-1);
-      current.push([current.length > 0 && token.separated, token.text]);
-    }
+    if (token.text === "," && depth === 0) {
+      groups.push([]);
+      commas.push(token);
+    } else groups.at(-1).push(token);
   }
-  return arguments_;
+  return { groups, commas, wrapped };
+}
+
+function macroArguments(source) {
+  return splitMacroArguments(preprocessingTokens(source)).groups.map((group) =>
+    group.map(({ text, separated }, index) => [index > 0 && separated, text]),
+  );
+}
+
+function sourcePart(node, type, start, end, value, children = []) {
+  return {
+    type,
+    start: node.startIndex + start,
+    end: node.startIndex + end,
+    container: false,
+    sortable: false,
+    owner: null,
+    key: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
+    children,
+  };
+}
+
+function positionedTokens(source) {
+  const tokens = [];
+  preprocessingTokens(source, (token) => {
+    tokens.push(token);
+  });
+  return tokens;
+}
+
+function preprocessingProjection(node, tokens, includeGaps) {
+  const children = [];
+  for (const [at, token] of tokens.entries()) {
+    if (includeGaps && at > 0)
+      children.push(
+        sourcePart(node, "macro_gap", tokens[at - 1].end, token.start, token.separated),
+      );
+    children.push(sourcePart(node, "preprocessing_token", token.start, token.end, token.text));
+  }
+  return children;
+}
+
+function macroArgumentProjection(node) {
+  const tokens = positionedTokens(node.text);
+  const { groups, commas, wrapped } = splitMacroArguments(tokens);
+  const children = [];
+  for (const [index, group] of groups.entries()) {
+    children.push(
+      sourcePart(
+        node,
+        "macro_argument",
+        index > 0 ? commas[index - 1].end : wrapped ? tokens[0].end : 0,
+        commas[index]?.start ?? (wrapped ? tokens.at(-1).start : node.text.length),
+        group.map(({ text, separated }, at) => [at > 0 && separated, text]),
+        preprocessingProjection(node, group, true),
+      ),
+    );
+    const comma = commas[index];
+    if (comma) children.push(sourcePart(node, "macro_comma", comma.start, comma.end, comma.text));
+  }
+  return children;
 }
 
 const containers = new Set([
@@ -404,11 +490,121 @@ function render(root, macros) {
   return { text: lines.length ? lines.join("\n") + "\n" : "", errors };
 }
 
+// Match overload signatures even when parameter bindings have been renamed.
+// Only CST declarator fields identify bindings; type/qualifier/default tokens
+// remain exact. This metadata is never used by canonical serialization.
+function physicalOwnerIdentity(owner, cache) {
+  const bindings = new Set();
+  const pending = [owner];
+  while (pending.length) {
+    const current = pending.pop();
+    if (current.type.endsWith("parameter_declaration")) {
+      let binding = current.childForFieldName("declarator");
+      while (binding) {
+        const next =
+          binding.childForFieldName("declarator") ??
+          (binding.type === "parenthesized_declarator" && binding.namedChildCount === 1
+            ? binding.namedChildren[0]
+            : null);
+        if (!next) break;
+        binding = next;
+      }
+      if (binding && ["identifier", "field_identifier"].includes(binding.type))
+        bindings.add(nodeKey(binding));
+    }
+    pending.push(...current.children);
+  }
+  const tokens = [];
+  pending.push(owner);
+  while (pending.length) {
+    const current = pending.pop();
+    if (current.type === "comment" || current.isMissing) continue;
+    if (bindings.has(nodeKey(current))) tokens.push("$parameter");
+    else if (
+      literals.has(current.type) ||
+      current.type === "user_defined_literal" ||
+      !current.childCount
+    )
+      tokens.push(current.text);
+    else {
+      const children = canonicalChildren(current, cache);
+      for (let index = children.length - 1; index >= 0; index--) pending.push(children[index]);
+    }
+  }
+  return JSON.stringify(tokens);
+}
+
+/** Optional controller-only source correspondence. These ranges never enter a
+ * scoring snapshot: retain the CST's physical owners and the same canonical
+ * traversal, rather than trying to turn serialized scoring text back into C++.
+ */
+function sourceProjection(root, macros) {
+  const cache = { children: new Map(), keys: new Map() };
+  const values = [];
+  const gaps = (tokens) =>
+    tokens.map(([separated, value]) => (separated ? " " : "") + value).join("");
+  function visit(node, argument = false) {
+    if (node.type === "comment" || node.isMissing || node.type === "\n") return null;
+    const first = values.length;
+    const children = [];
+    if (argument) {
+      values.push("(" + macroArguments(node.text).map(gaps).join(",") + ")");
+      children.push(...macroArgumentProjection(node));
+    } else if (node.type === "preproc_params") {
+      values.push(opaqueTokens(node.text).join(" "));
+      children.push(...preprocessingProjection(node, positionedTokens(node.text), false));
+    } else if (node.type === "preproc_arg") {
+      values.push(gaps(tokenGaps(node.text)));
+      children.push(...preprocessingProjection(node, positionedTokens(node.text), true));
+    } else if (literals.has(node.type) || node.type === "user_defined_literal" || !node.childCount)
+      values.push(node.text);
+    else {
+      const callee = node.type === "call_expression" ? node.childForFieldName("function") : null;
+      const name = callee?.text.match(/([\p{ID_Start}_][\p{ID_Continue}_]*)$/u)?.[1];
+      const arguments_ = name && macros.has(name) ? node.childForFieldName("arguments") : null;
+      for (const child of canonicalChildren(node, cache)) {
+        const projected = visit(
+          child,
+          Boolean(arguments_ && child.startIndex === arguments_.startIndex),
+        );
+        if (projected) children.push(projected);
+      }
+    }
+    if (first === values.length) return null;
+    const owner = node.childForFieldName("declarator") ?? node.childForFieldName("name");
+    let name = owner;
+    while (name?.childForFieldName("declarator")) name = name.childForFieldName("declarator");
+    const body = node.childForFieldName("body");
+    const wrapped =
+      node.type === "template_declaration" ? children.filter((child) => child.sortable) : [];
+    const inner = wrapped.length === 1 ? wrapped[0] : null;
+    return {
+      type: node.type,
+      start: node.startIndex,
+      end: node.endIndex,
+      container: containers.has(node.type),
+      sortable: sortable(node),
+      owner: owner ? definitionKey(owner, cache) : (inner?.owner ?? null),
+      identity: owner ? physicalOwnerIdentity(owner, cache) : (inner?.identity ?? null),
+      name: name ? definitionKey(name, cache) : (inner?.name ?? null),
+      anchor: body
+        ? (children.find((child) => child.start === body.startIndex && child.end === body.endIndex)
+            ?.key ?? null)
+        : (inner?.anchor ?? null),
+      key: createHash("sha256")
+        .update(JSON.stringify(values.slice(first)))
+        .digest("hex"),
+      children,
+    };
+  }
+  return visit(root);
+}
+
 /** Input is a lossless source lexical view, as returned by decodeSourceBytes.
  * Invalid UTF-8 uses an explicit byte-preserving representation, never U+FFFD.
  * No candidate file is modified or repaired by this function.
  */
-export async function canonicalizeCpp(source, { macros } = {}) {
+export async function canonicalizeCpp(source, { macros, projection = false } = {}) {
   if (typeof source !== "string") throw new TypeError("Canonical C++ input must be source text");
   if (!source.isWellFormed())
     return {
@@ -422,7 +618,11 @@ export async function canonicalizeCpp(source, { macros } = {}) {
   try {
     tree = parser.parse(source);
     if (!tree) throw new Error("The canonical parser did not produce a syntax tree");
-    return render(tree.rootNode, macros ?? projectMacros([source]));
+    const context = macros ?? projectMacros([source]);
+    const result = render(tree.rootNode, context);
+    return projection
+      ? { ...result, projection: sourceProjection(tree.rootNode, context) }
+      : result;
   } finally {
     tree?.delete();
     parser.delete();

@@ -37,18 +37,37 @@ async function untilReleased(promise, signal) {
 }
 
 function publicBinding(node) {
-  const targets = node.prompt.split("\n").flatMap((line) => {
-    try {
-      const value = JSON.parse(line);
-      return value.mapping ? [value] : [];
-    } catch {
-      return [];
-    }
-  });
-  assert.equal(targets.length, 1, "Only the current binding enters the delivery");
-  const [target] = targets;
+  assert.equal(node.operations.length, 1);
+  const [target] = node.operations;
   assert.equal(target.mapping.length, 1);
   assert.ok(target.selectors.length > 0);
+  const [{ from, to }] = target.mapping;
+  assert.deepEqual(
+    node.prompt.match(/^Rename `.+$/gm),
+    [`Rename \`${from}\` to \`${to}\`.`],
+    "Only the current binding enters the delivery",
+  );
+  for (const selector of target.selectors) {
+    assert.ok(node.prompt.includes(`the ${selector.kind} \`${selector.scope}\``));
+    if (selector.signature !== undefined)
+      assert.ok(node.prompt.includes(`with type \`${selector.signature}\``));
+    if (selector.definition !== undefined)
+      assert.ok(
+        node.prompt.includes(
+          selector.definition ? "in its definition" : "in its declaration without a body",
+        ),
+      );
+    if (selector.owner) {
+      assert.ok(node.prompt.includes(`inside function \`${selector.owner.scope}\``));
+      assert.ok(node.prompt.includes(`with type \`${selector.owner.signature}\``));
+      if (selector.owner.definition !== undefined)
+        assert.ok(
+          node.prompt.includes(
+            selector.owner.definition ? "in its definition" : "in its declaration without a body",
+          ),
+        );
+    }
+  }
   for (const key of [
     "bindingCertification",
     "bindingGroups",
@@ -58,10 +77,11 @@ function publicBinding(node) {
     "declarations",
   ])
     assert.ok(
-      !Object.hasOwn(target, key),
+      !node.prompt.includes(`"${key}":`),
       `Private binding preparation reached the prompt: ${key}`,
     );
-  assert.deepEqual(target.mapping, node.operations[0].mapping);
+  assert.equal(node.prompt.includes('"mapping":'), false);
+  assert.equal(node.prompt.includes('"selectors":'), false);
 }
 
 // Thirty real compiler-selected bindings over one tiny file, not a canonical

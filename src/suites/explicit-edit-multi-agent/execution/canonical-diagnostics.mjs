@@ -1,99 +1,83 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { structuredPatch } from "diff";
 import { CANONICAL_DIFF_POLICY } from "../grading/canonical-diff.mjs";
 
-function location(canonicalPath) {
-  if (canonicalPath.startsWith("source/")) {
-    const path = canonicalPath.slice("source/".length);
-    return { canonicalPath, path, pathBytes: Buffer.from(path).toString("base64") };
+function location(file) {
+  if (file.startsWith("source/")) {
+    const path = file.slice("source/".length);
+    return { path, pathBytes: Buffer.from(path).toString("base64") };
   }
-  assert.ok(canonicalPath.startsWith("bytes/"), "Unknown canonical entry namespace");
-  const bytes = Buffer.from(canonicalPath.slice("bytes/".length), "base64url");
-  return { canonicalPath, path: null, pathBytes: bytes.toString("base64") };
+  assert.ok(file.startsWith("bytes/"), "Unknown canonical entry namespace");
+  return {
+    path: null,
+    pathBytes: Buffer.from(file.slice("bytes/".length), "base64url").toString("base64"),
+  };
 }
 
-/** Serialize complete file deltas, including agreements. Output positions and
- * controller IDs are not changes: both deltas use the same baseline coordinates.
- */
+// Both diffs use the same start. Keep every hunk, including agreements, so the
+// outer diff describes only what differs between the two complete deltas.
 function deltaView(hunks, file) {
-  const lines = [],
-    spans = new Map();
+  const lines = [];
   for (const hunk of hunks) {
     if (hunk.file !== file) continue;
-    const start = lines.length;
     lines.push(JSON.stringify(["hunk", hunk.oldStart, hunk.oldLines, hunk.newLines]));
-    for (const line of hunk.lines) lines.push(line);
-    spans.set(hunk.index, { start, end: lines.length });
+    lines.push(...hunk.lines);
   }
-  return { text: lines.length ? lines.join("\n") + "\n" : "", spans };
+  return lines.length ? lines.join("\n") + "\n" : "";
 }
 
-function intersects(span, start, count) {
-  if (!span) return false;
-  const offset = count === 0 ? start : start - 1;
-  return count === 0
-    ? span.start <= offset && offset <= span.end
-    : span.start < offset + count && offset < span.end;
-}
-
-/** Assign ordinary hunks of the actual-to-expected delta comparison.
- * These are feedback units only; the original scoring disagreements retain their
- * identities. Never replay entire associated hunks or drop unchanged agreements
- * before taking this second diff: either would misdescribe a partial repair.
- */
+/** Split the actual-to-reference diff of diffs into independent assignments. */
 export function canonicalCorrectionNodes(comparison) {
-  const nodes = [],
-    covered = new Set();
+  const nodes = [];
   const files = [...new Set(comparison.mismatches.map(({ file }) => file))].sort();
   for (const file of files) {
-    const expected = deltaView(comparison.expectedHunks, file);
     const actual = deltaView(comparison.actualHunks, file);
-    const mismatches = comparison.mismatches.filter((item) => item.file === file);
-    const patch = structuredPatch(file, file, actual.text, expected.text, undefined, undefined, {
+    const expected = deltaView(comparison.expectedHunks, file);
+    const patch = structuredPatch(file, file, actual, expected, undefined, undefined, {
       context: CANONICAL_DIFF_POLICY.context,
       ignoreWhitespace: false,
       stripTrailingCr: false,
     });
+    const where = location(file);
     for (const hunk of patch.hunks) {
-      const related = mismatches.filter(
-        (item) =>
-          (item.kind === "expected" &&
-            intersects(expected.spans.get(item.expectedIndex), hunk.newStart, hunk.newLines)) ||
-          item.actualIndices.some((index) =>
-            intersects(actual.spans.get(index), hunk.oldStart, hunk.oldLines),
-          ),
-      );
-      assert.ok(related.length, "A correction hunk must identify its scoring disagreement");
-      const differenceIds = related.map(({ id }) => id);
-      for (const id of differenceIds) covered.add(id);
-      const data = {
-        stage: "structural-correction",
-        location: location(file),
-        mismatches: related,
-        diff: {
-          version: "canonical-diff-of-diffs-v1",
-          direction: "actual-to-expected",
-          context: CANONICAL_DIFF_POLICY.context,
-          hunk,
-        },
-      };
+      const data = { location: where, hunk };
       nodes.push({
         id: `canonical-repair-${nodes.length}`,
         dependencies: [],
-        differenceIds,
         prompt: JSON.stringify(data),
       });
     }
   }
-  assert.deepEqual(
-    [...covered].sort(),
-    [...comparison.differenceIds].sort(),
-    "Correction feedback must cover every supplied disagreement",
-  );
   return nodes;
 }
 
-/** Supply only the failed stage and a command to reproduce its verification. */
+/** Prepare only this participant's text; the caller owns its private mounted directory. */
+export async function prepareCanonicalFeedback(members, directory) {
+  return Promise.all(
+    members.map(async (member) => {
+      if (member.validationFile) {
+        await writeFile(
+          path.join(directory, path.basename(member.validationFile)),
+          member.validation + "\n",
+          { flag: "wx", mode: 0o600 },
+        );
+      }
+      if (Buffer.byteLength(member.prompt) <= 4096) return { ...member };
+      const name = `${randomUUID()}.txt`;
+      await writeFile(path.join(directory, name), member.prompt, { flag: "wx", mode: 0o600 });
+      const feedbackFile = `/feedback/${name}`;
+      return {
+        ...member,
+        feedbackFile,
+        prompt: `Your editing assignment is in ${feedbackFile}. Read the complete text in sections as needed, then carry out those edits in the project. The assignment file is read-only; do not copy it into the project.`,
+      };
+    }),
+  );
+}
+/** Keep executable validation inside the controller until assignment delivery. */
 export function canonicalIntegrationNodes(stage, { expectedPixels } = {}) {
   assert.ok(
     ["build-correction", "image-correction"].includes(stage),
@@ -143,20 +127,34 @@ for scene in range(2):
         sys.exit(f"scene {scene}: pixels differ")
 PY`;
   }
-  return [{ id: stage, dependencies: [], prompt: JSON.stringify({ stage, validation }) }];
+  const validationFile = `/feedback/${stage === "build-correction" ? "check-build.sh" : "check-images.sh"}`;
+  return [
+    {
+      id: stage,
+      dependencies: [],
+      stage,
+      validation,
+      validationFile,
+      prompt: `The ${stage === "build-correction" ? "build" : "rendered-image"} check failed. Run \`bash ${validationFile}\` from the project root. Diagnose and fix the cause using its output, then run the script again after your changes. The script is read-only; do not copy it into the project.`,
+    },
+  ];
 }
 
 export function canonicalAssignmentPrompt(members) {
   assert.ok(Array.isArray(members) && members.length > 0, "An editing packet must contain work");
   if (members.every(({ id }) => ["build-correction", "image-correction"].includes(id))) {
     return [
-      "Work in the shared project. Preserve changes made by other agents. The integration check failed. Run the validation command with Bash from the project root, then diagnose and fix the failure.",
+      "Work in the shared project. Preserve changes made by other agents. The integration check failed. Run the assigned validation script with Bash from the project root, then diagnose and fix the failure.",
       ...members.map(({ prompt }) => prompt),
     ].join("\n\n---\n\n");
   }
   return [
     "Work in the shared writable project. Inspect current files before each edit. Preserve concurrent changes made by other agents; do not assume earlier file contents remain unchanged. Complete only the assignments in this packet. Do not run project-wide builds or lint commands. Address native IDE diagnostics only when they concern your assigned edits.",
-    "For structural-correction data, resolve the supplied actual-to-expected diff-of-diffs hunk in actual source. Read the outer minus/plus markers as differences between actual and expected changes; read the inner minus/plus markers as changes from the trusted round start. Treat diff.hunk line numbers as positions in serialized change text, not C++ source lines. Read any hunk header record as baseline-range metadata. Locate the source by its physical path and nearby canonical C++ code. Preserve literal contents, already-correct edits and unrelated code. Do not apply this representation as a C++ patch. For an unexpected physical entry, restore the required absence or entry type. Decode location.pathBytes as base64 when location.path is null.",
+    ...(members.some(({ kind }) => kind !== "cst-correction")
+      ? [
+          "For JSON hunk assignments, compare the actual and reference changes from the same round start. Outer minus lines are actual changes and outer plus lines are reference changes; the inner diff markers describe changes from that start. Locate the affected code in the named project-relative file and make the actual changes match the reference. Hunk coordinates refer to the serialized diffs, not source line numbers. Do not apply the nested diff directly as a source patch. If location.path is null, decode location.pathBytes from base64 to identify the filename.",
+        ]
+      : []),
     ...members.map(({ prompt }) => prompt),
   ].join("\n\n---\n\n");
 }

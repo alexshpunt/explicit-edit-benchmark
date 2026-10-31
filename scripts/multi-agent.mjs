@@ -19,7 +19,7 @@ Separate from the existing 226-task benchmark and its Score.
   verify-restoring PREPARATION NEW_OUTPUT [--agents auto|N] [--batch-size N] [--reference-batch-size N] [--build-weight W] [--result-weight W]
   run-restoring PREPARATION NEW_OUTPUT --config PRIVATE_JSON --proof NEW_PROOF --allow-model-calls [--agents auto|N] [--batch-size N] [--build-weight W] [--result-weight W] [--agent-lifecycle persistent|per-delivery] [--max-concurrent-agents N]
   prepare-canonical PREPARATION NEW_CACHE --proof RETAINED_PROOF [--agents auto|N] [--trusted-endpoints PRIVATE_JSON]
-  run-canonical PREPARATION NEW_OUTPUT --canonical CACHE --config PRIVATE_JSON --allow-model-calls [--agents auto|N] [--batch-size N] [--max-concurrent-agents N]
+  run-canonical PREPARATION NEW_OUTPUT --canonical CACHE --config PRIVATE_JSON --allow-model-calls [--agents auto|N] [--batch-size N] [--max-concurrent-agents N] [--from-round N]
   export-canonical RUN_DIRECTORY NEW_RESULT_JSON
   validate-canonical RESULT_JSON
   inspect-canonical RUN_DIRECTORY
@@ -117,12 +117,13 @@ async function canonicalCommand(command, values, positionals) {
         agents,
         batchSize,
         maxConcurrentAgents,
+        fromRound: positive("from-round"),
         configPath: values.config,
         allowModelCalls: values["allow-model-calls"],
         signal: controller.signal,
       });
       console.log(
-        `${report.status.toUpperCase()}: ${report.score.score.toFixed(3)}% ${report.status === "complete" ? "canonical Score" : "partial canonical aggregate"}; ${report.rounds.length}/${report.plan.length} measured rounds`,
+        `${report.status.toUpperCase()}: ${report.score.score.toFixed(3)}% ${report.mode === "diagnostic-continuation" ? "diagnostic partial aggregate" : report.status === "complete" ? "canonical Score" : "partial canonical aggregate"}; ${report.rounds.length}/${report.plan.length} measured rounds`,
       );
       if (report.status !== "complete") process.exitCode = 1;
     }
@@ -182,6 +183,7 @@ export async function multiAgentMain(args) {
       agents: { type: "string", default: "auto" },
       "batch-size": { type: "string" },
       "max-concurrent-agents": { type: "string" },
+      "from-round": { type: "string" },
       canonical: { type: "string" },
       config: { type: "string" },
       "allow-model-calls": { type: "boolean", default: false },

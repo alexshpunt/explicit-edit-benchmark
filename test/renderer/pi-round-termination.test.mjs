@@ -15,6 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { startPiParticipant } from "../../src/suites/explicit-edit-multi-agent/execution/pi-baseline.mjs";
 import { providerFixture } from "./provider-fixture.mjs";
+import { createProviderRecovery } from "../../src/suites/explicit-edit-multi-agent/execution/provider-recovery.mjs";
 
 const baselineRuntime = process.env.RENDERER_PI_RUNTIME;
 const ideRuntime = process.env.RENDERER_PI_IDE_RUNTIME;
@@ -39,7 +40,7 @@ async function liveNamespaceProcesses(identity) {
   return remaining;
 }
 
-async function fixture(t, runtime, respond, harness) {
+async function fixture(t, runtime, respond, harness, participantOptions = {}) {
   await mkdir(path.resolve(".tmp"), { recursive: true });
   const root = await mkdtemp(path.resolve(".tmp/pi-round-termination-"));
   const workspace = path.join(root, "workspace");
@@ -69,7 +70,11 @@ async function fixture(t, runtime, respond, harness) {
         workspace,
         path.join(root, name),
         { ...provider.config, runtime, ...(harness ? { harness } : {}) },
-        { eventsFile: path.join(root, `${name}.jsonl`), enforceProcessBoundary: true },
+        {
+          ...participantOptions,
+          eventsFile: path.join(root, `${name}.jsonl`),
+          enforceProcessBoundary: true,
+        },
       );
       const participant = { driver, initial: undefined };
       participants.push(participant);
@@ -87,6 +92,57 @@ function identity(receipt) {
 function getStateResponses(driver) {
   return driver.events.filter((event) => event.type === "response" && event.command === "get_state")
     .length;
+}
+
+function waitForTrace(t, file, driver, predicate) {
+  const waiting = Promise.withResolvers();
+  waiting.promise.catch(() => {});
+  const inspect = () => {
+    if (predicate(driver.events)) {
+      watcher.close();
+      waiting.resolve();
+    }
+  };
+  const watcher = watch(file, inspect);
+  watcher.on("error", waiting.reject);
+  const abort = () => waiting.reject(t.signal.reason);
+  t.signal.addEventListener("abort", abort, { once: true });
+  t.after(() => {
+    watcher.close();
+    t.signal.removeEventListener("abort", abort);
+  });
+  inspect();
+  return waiting.promise;
+}
+
+function nativeUserMessages(driver) {
+  return driver.events
+    .filter((event) => event.type === "message_end" && event.message?.role === "user")
+    .map(({ message }) =>
+      typeof message.content === "string"
+        ? message.content
+        : message.content.map((part) => part.text ?? "").join(""),
+    );
+}
+
+function idleBackgroundResponses(failure, errorCount = 4) {
+  return (_body, number) => {
+    if (number === 1)
+      return {
+        toolCall: {
+          name: "bash",
+          arguments: {
+            command:
+              "printf 'original\\n' >> /workspace/original-once.txt; while [ ! -f /workspace/release-background ]; do sleep 0.05; done; printf 'background-ready\\n'",
+            background: true,
+          },
+        },
+      };
+    if (number === 3)
+      return { command: "printf 'background\\n' >> /workspace/background-once.txt" };
+    if (number >= 4 && number < 4 + errorCount) return failure;
+    return {};
+  };
 }
 
 function userValues(request) {
@@ -387,21 +443,352 @@ test(
   },
 );
 
-test("turn completion reports provider failure without a retry", options(ideRuntime), async (t) => {
+for (const { kind, failure } of [
+  { kind: "upstream", failure: { status: 503, error: "fixture-transient-upstream" } },
+  { kind: "connection", failure: { streamError: "Connection error." } },
+  { kind: "websocket", failure: { streamError: "WebSocket error" } },
+])
+  test(
+    `IDE turn recovers a transient failure after a completed edit without replaying it (${kind})`,
+    options(ideRuntime),
+    async (t) => {
+      const f = await fixture(
+        t,
+        ideRuntime,
+        (body, number) => {
+          if (number === 2) return failure;
+          if (body.messages.at(-1).role === "tool") return {};
+          const { value } = userValues(body).at(-1);
+          return { command: `printf '%s\\n' '${value}' >> /workspace/recovered.txt` };
+        },
+        "pi-agent-ide-codemode",
+      );
+      const { driver, initial } = await f.start("recovery");
+      const first = await driver.execute(JSON.stringify({ value: "first" }), {
+        completion: "turn",
+        signal: t.signal,
+      });
+      assert.equal(await readFile(path.join(f.workspace, "recovered.txt"), "utf8"), "first\n");
+      assert.equal(first.toolCalls, 1);
+      assert.equal(first.failedToolCalls, 0);
+      assert.equal(
+        driver.events.filter(
+          (event) => event.type === "message_end" && event.message?.stopReason === "error",
+        ).length,
+        1,
+      );
+      assert.equal(first.lifecycle.filter((event) => event.type === "auto_retry_start").length, 1);
+      assert.equal(
+        first.lifecycle.filter((event) => event.type === "auto_retry_end" && event.success).length,
+        1,
+      );
+      const second = await driver.execute(JSON.stringify({ value: "second" }), {
+        completion: "turn",
+        signal: t.signal,
+      });
+      assert.deepEqual(identity(second), identity(first));
+      assert.equal(
+        await readFile(path.join(f.workspace, "recovered.txt"), "utf8"),
+        "first\nsecond\n",
+      );
+      assert.deepEqual(userValues(f.provider.requests.at(-1)), [
+        { value: "first" },
+        { value: "second" },
+      ]);
+      await driver.terminate();
+      assert.equal(driver.closed, true);
+      assert.deepEqual(await liveNamespaceProcesses(initial.process), []);
+      assert.deepEqual(f.provider.errors, []);
+    },
+  );
+test("exhausted native IDE retries remain a failed delivery", options(ideRuntime), async (t) => {
   const f = await fixture(
     t,
     ideRuntime,
-    () => ({ error: "fixture-access-denied", status: 401 }),
+    () => ({ status: 503, error: "fixture-transient-upstream" }),
     "pi-agent-ide-codemode",
   );
-  const { driver, initial } = await f.start("provider-failure");
+  const { driver, initial } = await f.start("exhaustion");
   await assert.rejects(
-    driver.execute(JSON.stringify({ value: "denied" }), { completion: "turn" }),
-    { category: "provider_failure" },
+    driver.execute(JSON.stringify({ value: "unavailable" }), {
+      completion: "turn",
+      signal: t.signal,
+    }),
+    (error) => {
+      assert.equal(error.category, "provider_failure");
+      assert.equal(error.execution.toolCalls, 0);
+      const lifecycle = error.execution.lifecycle;
+      assert.equal(lifecycle.filter(({ type }) => type === "auto_retry_start").length, 3);
+      assert.equal(
+        lifecycle.filter(({ type, success }) => type === "auto_retry_end" && success === false)
+          .length,
+        1,
+      );
+      return true;
+    },
   );
-  assert.equal(f.provider.requests.length, 1);
+  assert.equal(f.provider.requests.length, 4);
   await driver.terminate();
   assert.equal(driver.closed, true);
   assert.deepEqual(await liveNamespaceProcesses(initial.process), []);
   assert.deepEqual(f.provider.errors, []);
 });
+
+test(
+  "cancelling native IDE retry backoff stops further requests",
+  options(ideRuntime),
+  async (t) => {
+    const f = await fixture(
+      t,
+      ideRuntime,
+      () => ({ status: 503, error: "fixture-transient-upstream" }),
+      "pi-agent-ide-codemode",
+    );
+    const { driver, initial } = await f.start("backoff");
+    const retryStarted = Promise.withResolvers();
+    const watcher = watch(path.join(f.root, "backoff.jsonl"), () => {
+      if (driver.events.some(({ type }) => type === "auto_retry_start")) retryStarted.resolve();
+    });
+    t.after(() => watcher.close());
+    const controller = new AbortController();
+    t.after(() => controller.abort());
+    const executing = driver.execute(JSON.stringify({ value: "cancel" }), {
+      completion: "turn",
+      signal: AbortSignal.any([t.signal, controller.signal]),
+    });
+    executing.catch(() => {});
+    await Promise.race([
+      retryStarted.promise,
+      executing.then(() => assert.fail("Delivery settled before its native retry")),
+    ]);
+    controller.abort();
+    await assert.rejects(executing, { name: "AbortError" });
+    assert.equal(f.provider.requests.length, 1);
+    assert.equal(driver.closed, true);
+    assert.deepEqual(await liveNamespaceProcesses(initial.process), []);
+    assert.deepEqual(f.provider.errors, []);
+  },
+);
+test(
+  "idle unsolicited native retries recover without another delivery or repeated edit",
+  options(ideRuntime),
+  async (t) => {
+    const recoveryEvents = [];
+    const recovery = createProviderRecovery({
+      cooldownMs: 25,
+      onEvent: (event) => recoveryEvents.push(event),
+    });
+    const allowContinuation = Promise.withResolvers();
+    t.after(() => allowContinuation.resolve());
+    let recoveryCalls = 0;
+    let recoveryRequest;
+    const f = await fixture(
+      t,
+      ideRuntime,
+      idleBackgroundResponses({ status: 429, error: "Rate limit exceeded" }),
+      "pi-agent-ide-codemode",
+      {
+        onRecovery: async (request) => {
+          recoveryCalls++;
+          recoveryRequest = request;
+          const lease = await recovery.wait(request);
+          await allowContinuation.promise;
+          return lease;
+        },
+        onProviderFailure: (error) => recovery.stop(error),
+      },
+    );
+    const { driver, initial } = await f.start("idle-recovery");
+    const prompt = JSON.stringify({ value: "idle-original" });
+    const original = await driver.execute(prompt, { completion: "turn", signal: t.signal });
+    assert.deepEqual(identity(original), identity(initial));
+    assert.equal(original.failedToolCalls, 0);
+    assert.equal(driver.events.filter(({ type }) => type === "agent_settled").length, 1);
+    assert.equal(await readFile(path.join(f.workspace, "original-once.txt"), "utf8"), "original\n");
+    const held = waitForTrace(t, path.join(f.root, "idle-recovery.jsonl"), driver, (events) =>
+      events.some(
+        (event) => event.type === "baseline_observation" && event.event === "recovery_wait",
+      ),
+    );
+    await writeFile(path.join(f.workspace, "release-background"), "release\n");
+    await held;
+    assert.equal(recoveryCalls, 1);
+    assert.deepEqual(identity(recoveryRequest), identity(initial));
+    assert.equal(recoveryRequest.signal.aborted, false);
+    assert.deepEqual(nativeUserMessages(driver), [prompt]);
+    assert.equal(
+      await readFile(path.join(f.workspace, "background-once.txt"), "utf8"),
+      "background\n",
+    );
+    const completed = waitForTrace(
+      t,
+      path.join(f.root, "idle-recovery.jsonl"),
+      driver,
+      (events) =>
+        events.filter(({ type }) => type === "agent_settled").length === 2 &&
+        events.some(({ type, success }) => type === "provider_recovery_end" && success === true),
+    );
+    allowContinuation.resolve();
+    await completed;
+    assert.deepEqual(identity(await driver.assertIdle()), identity(initial));
+    assert.equal(f.provider.requests.length, 8);
+    assert.equal(recoveryCalls, 1);
+    assert.deepEqual(
+      recoveryEvents.map(({ type }) => type),
+      ["provider_recovery_cooldown", "provider_recovery_probe", "provider_recovery_ready"],
+    );
+    assert.equal(
+      driver.events.filter(
+        (event) => event.type === "message_end" && event.message?.stopReason === "error",
+      ).length,
+      4,
+    );
+    assert.equal(
+      driver.events.filter(({ type, success }) => type === "auto_retry_end" && success === false)
+        .length,
+      1,
+    );
+    assert.deepEqual(nativeUserMessages(driver), [prompt]);
+    assert.equal(await readFile(path.join(f.workspace, "original-once.txt"), "utf8"), "original\n");
+    assert.equal(
+      await readFile(path.join(f.workspace, "background-once.txt"), "utf8"),
+      "background\n",
+    );
+    await driver.terminate();
+    assert.equal(driver.closed, true);
+    assert.deepEqual(await liveNamespaceProcesses(initial.process), []);
+    assert.deepEqual(f.provider.errors, []);
+  },
+);
+
+for (const failure of [
+  { kind: "authentication", status: 401, error: "fixture-access-denied" },
+  { kind: "quota", status: 429, error: "GoUsageLimitError" },
+])
+  test(
+    `idle unsolicited native ${failure.kind} failure stops admission before another delivery`,
+    options(ideRuntime),
+    async (t) => {
+      const recovery = createProviderRecovery({ cooldownMs: 25 });
+      const failures = [];
+      let recoveryCalls = 0;
+      const f = await fixture(
+        t,
+        ideRuntime,
+        idleBackgroundResponses(failure, 1),
+        "pi-agent-ide-codemode",
+        {
+          onRecovery: () => {
+            recoveryCalls++;
+            throw Error("Unexpected controller recovery");
+          },
+          onProviderFailure: (error) => {
+            failures.push(error);
+            recovery.stop(error);
+          },
+        },
+      );
+      const { driver, initial } = await f.start("idle-refusal");
+      const prompt = JSON.stringify({ value: "idle-original" });
+      await driver.execute(prompt, { completion: "turn", signal: t.signal });
+      const failed = waitForTrace(
+        t,
+        path.join(f.root, "idle-refusal.jsonl"),
+        driver,
+        (events) => events.filter(({ type }) => type === "agent_settled").length === 2,
+      );
+      await writeFile(path.join(f.workspace, "release-background"), "release\n");
+      await failed;
+      assert.equal(failures.length, 1);
+      assert.equal(failures[0].category, "provider_failure");
+      assert.equal(recoveryCalls, 0);
+      await assert.rejects(recovery.admit({ signal: t.signal }), { category: "provider_failure" });
+      await assert.rejects(
+        driver.execute(JSON.stringify({ value: "must-not-start" }), { completion: "turn" }),
+        { category: "provider_failure" },
+      );
+      assert.equal(f.provider.requests.length, 4);
+      assert.equal(driver.events.filter(({ type }) => type === "auto_retry_start").length, 0);
+      assert.deepEqual(nativeUserMessages(driver), [prompt]);
+      assert.equal(
+        await readFile(path.join(f.workspace, "original-once.txt"), "utf8"),
+        "original\n",
+      );
+      assert.equal(
+        await readFile(path.join(f.workspace, "background-once.txt"), "utf8"),
+        "background\n",
+      );
+      await driver.terminate();
+      assert.equal(driver.closed, true);
+      assert.deepEqual(await liveNamespaceProcesses(initial.process), []);
+      assert.deepEqual(f.provider.errors, []);
+    },
+  );
+
+test(
+  "idle unsolicited native recovery can be terminated without waiting for its callback",
+  options(ideRuntime),
+  async (t) => {
+    let recoveryRequest;
+    const f = await fixture(
+      t,
+      ideRuntime,
+      idleBackgroundResponses({ status: 429, error: "Rate limit exceeded" }),
+      "pi-agent-ide-codemode",
+      {
+        onRecovery: (request) => {
+          recoveryRequest = request;
+          return new Promise(() => {});
+        },
+      },
+    );
+    const { driver, initial } = await f.start("idle-termination");
+    const prompt = JSON.stringify({ value: "idle-original" });
+    await driver.execute(prompt, { completion: "turn", signal: t.signal });
+    const held = waitForTrace(t, path.join(f.root, "idle-termination.jsonl"), driver, (events) =>
+      events.some(
+        (event) => event.type === "baseline_observation" && event.event === "recovery_wait",
+      ),
+    );
+    await writeFile(path.join(f.workspace, "release-background"), "release\n");
+    await held;
+    assert.ok(recoveryRequest);
+    assert.equal(recoveryRequest.signal.aborted, false);
+    assert.deepEqual(nativeUserMessages(driver), [prompt]);
+    assert.equal(f.provider.requests.length, 7);
+    await driver.terminate();
+    assert.equal(recoveryRequest.signal.aborted, true);
+    assert.equal(driver.closed, true);
+    assert.deepEqual(await liveNamespaceProcesses(initial.process), []);
+    assert.equal(f.provider.requests.length, 7);
+    assert.equal(await readFile(path.join(f.workspace, "original-once.txt"), "utf8"), "original\n");
+    assert.equal(
+      await readFile(path.join(f.workspace, "background-once.txt"), "utf8"),
+      "background\n",
+    );
+    assert.deepEqual(f.provider.errors, []);
+  },
+);
+
+for (const { kind, status, error } of [
+  { kind: "authentication", status: 401, error: "fixture-access-denied" },
+  { kind: "quota", status: 429, error: "GoUsageLimitError" },
+  { kind: "billing", status: 429, error: "insufficient_quota" },
+])
+  test(
+    `turn completion reports provider failure without a retry (${kind})`,
+    options(ideRuntime),
+    async (t) => {
+      const f = await fixture(t, ideRuntime, () => ({ error, status }), "pi-agent-ide-codemode");
+      const { driver, initial } = await f.start("provider-failure");
+      await assert.rejects(
+        driver.execute(JSON.stringify({ value: "denied" }), { completion: "turn" }),
+        { category: "provider_failure" },
+      );
+      assert.equal(f.provider.requests.length, 1);
+      await driver.terminate();
+      assert.equal(driver.closed, true);
+      assert.deepEqual(await liveNamespaceProcesses(initial.process), []);
+      assert.deepEqual(f.provider.errors, []);
+    },
+  );

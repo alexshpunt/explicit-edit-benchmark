@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { copyFile, mkdir, open, readFile, readlink, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -41,11 +42,27 @@ export async function startPiParticipant(
   workspace,
   stateDirectory,
   config,
-  { eventsFile, signal, enforceProcessBoundary = false } = {},
+  {
+    eventsFile,
+    signal,
+    enforceProcessBoundary = false,
+    feedbackDirectory,
+    onRecovery,
+    onProviderFailure,
+  } = {},
 ) {
   signal?.throwIfAborted();
   const profile = await resolvePiParticipantProfile(config);
   const { runtime, version } = profile;
+  assert.ok(onRecovery === undefined || typeof onRecovery === "function");
+  assert.ok(onProviderFailure === undefined || typeof onProviderFailure === "function");
+  if (onRecovery) {
+    const [major, minor] = version.split(".").map(Number);
+    assert.ok(
+      major > 1 || (major === 1 && minor >= 4),
+      "Provider recovery requires Pi 1.4 or newer",
+    );
+  }
   const state = path.resolve(stateDirectory);
   await mkdir(state, { mode: 0o700 });
   await mkdir(path.join(state, "pi"));
@@ -142,6 +159,8 @@ export async function startPiParticipant(
     "--chdir",
     "/workspace",
   ];
+  if (feedbackDirectory) args.push("--ro-bind", path.resolve(feedbackDirectory), "/feedback");
+  if (onRecovery) args.push("--setenv", "RENDERER_PI_RECOVERY", "controller");
   args.push(
     "--setenv",
     "RENDERER_PI_HARNESS",
@@ -212,6 +231,7 @@ export async function startPiParticipant(
   }
   const events = [];
   const pending = new Map();
+  const admissions = new Map();
   const observers = new Set();
   let contexts = 0;
   const waitForObservation = (matches) =>
@@ -276,12 +296,79 @@ export async function startPiParticipant(
     if (!["message_update", "tool_execution_update"].includes(event.type)) events.push(event);
     if (eventsFile) appendFileSync(eventsFile, JSON.stringify(event) + "\n");
   };
+  /** @type {{
+   * recoveryController: AbortController,
+   * recoveryNonces: Set<string>,
+   * recoveryTask: Promise<void> | undefined,
+   * recoveryLease: { complete: (success: boolean) => void } | undefined,
+   * recoveryNonce: string | undefined,
+   * }} */
+  const recovery = {
+    recoveryController: new AbortController(),
+    recoveryNonces: new Set(),
+    recoveryTask: undefined,
+    recoveryLease: undefined,
+    recoveryNonce: undefined,
+  };
+  let nativeBegin = 0;
   const fail = (error) => {
     terminal ??= error;
     for (const value of pending.values()) value.reject(terminal);
     pending.clear();
+    for (const value of admissions.values()) value.reject(terminal);
+    admissions.clear();
+    recovery.recoveryController.abort(terminal);
+    finishRecovery(recovery, false);
     for (const value of observers) value.reject(terminal);
     active?.reject(terminal);
+  };
+  const finishRecovery = (current, success) => {
+    if (!current.recoveryLease) return;
+    const lease = current.recoveryLease;
+    current.recoveryLease = undefined;
+    lease.complete(success);
+    trace({ type: "provider_recovery_end", nonce: current.recoveryNonce, success });
+  };
+  const recover = (record) => {
+    assert.ok(onRecovery, "Unexpected provider-recovery boundary");
+    assert.match(record.nonce, /^[a-f0-9-]{36}$/);
+    const current = recovery;
+    assert.ok(!current.recoveryNonces.has(record.nonce), "Duplicate provider-recovery boundary");
+    current.recoveryNonces.add(record.nonce);
+    trace({ type: "provider_recovery_wait", nonce: record.nonce, reason: record.reason });
+    const previous = current.recoveryTask ?? Promise.resolve();
+    current.recoveryTask = previous
+      .then(async () => {
+        finishRecovery(current, false);
+        const recoverySignal = current.recoveryController.signal;
+        recoverySignal.throwIfAborted();
+        const lease = await onRecovery({
+          ...expected,
+          nonce: record.nonce,
+          reason: record.reason,
+          signal: recoverySignal,
+        });
+        assert.equal(typeof lease?.complete, "function", "Missing provider-recovery lease");
+        if (recoverySignal.aborted) {
+          lease.complete(false);
+          recoverySignal.throwIfAborted();
+        }
+        current.recoveryLease = lease;
+        current.recoveryNonce = record.nonce;
+        trace({ type: "provider_recovery_release", nonce: record.nonce });
+        const accepted = await command("prompt", {
+          message: `/renderer-recovery-release ${record.nonce}`,
+        });
+        assert.equal(accepted.disposition, "handled", "Recovery control became a model prompt");
+      })
+      .catch((error) => {
+        // Keep each session's mutable receipt separate from a shared stop reason.
+        const failure = new Error(error?.message ?? String(error), { cause: error });
+        failure.category = error?.category ?? "infrastructure";
+        fail(failure);
+        throw failure;
+      });
+    current.recoveryTask.catch(() => {});
   };
   const observe = (record) => {
     trace({ type: "baseline_observation", ...record });
@@ -310,6 +397,11 @@ export async function startPiParticipant(
     expected ??= identity;
     assert.deepEqual(identity, expected, "Actual Baseline lifetime changed");
     observation = record;
+    if (record.event === "recovery_wait") recover(record);
+    if (["admission_idle", "admission_error"].includes(record.event)) {
+      admissions.get(record.nonce)?.resolve(record);
+      admissions.delete(record.nonce);
+    }
     if (record.event === "context") contexts++;
     for (const entry of observers) if (entry.matches(record)) entry.resolve();
   };
@@ -321,7 +413,7 @@ export async function startPiParticipant(
       pending.delete(event.id);
       if (
         request.type === "prompt" &&
-        active?.completion === "turn" &&
+        active &&
         event.success &&
         event.data?.disposition === "started"
       )
@@ -330,8 +422,27 @@ export async function startPiParticipant(
       else request.reject(new ExecutionFailure("driver_exit", event.error));
     } else if (event.type === "extension_error") {
       fail(new ExecutionFailure("driver_exit", event.error ?? "Baseline extension failed"));
+    } else if (event.type === "agent_start") {
+      nativeBegin = events.length - 1;
     } else if (event.type === "agent_settled") {
-      if (active && (active.completion !== "turn" || active.started)) active.resolve();
+      const failed = events
+        .slice(nativeBegin)
+        .findLast((entry) => entry.type === "message_end" && entry.message?.role === "assistant");
+      if (failed && ["error", "aborted"].includes(failed.message.stopReason)) {
+        const error = new ExecutionFailure(
+          "provider_failure",
+          failed.message.errorMessage ?? failed.message.stopReason,
+        );
+        onProviderFailure?.(error);
+        fail(error);
+        return;
+      }
+      if (recovery.recoveryLease) {
+        recovery.recoveryTask = (recovery.recoveryTask ?? Promise.resolve())
+          .then(() => finishRecovery(recovery, true))
+          .catch(fail);
+      }
+      if (active?.started) active.resolve();
     }
   };
   const readLines = (stream, consume) => {
@@ -400,6 +511,39 @@ export async function startPiParticipant(
       });
       child.stdin.write(JSON.stringify({ id, type, ...fields }) + "\n");
     });
+  const admitPrompt = async (message) => {
+    for (;;) {
+      try {
+        return await command("prompt", { message });
+      } catch (error) {
+        // This native preflight rejects before appending a user message or starting a run.
+        if (
+          error.category !== "driver_exit" ||
+          error.message !==
+            "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."
+        )
+          throw error;
+        const nonce = randomUUID();
+        trace({ type: "participant_admission_wait", nonce });
+        const idle = Promise.withResolvers();
+        admissions.set(nonce, idle);
+        idle.promise.catch(() => {});
+        try {
+          const accepted = await command("prompt", {
+            message: `/renderer-admission-idle ${nonce}`,
+          });
+          assert.equal(accepted.disposition, "handled", "Admission control became a model prompt");
+          const observed = await idle.promise;
+          if (observed.event === "admission_error")
+            throw new ExecutionFailure("driver_exit", observed.message);
+          if (terminal) throw terminal;
+          trace({ type: "participant_admission_ready", nonce });
+        } finally {
+          admissions.delete(nonce);
+        }
+      }
+    }
+  };
   const kill = () => {
     if (stopped || child.exitCode !== null || child.signalCode !== null) return;
     try {
@@ -473,7 +617,6 @@ export async function startPiParticipant(
     assert.equal(initial.sessionId, expected.sessionId);
     assert.equal(`${initial.model.provider}/${initial.model.id}`, config.model);
     assert.equal(initial.thinkingLevel, config.thinking);
-    if (!profile.baseline) await command("set_auto_retry", { enabled: false });
     return {
       version,
       get closed() {
@@ -513,7 +656,13 @@ export async function startPiParticipant(
         });
         // Attach immediately: a process can fail before the acceptance response arrives.
         settled.catch(() => {});
-        active = { resolve, reject, completion, started: false };
+        const current = {
+          resolve,
+          reject,
+          completion,
+          started: false,
+        };
+        active = current;
         const abort = () => {
           fail(new DOMException("Baseline cancelled", "AbortError"));
           kill();
@@ -532,26 +681,30 @@ export async function startPiParticipant(
             toolCalls: current.filter((e) => e.type === "tool_execution_start").length,
             failedToolCalls: current.filter((e) => e.type === "tool_execution_end" && e.isError)
               .length,
-            lifecycle: current.filter((e) => /compaction|retry/.test(e.type)),
+            lifecycle: current.filter((e) => /compaction|retry|recovery|admission/.test(e.type)),
           };
         };
         try {
-          const accepted = await command("prompt", { message: prompt });
+          const accepted = await admitPrompt(prompt);
           assert.equal(
             accepted.disposition,
             "started",
             "Request was queued or consumed instead of run",
           );
           await settled;
-          const current = events.slice(begin);
-          const failed = current.findLast(
+          await recovery.recoveryTask;
+          if (terminal) throw terminal;
+          const turnEvents = events.slice(begin);
+          const failed = turnEvents.findLast(
             (e) => e.type === "message_end" && e.message?.role === "assistant",
           );
-          if (failed && ["error", "aborted"].includes(failed.message.stopReason))
-            throw new ExecutionFailure(
+          if (failed && ["error", "aborted"].includes(failed.message.stopReason)) {
+            const error = new ExecutionFailure(
               "provider_failure",
               failed.message.errorMessage ?? failed.message.stopReason,
             );
+            throw error;
+          }
           await waitForObservation(
             (record) => record.event === "context" && contexts > previousContexts,
           );
@@ -559,8 +712,8 @@ export async function startPiParticipant(
             profile.baseline ? observation.systemEmpty : observation.systemEmpty === false,
             "No observed model call under the selected system profile",
           );
-          // Round pools either dispatch the next packet immediately or terminate the
-          // namespace. Do not add an idle RPC window after the native turn ended.
+          // Native diagnostics may start another run after this settlement. A later
+          // delivery waits for admission only if its preflight was actually rejected.
           if (completion === "turn") return result();
           const stateNow = await idleState();
           return { ...result(), messageCount: stateNow.messageCount };
