@@ -195,3 +195,62 @@ test("unrelated non-C++ contents are preserved and their changed bytes fail extr
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("the controller uses sealed participant count rather than the number of whole-file tasks", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "extraction-static-controller-")),
+    output = path.join(root, "run");
+  const plan = {
+    ...fixture(),
+    version: "renderer-module-extraction-plan-v2",
+    scope: "experimental-module-pairs",
+    modules: ["pair"],
+    agents: 1,
+  };
+  let opened = 0,
+    closed = 0,
+    measures = 0;
+  const executed = [];
+  try {
+    const result = await runExtraction(plan, output, {
+      expectedPixels: pixels,
+      createDriver: async () => {
+        opened++;
+        return {
+          closed: false,
+          assertIdle: async () => ({ sessionId: "fixed-owner", messageCount: 0 }),
+          async terminate() {
+            this.closed = true;
+            closed++;
+          },
+        };
+      },
+      async execute(_driver, task) {
+        executed.push(task.id);
+        await writeFile(path.join(output, "workspace", task.file), task.destination);
+        if (executed.length === plan.tasks.length)
+          await writeFile(path.join(output, "workspace/main.cpp"), plan.expected["main.cpp"]);
+        return { status: "complete" };
+      },
+      async measure() {
+        measures++;
+        assert.equal(closed, 1);
+        assert.equal(executed.length, 2);
+        return { buildPassed: true, resultMatched: true, pixels };
+      },
+    });
+    assert.equal(opened, 1);
+    assert.equal(measures, 1);
+    assert.equal(result.version, "renderer-module-extraction-run-v2");
+    assert.equal(result.agents, 1);
+    assert.deepEqual(
+      result.files,
+      plan.tasks.map(({ id, file }) => ({ id, file })),
+    );
+    assert.deepEqual(result.modules, ["pair"]);
+    assert.equal(result.participants.length, 1);
+    assert.equal(result.deliveries.length, 2);
+    assert.equal(result.extraction.status, "pass");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

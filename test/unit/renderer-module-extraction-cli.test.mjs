@@ -12,20 +12,32 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
 import { loadExtraction } from "../../src/suites/explicit-edit-multi-agent/extraction/prepare.mjs";
 
+import { pairedExtractionFixture } from "../helpers/module-extraction-generation.mjs";
 const script = new URL("../../scripts/module-extraction.mjs", import.meta.url);
 test("the separate extraction CLI prepares the requested current-source module", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "extraction-cli-prepare-"));
   try {
     const input = path.join(root, "input");
     await mkdir(input);
-    const initial = {
-      "main.cpp":
-        "#ifndef BAD_H\n#define BAD_H\nint bad_value = 3;\n#endif\nint main() { return bad_value; }\n",
-    };
+    const fixture = pairedExtractionFixture(),
+      initial = fixture.initial;
     const tasks =
-      JSON.stringify([
-        { operations: [{ action: "header", file: "bad.h", guard: "BAD_H", includes: [] }] },
-      ]) + "\n";
+      JSON.stringify(
+        fixture.headers.map((header) => ({ operations: [{ action: "header", ...header }] })),
+      ) + "\n";
+    const generation = path.join(root, "generation");
+    await mkdir(generation);
+    await writeFile(
+      path.join(generation, "operations.json"),
+      JSON.stringify(fixture.generation.manifest),
+    );
+    await writeFile(
+      path.join(generation, "report.json"),
+      JSON.stringify({
+        operations: fixture.generation.manifest.operations,
+        mixing: fixture.generation.mixing,
+      }),
+    );
     await writeTree(path.join(input, "initial"), initial);
     await writeFile(path.join(input, "tasks.json"), tasks);
     await writeFile(
@@ -40,17 +52,32 @@ test("the separate extraction CLI prepares the requested current-source module",
     const output = path.join(root, "case");
     const result = spawnSync(
       process.execPath,
-      [script.pathname, "prepare", input, output, "--modules", "bad.h"],
+      [
+        script.pathname,
+        "prepare",
+        input,
+        output,
+        "--modules",
+        "frond_a",
+        "--generation",
+        generation,
+        "--agents",
+        "1",
+      ],
       { encoding: "utf8" },
     );
     assert.equal(result.status, 0);
-    assert.deepEqual(JSON.parse(result.stdout).modules, ["bad.h"]);
+    assert.deepEqual(JSON.parse(result.stdout).modules, ["frond_a"]);
     const loaded = await loadExtraction(output);
     assert.deepEqual(loaded.plan.initial, initial);
-    assert.equal(loaded.plan.tasks.length, 1);
-    assert.equal(
-      loaded.plan.expected["bad.h"],
-      "#ifndef BAD_H\n#define BAD_H\nint bad_value = 3;\n#endif\n",
+    assert.equal(loaded.plan.tasks.length, 3);
+    assert.equal(loaded.plan.agents, 1);
+    assert.deepEqual(
+      new Set(loaded.plan.tasks.map((task) => task.file)),
+      new Set(["frond_a.h", "frond_a.cpp", "frond_math.h"]),
+    );
+    assert.ok(
+      loaded.plan.expected["frond_a.cpp"].includes("int operation_a() { return identity(1); }"),
     );
     assert.deepEqual(
       JSON.parse(await readFile(path.join(output, "manifest.json"), "utf8")),

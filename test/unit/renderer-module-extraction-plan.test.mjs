@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { treeIdentity } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
 import {
   prepareHeaderExtraction,
   gradeHeaderExtraction,
@@ -91,4 +92,46 @@ test("blank layout is not an extraction error, while raw-string and inactive sou
     "main.cpp": spaced["main.cpp"].replace("inactive_bad = 9", "inactive_bad = 0"),
   };
   assert.equal(gradeHeaderExtraction(prepared, inactive).status, "fail");
+});
+
+test("file assignment count is independent of the ten-participant limit", () => {
+  const headers = Array.from({ length: 12 }, (_unused, index) => ({
+    file: `part_${index}.h`,
+    guard: `PART_${index}_H`,
+    includes: [],
+  }));
+  const initial = {
+    "main.cpp":
+      headers
+        .map(
+          (header, index) =>
+            `#ifndef ${header.guard}\n#define ${header.guard}\nint current_${index};\n#endif\n`,
+        )
+        .join("") + "int main() { return 0; }\n",
+  };
+  const plan = prepareHeaderExtraction({
+    initial,
+    headers,
+    modules: headers.map((header) => header.file),
+  });
+  assert.equal(plan.tasks.length, 12);
+  assert.equal(gradeHeaderExtraction(plan, plan.expected).status, "pass");
+});
+
+test("the complete-source grader handles paired plans without a header-only version assumption", async () => {
+  const { gradeExtraction } =
+    await import("../../src/suites/explicit-edit-multi-agent/extraction/plan.mjs");
+  const initial = { "main.cpp": "int current() { return 1; }\n" };
+  const plan = {
+    version: "renderer-module-extraction-plan-v2",
+    initial,
+    initialIdentity: treeIdentity(initial),
+    tasks: [{ file: "pair.cpp" }],
+    expected: { "main.cpp": "\n", "pair.cpp": initial["main.cpp"] },
+  };
+  assert.equal(gradeExtraction(plan, plan.expected).status, "pass");
+  assert.equal(
+    gradeExtraction(plan, { ...plan.expected, "pair.cpp": "int current() { return 2; }\n" }).status,
+    "fail",
+  );
 });

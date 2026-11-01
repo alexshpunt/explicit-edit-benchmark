@@ -8,6 +8,7 @@ import {
   treeIdentity,
   writeTree,
 } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
+import { pairedExtractionFixture } from "../helpers/module-extraction-generation.mjs";
 import {
   prepareExtraction,
   loadExtraction,
@@ -72,6 +73,91 @@ test("changed preparation source is rejected before an extraction output is crea
       prepareExtraction(source.directory, path.join(root, "prepared"), { modules: ["bad.h"] }),
     );
     await assert.rejects(readFile(path.join(root, "prepared/manifest.json")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function pairedInput(root) {
+  const fixture = pairedExtractionFixture();
+  const directory = path.join(root, "input"),
+    generation = path.join(root, "generation");
+  await mkdir(directory);
+  await mkdir(generation);
+  await writeTree(path.join(directory, "initial"), fixture.initial);
+  const tasks =
+    JSON.stringify(
+      fixture.headers.map((header) => ({ operations: [{ action: "header", ...header }] })),
+    ) + "\n";
+  await writeFile(path.join(directory, "tasks.json"), tasks);
+  await writeFile(
+    path.join(directory, "manifest.json"),
+    JSON.stringify({
+      version: "renderer-concurrent-v2",
+      initial: treeIdentity(fixture.initial),
+      workloadSha256: createHash("sha256").update(tasks).digest("hex"),
+      pixels: ["0".repeat(64), "1".repeat(64)],
+    }),
+  );
+  await writeFile(
+    path.join(generation, "operations.json"),
+    JSON.stringify(fixture.generation.manifest),
+  );
+  await writeFile(
+    path.join(generation, "report.json"),
+    JSON.stringify({
+      operations: fixture.generation.manifest.operations,
+      mixing: fixture.generation.mixing,
+    }),
+  );
+  return { directory, generation, fixture };
+}
+
+test("paired preparation seals generation ownership, file tasks and the selected participant count", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "extraction-pair-prepare-"));
+  try {
+    const source = await pairedInput(root),
+      output = path.join(root, "prepared");
+    const manifest = await prepareExtraction(source.directory, output, {
+      modules: ["frond_a"],
+      generation: source.generation,
+      agents: 1,
+    });
+    assert.equal(manifest.version, "renderer-module-extraction-v2");
+    assert.equal(manifest.scope, "experimental-module-pairs");
+    assert.equal(manifest.agents, 1);
+    const loaded = await loadExtraction(output);
+    assert.deepEqual(loaded.manifest, manifest);
+    assert.deepEqual(loaded.plan.initial, source.fixture.initial);
+    assert.deepEqual(
+      new Set(manifest.files.map((file) => file.file)),
+      new Set(["frond_a.h", "frond_a.cpp", "frond_math.h"]),
+    );
+    assert.deepEqual(loaded.plan.generation, source.fixture.generation);
+    await writeFile(path.join(output, "manifest.json"), JSON.stringify({ ...manifest, agents: 2 }));
+    await assert.rejects(loadExtraction(output));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("mismatched generation journals are rejected before creating a paired case", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "extraction-pair-journal-"));
+  try {
+    const source = await pairedInput(root),
+      output = path.join(root, "prepared");
+    await writeFile(
+      path.join(source.generation, "report.json"),
+      JSON.stringify({ operations: [], mixing: null }),
+    );
+    await assert.rejects(
+      prepareExtraction(source.directory, output, {
+        modules: ["frond_a"],
+        generation: source.generation,
+        agents: 1,
+      }),
+    );
+    await assert.rejects(readFile(path.join(output, "manifest.json")));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { prepareExtraction } from "../../src/suites/explicit-edit-multi-agent/extraction/prepare.mjs";
+import {
+  treeIdentity,
+  writeTree,
+} from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
 import { validateExtractionProof } from "../../src/suites/explicit-edit-multi-agent/extraction/case.mjs";
 
 const source = {
@@ -59,3 +70,110 @@ test("only a passed reference with the same clean source and exact plan authoriz
     ),
   );
 });
+
+test("paired proofs bind file receipts and participant count separately", () => {
+  const files = [
+    { id: "extract-001", file: "pair.h" },
+    { id: "extract-002", file: "dependency.h" },
+    { id: "extract-003", file: "pair.cpp" },
+  ];
+  const pairedManifest = {
+    ...manifest,
+    version: "renderer-module-extraction-v2",
+    scope: "experimental-module-pairs",
+    modules: ["pair"],
+    agents: 1,
+    files,
+  };
+  const pairedProof = {
+    ...proof,
+    version: "renderer-module-extraction-proof-v2",
+    scope: pairedManifest.scope,
+    agents: 1,
+    files,
+  };
+  const pairedReport = {
+    ...report,
+    version: "renderer-module-extraction-run-v2",
+    scope: pairedManifest.scope,
+    agents: 1,
+    files,
+    participants: [{ agent: 0, session: 0, closed: true }],
+    deliveries: files.map((file) => ({ ids: [file.id], agent: 0, session: 0, status: "settled" })),
+  };
+  assert.doesNotThrow(() =>
+    validateExtractionProof(pairedManifest, pairedProof, pairedReport, source),
+  );
+  const old = { ...pairedProof, version: "renderer-module-extraction-proof-v1" };
+  assert.throws(() => validateExtractionProof(pairedManifest, old, pairedReport, source));
+  for (const mutate of [
+    (value) => {
+      value.agents = 2;
+    },
+    (value) => {
+      value.deliveries[1].ids = value.deliveries[0].ids;
+    },
+    (value) => {
+      value.deliveries[1].session = 2;
+    },
+    (value) => {
+      value.deliveries[1].status = "error";
+    },
+    (value) => {
+      value.files = value.files.slice(0, -1);
+    },
+  ]) {
+    const changed = structuredClone(pairedReport);
+    mutate(changed);
+    assert.throws(() => validateExtractionProof(pairedManifest, pairedProof, changed, source));
+  }
+});
+
+test(
+  "the model entry refuses a legacy header-only case before reading its proof",
+  { skip: process.platform === "win32" },
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "extraction-scope-"));
+    try {
+      const input = path.join(root, "input"),
+        prepared = path.join(root, "case"),
+        output = path.join(root, "run");
+      await mkdir(input);
+      const initial = {
+        "main.cpp": "#ifndef A_H\n#define A_H\nint current;\n#endif\nint main() { return 0; }\n",
+      };
+      const tasks = JSON.stringify([
+        { operations: [{ action: "header", file: "a.h", guard: "A_H", includes: [] }] },
+      ]);
+      await writeTree(path.join(input, "initial"), initial);
+      await writeFile(path.join(input, "tasks.json"), tasks);
+      await writeFile(
+        path.join(input, "manifest.json"),
+        JSON.stringify({
+          version: "renderer-concurrent-v2",
+          initial: treeIdentity(initial),
+          workloadSha256: createHash("sha256").update(tasks).digest("hex"),
+          pixels: manifest.pixels,
+        }),
+      );
+      await prepareExtraction(input, prepared, { modules: ["a.h"] });
+      const fifo = path.join(root, "unopened-proof");
+      assert.equal(spawnSync("mkfifo", [fifo]).status, 0);
+      const module = new URL(
+        "../../src/suites/explicit-edit-multi-agent/extraction/case.mjs",
+        import.meta.url,
+      ).href;
+      const script = `import {runModelExtraction} from ${JSON.stringify(module)}; await runModelExtraction(${JSON.stringify(prepared)},${JSON.stringify(output)},{},{proofPath:${JSON.stringify(fifo)}});`;
+      const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+        encoding: "utf8",
+        timeout: 2000,
+      });
+      assert.equal(result.error, undefined);
+      assert.equal(result.signal, null);
+      assert.notEqual(result.status, 0);
+      assert.equal(existsSync(output), false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
