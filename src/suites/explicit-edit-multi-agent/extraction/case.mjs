@@ -13,7 +13,7 @@ import { moduleExtractionPrompt, moduleRecoveryPrompt } from "./prompt.mjs";
 import { writeTree } from "../generation/generator.mjs";
 import { runExtractionRecovery } from "./recovery.mjs";
 import { EXTRACTION_RECOVERY_POLICY, extractionScore } from "./score.mjs";
-import { loadExtractionContinuation, validateExtractionDeliveries } from "./continuation.mjs";
+import { validateExtractionDeliveries } from "./continuation.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -22,7 +22,7 @@ export function validateExtractionProof(manifest, proof, report, sourceIdentity)
   const paired = manifest.scope === "experimental-module-pairs";
   assert.equal(
     proof.version,
-    paired ? "renderer-module-extraction-proof-v3" : "renderer-module-extraction-proof-v1",
+    paired ? "renderer-module-extraction-proof-v4" : "renderer-module-extraction-proof-v1",
   );
   assert.equal(proof.kind, "scripted-reference");
   assert.equal(proof.status, "pass");
@@ -33,7 +33,7 @@ export function validateExtractionProof(manifest, proof, report, sourceIdentity)
   assert.equal(report.initial, manifest.initial);
   if (paired) {
     assert.equal(manifest.version, "renderer-module-extraction-v2");
-    assert.equal(report.version, "renderer-module-extraction-run-v3");
+    assert.equal(report.version, "renderer-module-extraction-run-v4");
     assert.equal(report.scope, manifest.scope);
     assert.equal(proof.scope, manifest.scope);
     assert.ok(
@@ -83,6 +83,25 @@ export function validateExtractionProof(manifest, proof, report, sourceIdentity)
     assert.ok(report.participants.every(({ stage }) => stage === "original"));
     assert.ok(report.deliveries.every(({ stage }) => stage === "original"));
     validateExtractionDeliveries(manifest.files, manifest.agents, report);
+    assert.deepEqual(report.repairs, []);
+    assert.deepEqual(report.recoveryChecks, []);
+    assert.equal(report.barriers.length, 1);
+    const [barrier] = report.barriers;
+    assert.equal(barrier.stage, "original");
+    assert.equal(barrier.participants.length, manifest.agents);
+    assert.equal(new Set(barrier.participants.map(({ agent }) => agent)).size, manifest.agents);
+    for (const held of barrier.participants) {
+      const original = report.participants.find(({ agent }) => agent === held.agent);
+      assert.ok(original);
+      assert.equal(held.session, original.session);
+      assert.ok(held.participant && original.participant);
+      for (const key of ["sessionId", "lifetime"])
+        if (original.participant[key] !== undefined)
+          assert.equal(held.participant[key], original.participant[key]);
+    }
+    assert.equal(report.first.stage, "original");
+    assert.deepEqual(report.first.structure, report.structure);
+    assert.deepEqual(report.first.integration, report.integration);
   } else {
     assert.equal(report.participants.length, manifest.modules.length);
     assert.equal(report.deliveries.length, manifest.modules.length);
@@ -117,7 +136,7 @@ export async function verifyExtraction(prepared, outputPath, { signal } = {}) {
   const proof = {
     version:
       manifest.scope === "experimental-module-pairs"
-        ? "renderer-module-extraction-proof-v3"
+        ? "renderer-module-extraction-proof-v4"
         : "renderer-module-extraction-proof-v1",
     ...(manifest.scope === "experimental-module-pairs"
       ? {
@@ -156,6 +175,13 @@ export async function runModelExtraction(
   config,
   { proofPath, signal, fromRun, sourceReceipt } = {},
 ) {
+  if (fromRun !== undefined || sourceReceipt !== undefined)
+    throw Object.assign(
+      new Error(
+        "Recovery requires the original live participant contexts; closed saved runs cannot supply them",
+      ),
+      { code: "EXTRACTION_LIVE_CONTEXT_REQUIRED" },
+    );
   const { manifest, plan } = await loadExtraction(prepared);
   assert.equal(manifest.scope, "experimental-module-pairs");
   assert.equal(typeof proofPath, "string");
@@ -167,25 +193,10 @@ export async function runModelExtraction(
   const sourceIdentity = await restoringSourceIdentity();
   validateExtractionProof(manifest, proof, JSON.parse(reportBytes), sourceIdentity);
   const output = path.resolve(outputPath);
-  assert.equal(fromRun === undefined, sourceReceipt === undefined);
-  let continuation;
-  let sourceReceiptSha256;
-  if (fromRun !== undefined) {
-    assert.equal(typeof fromRun, "string");
-    assert.equal(typeof sourceReceipt, "string");
-    const bytes = await readFile(sourceReceipt);
-    sourceReceiptSha256 = hash(bytes);
-    continuation = await loadExtractionContinuation(plan, fromRun, output + "-source", {
-      receipt: JSON.parse(bytes),
-      planSha256: manifest.planSha256,
-      signal,
-    });
-  }
   const drivers = recoveryModelDrivers(output, config);
   try {
     const result = await runExtractionRecovery(plan, output, {
       ...drivers,
-      continuation,
       signal,
       expectedPixels: manifest.pixels,
     });
@@ -195,11 +206,10 @@ export async function runModelExtraction(
       JSON.stringify(
         {
           kind: "model",
-          mode: continuation ? "recovery-continuation" : "whole-file-extraction",
+          mode: "whole-file-extraction",
           sourceIdentity,
           planSha256: manifest.planSha256,
           policy: EXTRACTION_RECOVERY_POLICY,
-          ...(continuation ? { continuation: continuation.binding, sourceReceiptSha256 } : {}),
         },
         null,
         2,
@@ -212,14 +222,13 @@ export async function runModelExtraction(
   }
 }
 
-/** Each actual recovery stage gets fresh native contexts, never a new workspace. */
+/** Structural recovery stays with its original live context; integration owns fresh participants. */
 export function recoveryModelDrivers(outputPath, config) {
   const output = path.resolve(outputPath);
   const stages = new Map();
+  const owners = new WeakMap();
   const stageDrivers = (stage) => {
-    assert.ok(
-      ["original", "structural-correction", "build-correction", "image-correction"].includes(stage),
-    );
+    assert.ok(["original", "build-correction", "image-correction"].includes(stage));
     if (!stages.has(stage))
       stages.set(
         stage,
@@ -231,9 +240,17 @@ export function recoveryModelDrivers(outputPath, config) {
   };
   return {
     usage: (driver) => finalizedUsage(driver.events),
-    createDriver: (agent, session, context) =>
-      stageDrivers(context.stage).createDriver(agent, session, context),
-    execute: (driver, task, context) => stageDrivers(context.stage).execute(driver, task, context),
+    async createDriver(agent, session, context) {
+      const drivers = stageDrivers(context.stage);
+      const driver = await drivers.createDriver(agent, session, context);
+      owners.set(driver, drivers);
+      return driver;
+    },
+    execute(driver, task, context) {
+      const drivers = owners.get(driver);
+      assert.ok(drivers, "Participant has no owning native factory");
+      return drivers.execute(driver, task, context);
+    },
     async cleanup() {
       for (const drivers of stages.values()) await drivers.cleanup();
     },

@@ -264,8 +264,17 @@ test("in-flight cancellation waits for native closure and preserves signal separ
       `require("node:fs").writeFileSync(${JSON.stringify(ready)},String(process.pid));setTimeout(()=>process.exit(99),10000)`,
     ],
   });
-  for await (const event of events) if (event.filename === "ready") break;
-  const pid = Number(await readFile(ready, "utf8"));
+  let pid;
+  for await (const event of events) {
+    if (event.filename !== "ready") continue;
+    // The create event may precede the write; an empty PID would query our own
+    // process group (kill(0, 0)) rather than the child whose closure is tested.
+    const value = await readFile(ready, "utf8");
+    if (!/^[1-9]\d*$/.test(value)) continue;
+    pid = Number(value);
+    break;
+  }
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
   controller.abort();
   await assert.rejects(running, { code: "ABORT_ERR" });
   const receipt = JSON.parse(await readFile(path.join(directory, "execution.json")));

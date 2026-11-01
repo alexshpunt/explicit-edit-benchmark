@@ -78,11 +78,10 @@ async function fixture() {
   return { root, source, plan, failed, report, receipt, planSha256, reportBytes, executionBytes };
 }
 
-test("a saved continuation starts from measured failed bytes and never repeats original inference or compilation", async () => {
+test("a historical capture remains inspectable but cannot supply closed contexts for owner recovery", async () => {
   const f = await fixture();
   let opens = 0,
     measures = 0;
-  const stages = [];
   try {
     const continuation = await loadExtractionContinuation(
       f.plan,
@@ -97,54 +96,26 @@ test("a saved continuation starts from measured failed bytes and never repeats o
       f.failed["body.h"],
     );
     const output = path.join(f.root, "recovery");
-    const result = await runExtractionRecovery(f.plan, output, {
-      continuation,
-      expectedPixels: ["a".repeat(64), "b".repeat(64)],
-      async createDriver(_agent, _session, { stage, workspace }) {
-        opens++;
-        assert.equal(stage, "structural-correction");
-        assert.equal(await readFile(path.join(workspace, "body.h"), "utf8"), f.failed["body.h"]);
-        return {
-          closed: false,
-          assertIdle: async () => ({ sessionId: "continued-structure", messageCount: 0 }),
-          async terminate() {
-            this.closed = true;
-          },
-        };
-      },
-      async execute(_driver, task, context) {
-        stages.push(context.stage);
-        assert.equal(task.id, f.plan.tasks[0].id);
-        await writeFile(path.join(context.workspace, task.file), task.destination);
-        return { status: "complete" };
-      },
-      async assess(tree) {
-        const targetMatched = tree["body.h"] === f.plan.expected["body.h"];
-        return {
-          version: "renderer-module-extraction-structure-v1",
-          status: targetMatched ? "pass" : "fail",
-          files: [{ id: f.plan.tasks[0].id, file: "body.h", targetMatched, sourceMatched: true }],
-          differenceIds: targetMatched ? [] : [f.plan.tasks[0].id],
-          mainMatched: true,
-          inventoryMatched: true,
-          unrelatedMatched: true,
-          diagnostics: [],
-        };
-      },
-      async measure() {
-        measures++;
-        return { buildPassed: true, resultMatched: true, pixels: ["a".repeat(64), "b".repeat(64)] };
-      },
-    });
-    assert.deepEqual(stages, ["structural-correction"]);
-    assert.equal(opens, 1);
-    assert.equal(measures, 1);
-    assert.equal(result.first.origin, "source-observation");
-    assert.equal(result.first.integration.buildPassed, false);
-    assert.equal(result.first.candidateIdentity, f.receipt.candidateIdentity);
-    assert.equal(result.first.score.score, 0);
-    assert.equal(result.score.score, 37.5);
-    assert.equal(result.continuation.reportSha256, f.receipt.reportSha256);
+    await assert.rejects(
+      runExtractionRecovery(f.plan, output, {
+        continuation,
+        async createDriver() {
+          opens++;
+          throw Error("Unexpected participant");
+        },
+        async execute() {
+          throw Error("Unexpected delivery");
+        },
+        async measure() {
+          measures++;
+          throw Error("Unexpected compilation");
+        },
+      }),
+      { code: "EXTRACTION_LIVE_CONTEXT_REQUIRED" },
+    );
+    assert.equal(opens, 0);
+    assert.equal(measures, 0);
+    await assert.rejects(readFile(path.join(output, "report.json")), { code: "ENOENT" });
     assert.equal(await readFile(path.join(f.source, "report.json"), "utf8"), f.reportBytes);
     assert.equal(await readFile(path.join(f.source, "execution.json"), "utf8"), f.executionBytes);
     assert.equal(

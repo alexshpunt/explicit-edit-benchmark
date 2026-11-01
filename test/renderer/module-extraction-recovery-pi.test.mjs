@@ -107,7 +107,43 @@ bash /feedback/check-${kind === "build" ? "build" : "images"}.sh`;
           report.stages.map(({ stage }) => stage),
           ["original", stage],
         );
-        assert.equal(report.participants.length, 2);
+        assert.equal(report.participants.length, kind === "structural" ? 1 : 2);
+        const originals = report.deliveries.filter((delivery) => delivery.stage === "original");
+        const repairs = report.deliveries.filter((delivery) => delivery.stage === stage);
+        assert.equal(originals.length, plan.tasks.length);
+        assert.equal(repairs.length, 1);
+        assert.deepEqual(
+          report.deliveries.map((delivery) => delivery.stage),
+          [...plan.tasks.map(() => "original"), stage],
+        );
+        const original = originals.find((delivery) => delivery.ids.includes(damagedTask.id));
+        assert.ok(original);
+        for (const key of ["sessionId", "lifetime"]) {
+          assert.equal(typeof original.receipt[key], "string");
+          assert.ok(original.receipt[key].length > 0);
+          assert.equal(typeof repairs[0].receipt[key], "string");
+          if (kind === "structural") assert.equal(repairs[0].receipt[key], original.receipt[key]);
+          else assert.notEqual(repairs[0].receipt[key], original.receipt[key]);
+        }
+        const repairRequest = provider.requests[2 * plan.tasks.length];
+        assert.ok(repairRequest);
+        const priorUsers = commands.slice(0, plan.tasks.length).map((_command, index) => {
+          const users = provider.requests[2 * index].messages.filter(({ role }) => role === "user");
+          return users.at(-1);
+        });
+        const recoveryUsers = repairRequest.messages.filter(({ role }) => role === "user");
+        const previousCalls = repairRequest.messages.flatMap((message) => message.tool_calls ?? []);
+        if (kind === "structural") {
+          assert.equal(recoveryUsers.length, plan.tasks.length + 1);
+          assert.deepEqual(recoveryUsers.slice(0, -1), priorUsers);
+          assert.deepEqual(
+            previousCalls.map((call) => JSON.parse(call.function.arguments).command),
+            commands.slice(0, plan.tasks.length),
+          );
+        } else {
+          assert.equal(recoveryUsers.length, 1);
+          assert.deepEqual(previousCalls, []);
+        }
         assert.equal(report.waves[1].agents, 1);
         assert.equal(report.waves[1].ids.length, 1);
         assert.equal(report.integration.buildPassed, true);

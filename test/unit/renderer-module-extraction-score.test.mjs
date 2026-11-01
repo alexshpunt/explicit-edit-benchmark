@@ -48,8 +48,11 @@ test("a successful whole-file extraction receives the existing unassisted Score"
   assert.equal(Object.isFrozen(EXTRACTION_RECOVERY_POLICY), true);
   assert.equal(EXTRACTION_RECOVERY_POLICY.scorePolicy, CANONICAL_SCORE_POLICY);
   assert.deepEqual(JSON.parse(JSON.stringify(EXTRACTION_RECOVERY_POLICY)), {
-    version: "renderer-module-extraction-recovery-v1",
+    version: "renderer-module-extraction-recovery-v2",
     structuralWaves: 1,
+    structuralAttemptsPerFile: 1,
+    structuralParticipants: "original-live-owners",
+    overlappingRepairs: "serialize-refresh-skip",
     buildAgents: 1,
     buildAttempts: 1,
     imageAgents: 1,

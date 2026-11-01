@@ -11,7 +11,10 @@ import {
   treeIdentity,
   writeTree,
 } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
-import { validateExtractionProof } from "../../src/suites/explicit-edit-multi-agent/extraction/case.mjs";
+import {
+  validateExtractionProof,
+  runModelExtraction,
+} from "../../src/suites/explicit-edit-multi-agent/extraction/case.mjs";
 import {
   EXTRACTION_RECOVERY_POLICY,
   extractionScore,
@@ -45,6 +48,21 @@ const proof = {
   sourceIdentity: source,
 };
 
+test("a saved closed run is refused before reading prepared source or authorizing native drivers", async () => {
+  await assert.rejects(
+    runModelExtraction(
+      "missing-case",
+      "unused-output",
+      {},
+      {
+        fromRun: "closed-original-run",
+        sourceReceipt: "closed-original-receipt",
+        proofPath: "unread-proof",
+      },
+    ),
+    { code: "EXTRACTION_LIVE_CONTEXT_REQUIRED" },
+  );
+});
 test("only a passed reference with the same clean source and exact plan authorizes model execution", () => {
   assert.doesNotThrow(() => validateExtractionProof(manifest, proof, report, source));
   for (const mutation of [
@@ -91,7 +109,7 @@ test("paired proofs bind file receipts and participant count separately", () => 
   };
   const pairedProof = {
     ...proof,
-    version: "renderer-module-extraction-proof-v3",
+    version: "renderer-module-extraction-proof-v4",
     scope: pairedManifest.scope,
     policy: EXTRACTION_RECOVERY_POLICY,
     agents: 1,
@@ -113,7 +131,7 @@ test("paired proofs bind file receipts and participant count separately", () => 
   const score = extractionScore({ totalFiles: files.length, stages });
   const pairedReport = {
     ...report,
-    version: "renderer-module-extraction-run-v3",
+    version: "renderer-module-extraction-run-v4",
     scope: pairedManifest.scope,
     policy: EXTRACTION_RECOVERY_POLICY,
     agents: 1,
@@ -124,7 +142,29 @@ test("paired proofs bind file receipts and participant count separately", () => 
     first: { ...stages[0], score },
     passed: true,
     waves: [{ stage: "original", agents: 1, ids: files.map(({ id }) => id), status: "complete" }],
-    participants: [{ agent: 0, session: 0, closed: true, stage: "original" }],
+    barriers: [
+      {
+        stage: "original",
+        participants: [
+          {
+            agent: 0,
+            session: 0,
+            participant: { sessionId: "reference-session", messageCount: files.length },
+          },
+        ],
+      },
+    ],
+    repairs: [],
+    recoveryChecks: [],
+    participants: [
+      {
+        agent: 0,
+        session: 0,
+        closed: true,
+        stage: "original",
+        participant: { sessionId: "reference-session", messageCount: 0 },
+      },
+    ],
     deliveries: files.map((file) => ({
       ids: [file.id],
       agent: 0,
@@ -139,6 +179,7 @@ test("paired proofs bind file receipts and participant count separately", () => 
   for (const version of [
     "renderer-module-extraction-proof-v1",
     "renderer-module-extraction-proof-v2",
+    "renderer-module-extraction-proof-v3",
   ])
     assert.throws(() =>
       validateExtractionProof(pairedManifest, { ...pairedProof, version }, pairedReport, source),
@@ -152,6 +193,21 @@ test("paired proofs bind file receipts and participant count separately", () => 
     ),
   );
   for (const mutate of [
+    (value) => {
+      value.barriers = [];
+    },
+    (value) => {
+      value.barriers[0].participants[0].session = 1;
+    },
+    (value) => {
+      value.barriers[0].participants[0].participant.sessionId = "replacement-session";
+    },
+    (value) => {
+      value.repairs = [{ id: files[0].id, owner: 0, status: "settled" }];
+    },
+    (value) => {
+      value.recoveryChecks = [{ ready: [files[0].id] }];
+    },
     (value) => {
       value.agents = 2;
     },

@@ -151,5 +151,20 @@ export async function captureExtractionState(plan, workspace, evidence, { signal
   };
   if (candidate.invalid.length || !physicalInventoryMatched) extraction.status = "fail";
   await assertCandidateUnchanged(workspace, candidate, { signal });
-  return { candidate, completeTree, extraction };
+  // Ordinary regular-file inventory is already charged by structural assessment.
+  // Keep physical-only entries visible even when regular files also differ.
+  const physicalDiagnostics = entries
+    .filter(
+      ({ path, type }) =>
+        path === null || (type !== "file" && expectedInventory.get(path) !== type),
+    )
+    .map(({ path, pathBytes, type }) => ({
+      id: "preservation:physical-inventory",
+      file: path ?? "main.cpp",
+      kind: "physical-inventory",
+      pathBytes,
+      type,
+      expectedType: expectedInventory.get(path) ?? null,
+    }));
+  return { candidate, completeTree, extraction, physicalDiagnostics };
 }

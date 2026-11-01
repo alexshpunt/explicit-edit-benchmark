@@ -6,8 +6,11 @@ import {
 } from "../grading/canonical-score.mjs";
 
 export const EXTRACTION_RECOVERY_POLICY = Object.freeze({
-  version: "renderer-module-extraction-recovery-v1",
+  version: "renderer-module-extraction-recovery-v2",
   structuralWaves: 1,
+  structuralAttemptsPerFile: 1,
+  structuralParticipants: "original-live-owners",
+  overlappingRepairs: "serialize-refresh-skip",
   buildAgents: 1,
   buildAttempts: 1,
   imageAgents: 1,

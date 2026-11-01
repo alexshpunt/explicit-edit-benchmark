@@ -14,6 +14,44 @@ import { loadExtraction } from "../../src/suites/explicit-edit-multi-agent/extra
 
 import { pairedExtractionFixture } from "../helpers/module-extraction-generation.mjs";
 const script = new URL("../../scripts/module-extraction.mjs", import.meta.url);
+
+for (const command of ["run", "recover"])
+  test(
+    `closed-run ${command} is refused before opening even an explicitly authorized configuration`,
+    { skip: process.platform === "win32" },
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "extraction-closed-cli-"));
+      try {
+        const config = path.join(root, "unopened-config");
+        assert.equal(spawnSync("mkfifo", [config]).status, 0);
+        const result = spawnSync(
+          process.execPath,
+          [
+            script.pathname,
+            command,
+            "unread-case",
+            path.join(root, "run"),
+            "--allow-model-calls",
+            "--config",
+            config,
+            "--proof",
+            "unread-proof",
+            "--from-run",
+            "closed-run",
+            "--source-receipt",
+            "unread-receipt",
+          ],
+          { encoding: "utf8", timeout: 3000, killSignal: "SIGKILL" },
+        );
+        assert.equal(result.error, undefined);
+        assert.equal(result.signal, null);
+        assert.notEqual(result.status, 0);
+        assert.equal(existsSync(path.join(root, "run")), false);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 test("the separate extraction CLI prepares the requested current-source module", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "extraction-cli-prepare-"));
   try {

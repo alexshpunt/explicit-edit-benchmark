@@ -75,9 +75,9 @@ async function exercise({ outcomes, broken = false, regress = false, refuse = nu
       };
     },
     async measure(_source, evidence, tree) {
-      assert.equal(opened.length, closed.length);
       assert.equal(tree["main.cpp"], plan.expected["main.cpp"]);
       const stage = path.basename(path.dirname(evidence));
+      assert.equal(closed.length, stage === "original" ? 0 : opened.length);
       measurements.push(stage);
       const next = outcomes[measurements.length - 1];
       assert.ok(next);
@@ -103,14 +103,14 @@ test("owned source residue stays one whole-file repair, not an overlapping share
       return { status: "complete" };
     };
     f.options.measure = async () => {
-      assert.equal(f.opened.length, f.closed.length);
+      assert.equal(f.closed.length, f.measurements.length === 0 ? 0 : f.opened.length);
       return f.measurements.push("measured") === 1 ? buildFailure : { ...success, pixels };
     };
     const report = await runExtractionRecovery(f.plan, f.output, f.options);
     assert.equal(report.first.structure.mainMatched, false);
     assert.deepEqual(report.first.structure.differenceIds, [f.plan.tasks[0].id]);
     assert.deepEqual(report.waves[1].ids, [f.plan.tasks[0].id]);
-    assert.equal(report.participants.length, 2);
+    assert.equal(report.participants.length, 1);
     assert.equal(report.score.score, 37.5);
   } finally {
     await rm(f.root, { recursive: true, force: true });
@@ -144,7 +144,7 @@ test("one structural recovery retains first failure and gives half credit", asyn
   try {
     const report = await runExtractionRecovery(f.plan, f.output, f.options);
     assert.deepEqual(f.measurements, ["original", "structural-correction"]);
-    assert.equal(f.opened.length, 2);
+    assert.equal(f.opened.length, 1);
     assert.equal(report.first.integration.buildPassed, false);
     assert.equal(report.first.structure.files[0].targetMatched, false);
     assert.equal(report.structure.files[0].targetMatched, true);
