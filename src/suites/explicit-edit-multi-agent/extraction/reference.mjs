@@ -13,6 +13,7 @@ export async function prepareExtractionReference(directory) {
     ["reference/ordinary-edit.mjs", "reference/ordinary-edit.mjs"],
     ["reference/concurrent-commit.mjs", "reference/concurrent-commit.mjs"],
     ["cpp/cpp-tokens.mjs", "cpp/cpp-tokens.mjs"],
+    ["cpp/cpp-structure.mjs", "cpp/cpp-structure.mjs"],
   ]) {
     const destination = path.join(directory, target);
     await mkdir(path.dirname(destination), { recursive: true });
@@ -41,7 +42,18 @@ export function extractionReference(workspace, tools, { signal } = {}) {
         id: task.id,
         file: task.file,
         guard: task.guard,
-        fragments: task.fragments.map(({ id, text }) => ({ id, text })),
+        kind: task.kind,
+        fragments: task.fragments.map(({ id, text, scope, kind, prefix, suffix }) => ({
+          id,
+          text,
+          scope,
+          kind,
+          prefix,
+          suffix,
+        })),
+        preamble: task.preamble,
+        using: task.using,
+        postamble: task.postamble,
         destination: task.destination,
         replacement: task.replacement,
       });

@@ -1,21 +1,22 @@
 import { createInterface } from "node:readline";
 import { execFileSync } from "node:child_process";
-import { closeSync, openSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { readSharedSource } from "../reference/concurrent-commit.mjs";
 import { publishEdits } from "../reference/ordinary-edit.mjs";
-import { extractCurrentHeader } from "../extraction/edit.mjs";
+import { extractCurrentFile } from "../extraction/edit.mjs";
 
 const workspace = process.argv[2];
 const lines = createInterface({ input: process.stdin });
 process.stdout.write(JSON.stringify({ type: "ready" }) + "\n");
-let delivered = false;
+const delivered = new Set();
 for await (const line of lines) {
   let request;
   try {
-    if (delivered) throw Error("Reference participant already received its module");
-    delivered = true;
     request = JSON.parse(line);
+    if (typeof request.id !== "string" || delivered.has(request.id))
+      throw Error("Duplicate or missing file assignment");
+    delivered.add(request.id);
     // Cooperating reference actors use an ordinary inherited-descriptor flock.
     // This is their Bash-accessible edit transaction, not controller scheduling.
     // Read AFTER acquiring it: textual diff3 cannot reliably distinguish nested
@@ -26,8 +27,10 @@ for await (const line of lines) {
         stdio: ["ignore", "ignore", "pipe", descriptor],
       });
       const before = await readSharedSource(workspace);
-      const after = extractCurrentHeader(before, request);
-      writeFileSync(path.join(workspace, request.file), after[request.file], { flag: "wx" });
+      const after = extractCurrentFile(before, request);
+      const target = path.join(workspace, request.file);
+      mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      writeFileSync(target, after[request.file], { flag: "wx", mode: 0o600 });
       // The new target now exists; only main needs publication. This avoids
       // reacquiring our directory lock through the missing-target editor path.
       const result = publishEdits(

@@ -8,7 +8,7 @@ import {
   releaseCandidateWorkspace,
 } from "../execution/candidate-evidence.mjs";
 import { measureExtractionCandidate } from "../grading/coherent-build.mjs";
-import { gradeHeaderExtraction } from "./plan.mjs";
+import { gradeExtraction, gradeHeaderExtraction } from "./plan.mjs";
 import { runExtractionWave } from "./wave.mjs";
 
 /** Run one wave, then freeze and inspect the candidate after confirmed closure.
@@ -34,11 +34,16 @@ export async function runExtraction(
   await mkdir(output, { mode: 0o700 });
   const workspace = path.join(output, "workspace");
   await writeTree(workspace, plan.initial);
+  const paired = plan.version === "renderer-module-extraction-plan-v2";
+  const agents = plan.agents ?? Math.min(plan.tasks.length, 10);
   const report = {
-    version: "renderer-module-extraction-run-v1",
+    version: paired ? "renderer-module-extraction-run-v2" : "renderer-module-extraction-run-v1",
     status: "running",
     initial: plan.initialIdentity,
-    modules: plan.tasks.map(({ id, file }) => ({ id, file })),
+    modules: paired ? plan.modules : plan.tasks.map(({ id, file }) => ({ id, file })),
+    ...(paired
+      ? { scope: plan.scope, agents, files: plan.tasks.map(({ id, file }) => ({ id, file })) }
+      : {}),
     started: new Date().toISOString(),
     participants: /** @type {Awaited<ReturnType<typeof runExtractionWave>>["records"]} */ ([]),
     deliveries: /** @type {Awaited<ReturnType<typeof runExtractionWave>>["deliveries"]} */ ([]),
@@ -61,6 +66,7 @@ export async function runExtraction(
   try {
     const wave = await runExtractionWave(plan.tasks, {
       signal,
+      agents,
       createDriver,
       execute,
       ...(usage ? { usage } : {}),
@@ -100,7 +106,7 @@ export async function runExtraction(
     const physicalInventoryMatched =
       entries.length === expectedInventory.size &&
       entries.every(({ path, type }) => expectedInventory.get(path) === type);
-    const extraction = gradeHeaderExtraction(plan, completeTree);
+    const extraction = (paired ? gradeExtraction : gradeHeaderExtraction)(plan, completeTree);
     report.extraction = {
       ...extraction,
       inventoryMatched: extraction.inventoryMatched && physicalInventoryMatched,

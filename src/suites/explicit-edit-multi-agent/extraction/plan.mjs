@@ -78,8 +78,8 @@ export function prepareHeaderExtraction({ initial, headers, modules } = {}) {
   }
   requirePlan(Array.isArray(headers) && headers.length > 0, "Missing header provenance");
   requirePlan(
-    Array.isArray(modules) && modules.length > 0 && modules.length <= 10,
-    "An extraction wave requires between one and ten modules",
+    Array.isArray(modules) && modules.length > 0 && modules.length <= headers.length,
+    "Extraction requires a nonempty registered header subset",
   );
   const metadata = new Map();
   const guards = new Set();
@@ -212,10 +212,10 @@ export function prepareHeaderExtraction({ initial, headers, modules } = {}) {
  * Layout-only blank lines do not create failures. Literal, comment, splice and
  * inactive-source contents remain part of the comparison. No score is inferred.
  */
-export function gradeHeaderExtraction(plan, tree) {
+export function gradeExtraction(plan, tree) {
   requirePlan(
     record(plan) &&
-      plan.version === version &&
+      [version, "renderer-module-extraction-plan-v2"].includes(plan.version) &&
       record(plan.initial) &&
       record(plan.expected) &&
       typeof plan.expected["main.cpp"] === "string" &&
@@ -229,7 +229,7 @@ export function gradeHeaderExtraction(plan, tree) {
   const sameSource = (file) =>
     typeof candidate[file] === "string" &&
     withoutBlankLayoutLines(candidate[file]) === withoutBlankLayoutLines(plan.expected[file]);
-  const modules = plan.tasks.map(({ id, file }) => ({ id, file, targetMatched: sameSource(file) }));
+  const files = plan.tasks.map(({ id, file }) => ({ id, file, targetMatched: sameSource(file) }));
   const mainMatched = sameSource("main.cpp");
   const inventoryMatched =
     record(tree) &&
@@ -244,12 +244,19 @@ export function gradeHeaderExtraction(plan, tree) {
       mainMatched &&
       inventoryMatched &&
       unrelatedMatched &&
-      modules.every(({ targetMatched }) => targetMatched)
+      files.every(({ targetMatched }) => targetMatched)
         ? "pass"
         : "fail",
-    modules,
+    files,
     mainMatched,
     inventoryMatched,
     unrelatedMatched,
   };
+}
+
+/** Retain the explicitly header-only result shape for earlier diagnostic callers. */
+export function gradeHeaderExtraction(plan, tree) {
+  requirePlan(plan?.version === version, "Unsupported header extraction plan");
+  const { files, ...result } = gradeExtraction(plan, tree);
+  return { ...result, modules: files };
 }

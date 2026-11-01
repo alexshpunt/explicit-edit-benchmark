@@ -15,7 +15,11 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 /** Require an actual passed reference report bound to the exact clean runner. */
 export function validateExtractionProof(manifest, proof, report, sourceIdentity) {
-  assert.equal(proof.version, "renderer-module-extraction-proof-v1");
+  const paired = manifest.scope === "experimental-module-pairs";
+  assert.equal(
+    proof.version,
+    paired ? "renderer-module-extraction-proof-v2" : "renderer-module-extraction-proof-v1",
+  );
   assert.equal(proof.kind, "scripted-reference");
   assert.equal(proof.status, "pass");
   assert.equal(proof.planSha256, manifest.planSha256);
@@ -23,8 +27,39 @@ export function validateExtractionProof(manifest, proof, report, sourceIdentity)
   assert.deepEqual(proof.sourceIdentity, sourceIdentity);
   assert.equal(report.status, "complete");
   assert.equal(report.initial, manifest.initial);
-  assert.equal(report.participants.length, manifest.modules.length);
-  assert.equal(report.deliveries.length, manifest.modules.length);
+  if (paired) {
+    assert.equal(manifest.version, "renderer-module-extraction-v2");
+    assert.equal(report.version, "renderer-module-extraction-run-v2");
+    assert.equal(report.scope, manifest.scope);
+    assert.equal(proof.scope, manifest.scope);
+    assert.ok(
+      Number.isSafeInteger(manifest.agents) && manifest.agents >= 1 && manifest.agents <= 10,
+    );
+    assert.equal(report.agents, manifest.agents);
+    assert.equal(proof.agents, manifest.agents);
+    assert.deepEqual(report.files, manifest.files);
+    assert.deepEqual(proof.files, manifest.files);
+    assert.equal(report.participants.length, manifest.agents);
+    assert.equal(report.deliveries.length, manifest.files.length);
+    const byAgent = new Map(
+      report.participants.map((participant) => [participant.agent, participant]),
+    );
+    assert.equal(byAgent.size, manifest.agents);
+    const delivered = new Set();
+    for (const delivery of report.deliveries) {
+      assert.equal(delivery.status, "settled");
+      assert.equal(delivery.ids.length, 1);
+      const index = manifest.files.findIndex((file) => file.id === delivery.ids[0]);
+      assert.ok(index >= 0 && !delivered.has(delivery.ids[0]));
+      delivered.add(delivery.ids[0]);
+      assert.equal(delivery.agent, index % manifest.agents);
+      assert.ok(byAgent.has(delivery.agent));
+      assert.equal(delivery.session, byAgent.get(delivery.agent).session);
+    }
+  } else {
+    assert.equal(report.participants.length, manifest.modules.length);
+    assert.equal(report.deliveries.length, manifest.modules.length);
+  }
   assert.ok(report.participants.every(({ closed }) => closed));
   assert.equal(report.extraction.status, "pass");
   assert.equal(report.integration.buildPassed, true);
@@ -51,7 +86,13 @@ export async function verifyExtraction(prepared, outputPath, { signal } = {}) {
   assert.deepEqual(await restoringSourceIdentity(), sourceIdentity);
   const bytes = await readFile(path.join(output, "report.json"));
   const proof = {
-    version: "renderer-module-extraction-proof-v1",
+    version:
+      manifest.scope === "experimental-module-pairs"
+        ? "renderer-module-extraction-proof-v2"
+        : "renderer-module-extraction-proof-v1",
+    ...(manifest.scope === "experimental-module-pairs"
+      ? { scope: manifest.scope, agents: manifest.agents, files: manifest.files }
+      : {}),
     kind: "scripted-reference",
     status:
       report.extraction.status === "pass" &&
@@ -71,11 +112,12 @@ export async function verifyExtraction(prepared, outputPath, { signal } = {}) {
 }
 
 /** Start model inference only through explicit configuration and a verified case.
- * Every participant receives one ordinary whole-module prompt, inline or as one
- * complete read-only file. No expected tree or grading contract is mounted.
+ * Each participant receives its fixed queue as separate whole-file prompts,
+ * inline or in complete read-only assignment files. No expected tree or grading contract is mounted.
  */
 export async function runModelExtraction(prepared, outputPath, config, { proofPath, signal } = {}) {
   const { manifest, plan } = await loadExtraction(prepared);
+  assert.equal(manifest.scope, "experimental-module-pairs");
   assert.equal(typeof proofPath, "string");
   const proof = JSON.parse(await readFile(proofPath, "utf8"));
   const reportBytes = await readFile(
@@ -127,7 +169,7 @@ export function modelExtractionDrivers(outputPath, config) {
       const directory = path.join(output, "feedback", `session-${session}`);
       await mkdir(directory, { recursive: true, mode: 0o700 });
       await mkdir(path.join(output, "participants"), { recursive: true, mode: 0o700 });
-      feedback.set(session, directory);
+      feedback.set(session, { directory, deliveries: 0 });
       const state = path.join(output, "participants", `session-${session}`);
       states.add(state);
       return startPiParticipant(path.join(output, "workspace"), state, participantConfig, {
@@ -141,14 +183,18 @@ export function modelExtractionDrivers(outputPath, config) {
     },
     async execute(driver, task, { signal, session }) {
       const assignment = moduleExtractionPrompt(task);
-      await writeFile(path.join(feedback.get(session), "module.txt"), assignment, {
+      const record = feedback.get(session);
+      assert.ok(record);
+      const number = ++record.deliveries;
+      const file = number === 1 ? "module.txt" : `module-${number}.txt`;
+      await writeFile(path.join(record.directory, file), assignment, {
         flag: "wx",
         mode: 0o600,
       });
       const prompt =
         Buffer.byteLength(assignment) <= 4096
           ? assignment
-          : "Read /feedback/module.txt completely, including every source fragment. Complete that one whole-module assignment in the shared workspace and finish.";
+          : `Read /feedback/${file} completely, including every source fragment. Complete that one whole-file assignment in the shared workspace and finish.`;
       await admitProviderDelivery(recovery, { signal });
       return driver.execute(prompt, { completion: "turn", signal });
     },
