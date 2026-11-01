@@ -82,46 +82,16 @@ export async function runExtraction(
     report.deliveries = wave.deliveries;
     assert.ok(wave.records.every(({ closed }) => closed));
     signal?.throwIfAborted();
-    const candidate = await captureCandidate(workspace, path.join(output, "candidate"), {
-      signal,
-      includeAllFiles: true,
-    });
-    const entries = candidate.manifest.entries;
-    const completeTree = Object.fromEntries(
-      entries
-        .filter(({ type, path }) => type === "file" && path !== null)
-        .map(({ path, pathBytes }) => {
-          const bytes = candidate.contents.get(pathBytes);
-          const text = bytes.toString("utf8");
-          return [path, Buffer.from(text).equals(bytes) ? text : null];
-        }),
-    );
-    const expectedInventory = new Map();
-    for (const file of Object.keys(plan.expected)) {
-      expectedInventory.set(file, "file");
-      const parts = file.split("/");
-      for (let index = 1; index < parts.length; index++)
-        expectedInventory.set(parts.slice(0, index).join("/"), "directory");
-    }
-    const physicalInventoryMatched =
-      entries.length === expectedInventory.size &&
-      entries.every(({ path, type }) => expectedInventory.get(path) === type);
-    const extraction = (paired ? gradeExtraction : gradeHeaderExtraction)(plan, completeTree);
-    report.extraction = {
-      ...extraction,
-      inventoryMatched: extraction.inventoryMatched && physicalInventoryMatched,
-      invalidEntries: candidate.invalid,
-    };
-    if (candidate.invalid.length || !physicalInventoryMatched) report.extraction.status = "fail";
-    await assertCandidateUnchanged(workspace, candidate, { signal });
+    const state = await captureExtractionState(plan, workspace, output, { signal });
+    report.extraction = state.extraction;
     await save();
     report.integration = await measure(
-      candidate.source,
+      state.candidate.source,
       path.join(output, "integration"),
-      candidate.tree,
+      state.candidate.tree,
       { expectedPixels, signal, completeInventory: true },
     );
-    await assertCandidateUnchanged(workspace, candidate, { signal });
+    await assertCandidateUnchanged(workspace, state.candidate, { signal });
     report.status = "complete";
     return report;
   } catch (error) {
@@ -142,4 +112,44 @@ export async function runExtraction(
     releaseCandidateWorkspace(workspace);
     await save();
   }
+}
+
+/** Capture complete physical evidence after every participant has closed.
+ * The same preservation checks apply to original and correction boundaries.
+ */
+export async function captureExtractionState(plan, workspace, evidence, { signal } = {}) {
+  const candidate = await captureCandidate(workspace, path.join(evidence, "candidate"), {
+    signal,
+    includeAllFiles: true,
+  });
+  const entries = candidate.manifest.entries;
+  const completeTree = Object.fromEntries(
+    entries
+      .filter(({ type, path }) => type === "file" && path !== null)
+      .map(({ path, pathBytes }) => {
+        const bytes = candidate.contents.get(pathBytes);
+        const text = bytes.toString("utf8");
+        return [path, Buffer.from(text).equals(bytes) ? text : bytes];
+      }),
+  );
+  const expectedInventory = new Map();
+  for (const file of Object.keys(plan.expected)) {
+    expectedInventory.set(file, "file");
+    const parts = file.split("/");
+    for (let index = 1; index < parts.length; index++)
+      expectedInventory.set(parts.slice(0, index).join("/"), "directory");
+  }
+  const physicalInventoryMatched =
+    entries.length === expectedInventory.size &&
+    entries.every(({ path, type }) => expectedInventory.get(path) === type);
+  const paired = plan.version === "renderer-module-extraction-plan-v2";
+  const checked = (paired ? gradeExtraction : gradeHeaderExtraction)(plan, completeTree);
+  const extraction = {
+    ...checked,
+    inventoryMatched: checked.inventoryMatched && physicalInventoryMatched,
+    invalidEntries: candidate.invalid,
+  };
+  if (candidate.invalid.length || !physicalInventoryMatched) extraction.status = "fail";
+  await assertCandidateUnchanged(workspace, candidate, { signal });
+  return { candidate, completeTree, extraction };
 }

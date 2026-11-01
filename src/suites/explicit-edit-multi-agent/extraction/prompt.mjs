@@ -1,5 +1,39 @@
 import assert from "node:assert/strict";
 
+/** Recovery keeps the original public file goal, but starts from existing partial work. */
+export function moduleRecoveryPrompt(task, { assignmentsDirectory, initialDirectory } = {}) {
+  const shared = task.kind === "main-recovery";
+  const integration = task.kind === "integration-recovery";
+  return [
+    shared
+      ? "Repair shared main.cpp and project preservation after the whole-file extraction wave. Do not redo correctly completed destination files. Remove remaining owned payload, retain the residual program and all unassigned baseline files, and remove unintended inventory entries. Coordinate with the file owners."
+      : integration
+        ? task.prompt
+        : `Repair the complete extraction obligation for ${task.file}. Inspect both its existing destination and main.cpp before editing. Some or all assigned fragments may already have moved; do not duplicate or reinsert them. Correct the destination and finish removal/replacement in the shared source. The original public goal below describes the required result, not an instruction to blindly create an existing file again.`,
+    "This is one bounded recovery delivery, not a new original attempt. Preserve current identifiers, prototypes, inactive branches, comments, namespace context, file payload order and every vendor copy. Do not rename or unshuffle the program. Never replace the workspace with baseline input. Hold flock -x /workspace across every fresh read and write of shared main.cpp; /tmp is private to this participant.",
+    ...(assignmentsDirectory
+      ? [
+          "The following original public file assignments describe the extraction obligations. Read the relevant specifications in full as needed; they are not a private expected project tree:",
+          ...task.assignments.map(({ id, file }) => `${file}: ${assignmentsDirectory}/${id}.txt`),
+          `The original generated input is available read-only under ${initialDirectory}. Use it only to investigate preserved or damaged unassigned code; it is the original mixed input, not the required residual main.cpp.`,
+        ]
+      : [moduleExtractionPrompt(task)]),
+    `Candidate diagnostics:\n${JSON.stringify(task.recovery.diagnostics, null, 2)}`,
+    ...(integration
+      ? []
+      : [
+          "Finish this complete repair assignment without compiling or rendering. Controller verification follows after every participant in this wave has closed.",
+        ]),
+  ].join("\n\n");
+}
+
+function codeBlock(text) {
+  let length = 3;
+  for (const [run] of text.matchAll(/`+/g)) length = Math.max(length, run.length + 1);
+  const fence = "`".repeat(length);
+  return `${fence}cpp\n${text}${text.endsWith("\n") ? "" : "\n"}${fence}`;
+}
+
 function fileAssignment(task) {
   const parts = [];
   let cursor = 0;
@@ -13,16 +47,16 @@ function fileAssignment(task) {
   return [
     `Extract the complete current file into ${task.file}.`,
     "Move every assigned fragment below in its listed order. Locate complete current units in their stated namespace. Keep every identifier, prototype, definition, comment, literal and inactive branch unchanged.",
-    "Assemble the destination with the template below. Replace each [[fragment-id]] slot with that complete source fragment. Keep the template's includes, namespace shells, imports and conditional wrappers in their shown positions. Keep an activation include after its implementation macro.",
-    parts.join(""),
+    "Assemble the destination from the following fenced C++ template. Replace each [[fragment-id]] slot with that complete source fragment. Copy only the code inside the template fence; keep all instruction paragraphs outside the source file. Keep the template's includes, namespace shells, imports and conditional wrappers in their shown positions. Keep an activation include after its implementation macro.",
+    codeBlock(parts.join("")),
     task.replacement
       ? `Replace the first removed source fragment in main.cpp with:\n\n${task.replacement}`
       : "Remove the assigned source fragments from main.cpp without inserting another include.",
-    "Retain shared namespace shells, standard-library imports and include context in main.cpp where peer fragments still need them. Preserve every unassigned fragment. Coordinate shared writes and re-read current source before publishing your edit.",
+    "Retain shared namespace shells, standard-library imports and include context in main.cpp where peer fragments still need them. Preserve every unassigned fragment. Hold an exclusive flock on the shared /workspace directory while re-reading and updating main.cpp; use flock -x /workspace around the whole read-modify-write command. Keep the directory inode unchanged. Use this same shared lock for every participant; /tmp is private to each participant.",
     "Complete this one whole-file assignment and finish. Do not rename, reorder, clean up, compile or render. Final verification runs after every participant closes.",
     ...task.fragments.map(
       ({ id, text, scope }, index) =>
-        `Source fragment ${index + 1} (${id}), namespace ${scope || "(global)"}:\n\n${text}`,
+        `Source fragment ${index + 1} (${id}), namespace ${scope || "(global)"}:\n\n${codeBlock(text)}`,
     ),
   ].join("\n\n");
 }
@@ -42,10 +76,10 @@ export function moduleExtractionPrompt(task) {
     "Move only the complete owned fragments below. Keep every current identifier, declaration, definition, comment, literal and preprocessor condition unchanged. Preserve all intervening fragments owned by other modules, including nested guards.",
     `Assemble ${task.file} from these fragments in their listed order. Insert the following direct project includes immediately after #define ${task.guard}; retain existing standard-library includes and the complete guard and namespace scaffolding:\n\n${includes}`,
     replacement,
-    "Treat main.cpp as shared source. Coordinate shared writes and re-read current content before publishing an edit so that peer changes survive. Leave unrelated source and blank boundary layout alone. Do not rename, reorder or cosmetically clean up code.",
+    "Treat main.cpp as shared source. Hold an exclusive flock on the shared /workspace directory while re-reading and updating main.cpp; use flock -x /workspace around the whole read-modify-write command. Keep the directory inode unchanged. Use this same shared lock for every participant; /tmp is private to each participant. Preserve peer changes and leave unrelated source and blank boundary layout alone. Do not rename, reorder or cosmetically clean up code.",
     "Complete this one module assignment and finish. Do not compile or render; final verification runs after all participants close.",
     ...task.fragments.map(
-      ({ id, text }, index) => `Source fragment ${index + 1} (${id}):\n\n${text}`,
+      ({ id, text }, index) => `Source fragment ${index + 1} (${id}):\n\n${codeBlock(text)}`,
     ),
   ].join("\n\n");
 }

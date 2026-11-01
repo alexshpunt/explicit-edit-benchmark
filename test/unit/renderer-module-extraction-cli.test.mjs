@@ -88,36 +88,37 @@ test("the separate extraction CLI prepares the requested current-source module",
   }
 });
 
-test(
-  "the extraction CLI refuses model execution without explicit permission before reading configuration",
-  { skip: process.platform === "win32" },
-  async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "extraction-cli-"));
-    try {
-      const output = path.join(root, "run");
-      const config = path.join(root, "unopened-config");
-      assert.equal(spawnSync("mkfifo", [config]).status, 0);
-      const result = spawnSync(
-        process.execPath,
-        [
-          script.pathname,
-          "run",
-          path.join(root, "missing-case"),
-          output,
-          "--config",
-          config,
-          "--proof",
-          path.join(root, "missing-proof"),
-        ],
-        { encoding: "utf8", timeout: 3000 },
-      );
-      // A configuration read would block on the pipe until this watchdog kills it.
-      assert.equal(result.error, undefined);
-      assert.equal(result.signal, null);
-      assert.notEqual(result.status, 0);
-      assert.equal(existsSync(output), false);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  },
-);
+for (const command of ["run", "recover"])
+  test(
+    `the extraction CLI refuses ${command} without explicit permission before reading configuration`,
+    { skip: process.platform === "win32" },
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "extraction-cli-"));
+      try {
+        const output = path.join(root, "run");
+        const config = path.join(root, "unopened-config");
+        assert.equal(spawnSync("mkfifo", [config]).status, 0);
+        const result = spawnSync(
+          process.execPath,
+          [
+            script.pathname,
+            command,
+            path.join(root, "missing-case"),
+            output,
+            "--config",
+            config,
+            "--proof",
+            path.join(root, "missing-proof"),
+          ],
+          { encoding: "utf8", timeout: 3000 },
+        );
+        // A configuration read would block on the pipe until this watchdog kills it.
+        assert.equal(result.error, undefined);
+        assert.equal(result.signal, null);
+        assert.notEqual(result.status, 0);
+        assert.equal(existsSync(output), false);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );

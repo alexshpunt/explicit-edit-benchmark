@@ -12,6 +12,10 @@ import {
   writeTree,
 } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
 import { validateExtractionProof } from "../../src/suites/explicit-edit-multi-agent/extraction/case.mjs";
+import {
+  EXTRACTION_RECOVERY_POLICY,
+  extractionScore,
+} from "../../src/suites/explicit-edit-multi-agent/extraction/score.mjs";
 
 const source = {
   sourceCommit: "a".repeat(40),
@@ -87,25 +91,66 @@ test("paired proofs bind file receipts and participant count separately", () => 
   };
   const pairedProof = {
     ...proof,
-    version: "renderer-module-extraction-proof-v2",
+    version: "renderer-module-extraction-proof-v3",
     scope: pairedManifest.scope,
+    policy: EXTRACTION_RECOVERY_POLICY,
     agents: 1,
     files,
   };
+  const structure = {
+    version: "renderer-module-extraction-structure-v1",
+    status: "pass",
+    differenceIds: [],
+    files: files.map((file) => ({ ...file, targetMatched: true, sourceMatched: true })),
+    mainMatched: true,
+    inventoryMatched: true,
+    unrelatedMatched: true,
+    diagnostics: [],
+  };
+  const stages = [
+    { stage: "original", differenceIds: [], integration: report.integration, structure },
+  ];
+  const score = extractionScore({ totalFiles: files.length, stages });
   const pairedReport = {
     ...report,
-    version: "renderer-module-extraction-run-v2",
+    version: "renderer-module-extraction-run-v3",
     scope: pairedManifest.scope,
+    policy: EXTRACTION_RECOVERY_POLICY,
     agents: 1,
     files,
-    participants: [{ agent: 0, session: 0, closed: true }],
-    deliveries: files.map((file) => ({ ids: [file.id], agent: 0, session: 0, status: "settled" })),
+    structure,
+    stages,
+    score,
+    first: { ...stages[0], score },
+    passed: true,
+    waves: [{ stage: "original", agents: 1, ids: files.map(({ id }) => id), status: "complete" }],
+    participants: [{ agent: 0, session: 0, closed: true, stage: "original" }],
+    deliveries: files.map((file) => ({
+      ids: [file.id],
+      agent: 0,
+      session: 0,
+      status: "settled",
+      stage: "original",
+    })),
   };
   assert.doesNotThrow(() =>
     validateExtractionProof(pairedManifest, pairedProof, pairedReport, source),
   );
-  const old = { ...pairedProof, version: "renderer-module-extraction-proof-v1" };
-  assert.throws(() => validateExtractionProof(pairedManifest, old, pairedReport, source));
+  for (const version of [
+    "renderer-module-extraction-proof-v1",
+    "renderer-module-extraction-proof-v2",
+  ])
+    assert.throws(() =>
+      validateExtractionProof(pairedManifest, { ...pairedProof, version }, pairedReport, source),
+    );
+  assert.throws(() =>
+    validateExtractionProof(
+      pairedManifest,
+      { ...pairedProof, policy: { ...EXTRACTION_RECOVERY_POLICY, buildAgents: 2 } },
+      pairedReport,
+      source,
+    ),
+  );
   for (const mutate of [
     (value) => {
       value.agents = 2;
@@ -121,6 +166,23 @@ test("paired proofs bind file receipts and participant count separately", () => 
     },
     (value) => {
       value.files = value.files.slice(0, -1);
+    },
+    (value) => {
+      value.score.score = 99;
+    },
+    (value) => {
+      value.policy = { ...EXTRACTION_RECOVERY_POLICY, imageAttempts: 2 };
+    },
+    (value) => {
+      value.waves.push({
+        stage: "build-correction",
+        agents: 1,
+        ids: ["build-correction"],
+        status: "complete",
+      });
+    },
+    (value) => {
+      value.stages[0].differenceIds = [files[0].id];
     },
   ]) {
     const changed = structuredClone(pairedReport);
