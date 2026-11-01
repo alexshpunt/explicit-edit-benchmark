@@ -43,11 +43,20 @@ export async function buildCoherentCandidate(
  * or cancellation into model editing outcomes. Failure objects and their compiler
  * causes are private diagnostic evidence, not safe standalone result payloads.
  */
-export async function measureCoherentCandidate(
+export async function measureCoherentCandidate(source, evidence, tree, options = {}) {
+  return measureCandidate(source, evidence, tree, { ...options, renderPasses: 2 });
+}
+
+/** Compile once and render the two scenes in one process for extraction-only cases. */
+export async function measureExtractionCandidate(source, evidence, tree, options = {}) {
+  return measureCandidate(source, evidence, tree, { ...options, renderPasses: 1 });
+}
+
+async function measureCandidate(
   source,
   evidence,
   tree,
-  { expectedPixels, signal, completeInventory = false } = {},
+  { expectedPixels, signal, completeInventory = false, renderPasses },
 ) {
   assert.ok(
     Array.isArray(expectedPixels) &&
@@ -63,6 +72,7 @@ export async function measureCoherentCandidate(
     const pixels = await buildAndRender(source, evidence, tree, {
       signal,
       completeInventory,
+      renderPasses,
       onBuild: () => {
         buildPassed = true;
       },
@@ -84,7 +94,12 @@ export async function measureCoherentCandidate(
   }
 }
 
-async function buildAndRender(source, evidence, tree, { signal, onBuild, completeInventory }) {
+async function buildAndRender(
+  source,
+  evidence,
+  tree,
+  { signal, onBuild, completeInventory, renderPasses = 2 },
+) {
   assert.equal(typeof completeInventory, "boolean", "Invalid physical source inventory option");
   await mkdir(evidence);
   const build = path.join(evidence, "build");
@@ -187,7 +202,7 @@ async function buildAndRender(source, evidence, tree, { signal, onBuild, complet
   await command([...base(), "--bind", build, "/build", ...compile], "build", "compile.log", 300000);
   onBuild?.();
   const passes = [];
-  for (const pass of ["scene", "repeat"]) {
+  for (const pass of renderPasses === 1 ? ["scene"] : ["scene", "repeat"]) {
     const render = path.join(evidence, pass);
     await mkdir(render);
     await command(
@@ -238,7 +253,7 @@ async function buildAndRender(source, evidence, tree, { signal, onBuild, complet
     }
     passes.push(pixels);
   }
-  if (JSON.stringify(passes[0]) !== JSON.stringify(passes[1]))
+  if (renderPasses === 2 && JSON.stringify(passes[0]) !== JSON.stringify(passes[1]))
     throw new GradeFailure("behavior", "Repeated render differs");
   signal?.throwIfAborted();
   return passes[0];
