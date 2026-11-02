@@ -110,6 +110,17 @@ test("adjacent named namespace blocks represent the same structural scope", asyn
     await text("inline namespace N { int x; } namespace N { int y; }"),
   );
 });
+test("adjacent namespaces normalize when their valid contents have parser recovery nodes", async () => {
+  const joined = "namespace N { void f(const V& x = {0}); int y; }";
+  const split = "namespace N { void f(const V& x = {0}); } namespace N { int y; }";
+  assert.ok((await canonicalizeCpp(joined)).errors.length > 0);
+  assert.notEqual(await text(joined), await text(split.replace("int y", "int z")));
+  assert.notEqual(
+    await text(joined),
+    await text(split.replace("} namespace N", "}\n#define X 1\nnamespace N")),
+  );
+  assert.equal(await text(joined), await text(split));
+});
 test("namespace normalization does not reorder definitions across using directives", async () => {
   const before =
     "namespace N { int z(){return value;} } namespace N { using namespace A; int a(){return value;} }";

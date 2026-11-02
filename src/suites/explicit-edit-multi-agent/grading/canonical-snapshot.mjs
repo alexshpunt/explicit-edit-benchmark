@@ -6,7 +6,7 @@ import { cppTokens } from "../cpp/cpp-tokens.mjs";
 import { decodeSourceBytes, encodeSourceBytes } from "../cpp/source-bytes.mjs";
 
 const require = createRequire(import.meta.url);
-const version = "renderer-canonical-snapshot-v3";
+const version = "renderer-canonical-snapshot-v4";
 const cppExtension = /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|ipp|inl|tcc|inc)$/i;
 const literals = new Set([
   "string_literal",
@@ -34,7 +34,7 @@ async function language() {
           version: "0.23.4",
           sha256: createHash("sha256").update(grammarBytes).digest("hex"),
         },
-        serialization: "ordered-cpp-source-v5",
+        serialization: "ordered-cpp-source-v6",
         macroLayout: "project-definitions-and-arguments-token-gaps-v1",
       },
     };
@@ -609,10 +609,20 @@ function sourceProjection(root, macros) {
 function coalesceNamespaceScopes(source, root) {
   const removals = [];
   const plainNamespace = (node) => {
-    if (node.type !== "namespace_definition" || node.hasError) return null;
+    if (node.type !== "namespace_definition") return null;
     const name = node.childForFieldName("name");
     const body = node.childForFieldName("body");
-    if (!name || !body || node.children.length !== 3 || node.children[0].type !== "namespace")
+    if (
+      !name ||
+      name.hasError ||
+      name.isMissing ||
+      !body ||
+      node.children.length !== 3 ||
+      node.children[0].type !== "namespace" ||
+      body.firstChild?.type !== "{" ||
+      body.lastChild?.type !== "}" ||
+      body.lastChild.isMissing
+    )
       return null;
     return { name: name.text, body };
   };
