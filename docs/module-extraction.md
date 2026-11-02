@@ -61,7 +61,20 @@ case, and verify the chosen input with the language server and scripted editors.
 
 ## Agent assignments
 
-Each agent receives prose describing its destination file and a sorted inventory of its entities:
+Fresh version 5 cases provide explicit file obligations alongside the public symbol inventories.
+They describe preprocessing barriers, conditional membership, copied imports, vendor phases,
+source removal and replacement placement. They also explain which rearrangements structural
+comparison accepts and require preservation of compiler bindings, which structural comparison alone
+does not prove. Unsupported or unresolved source ambiguity fails preparation rather than being
+assigned by guesswork.
+
+When ownership or a macro definition is ambiguous, assignments include exact source anchors and
+snapshot line numbers. Those coordinates are hints, not edit positions. Participants must re-find
+and verify anchors under the shared lock and report unresolved ambiguity rather than guessing.
+The same requirements and selected anchors are available during recovery. A scripted reference
+uses private ownership data; passing it does not by itself prove that a model can solve the task.
+
+The historical version 4 assignment format works as follows. Each agent receives prose describing its destination file and a sorted inventory of its entities:
 namespace, kind and exact signature. Agent-facing assignments and recovery messages do not contain
 serialized structured data. Exact `using` declarations, repeated
 occurrence counts and destination dependencies are included. Shared `using`
@@ -77,13 +90,14 @@ their public signatures. Report unexpected candidate macro names, includes and
 files without copying their contents. Preserve occurrence counts and public member
 declarations when distinguishing vendor entities. Unsupported or ambiguous syntax
 may limit these details; do not infer a missing entity from an incomplete parse.
-Keep reference bodies, source locations and neighbouring code private.
+Diagnostic feedback does not disclose private reference bodies or diagnostic locations.
+The version 5 assignment files may separately provide exact original-source context
+and snapshot coordinates where needed to identify ambiguous ownership.
 
-Preparation rejects unsupported syntax and indistinguishable definitions rather
-than issuing an incomplete inventory. The scripted reference retains private
-ownership data for execution and verification; it is not mounted for model
-participants. A passed scripted reference establishes the checked extraction,
-not that an agent can independently solve it from the inventory.
+Preparation rejects unsupported syntax and ambiguities it cannot resolve. The scripted
+reference retains private ownership data for execution and verification; it is not
+mounted for model participants. A passed scripted reference establishes the checked
+extraction, not that an agent can independently solve it from the inventory.
 
 ## Model-free reference
 
@@ -101,10 +115,10 @@ it does not modify its input preparation or journal. `verify` uses isolated
 scripted editors, then checks structure, compilation and both reference scenes.
 These editors verify the machinery, not a model's extraction ability.
 
-Fresh paired artifacts use case version 4, plan version 3 and proof version 6.
-Earlier artifacts remain loadable and retain their original reconstruction and
-proof rules. Model execution requires a fresh case; old assignments exposed
-source fragments and must not be delivered under the new contract. Historical
+Fresh paired artifacts use case version 5, plan version 3 and proof version 7,
+with the `explicit-inventory-v2` assignment contract. Earlier artifacts remain
+loadable and retain their original reconstruction and proof rules, but their
+incomplete assignment contracts cannot authorize model execution. Historical
 inputs, candidates and reports must not be rewritten.
 
 ## Recovery and Score
@@ -114,6 +128,13 @@ remain live through that barrier. A failed file may receive one structural
 repair in its original owner's context. Independent repairs can run together;
 overlapping work is serialized and refreshed. Build and image correction each
 retain their separate bounded fresh-context budget.
+
+The model runner proceeds from the original barrier into structural recovery and
+then integration recovery without an operator approval pause. Saved candidates
+and reports can be inspected afterward, but a closed run cannot resume the
+original participants' contexts. An observation that requires inspection before
+each model round needs a live barrier control; the current runner does not
+provide one.
 
 The canonical structural credit and build/image factors are unchanged. Header
 protection is part of the existing file-transfer check. A matching render alone

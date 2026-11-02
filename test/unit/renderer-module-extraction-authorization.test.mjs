@@ -63,6 +63,12 @@ test("a saved closed run is refused before reading prepared source or authorizin
     { code: "EXTRACTION_LIVE_CONTEXT_REQUIRED" },
   );
 });
+test("the model entry rejects a missing case without creating output", async () => {
+  await assert.rejects(runModelExtraction("missing-case", "unused-output", {}), {
+    code: "ENOENT",
+  });
+  assert.equal(existsSync("unused-output"), false);
+});
 test("only a passed reference with the same clean source and exact plan authorizes model execution", () => {
   assert.doesNotThrow(() => validateExtractionProof(manifest, proof, report, source));
   for (const mutation of [
@@ -213,6 +219,29 @@ test("paired proofs bind file receipts and participant count separately", () => 
     ),
   );
   assert.throws(() => validateExtractionProof(freshManifest, symbolProof, freshReport, source));
+  const explicitManifest = {
+    ...symbolManifest,
+    version: "renderer-module-extraction-v5",
+    assignmentContract: "explicit-inventory-v2",
+  };
+  const explicitProof = {
+    ...symbolProof,
+    version: "renderer-module-extraction-proof-v7",
+    assignmentContract: "explicit-inventory-v2",
+  };
+  assert.doesNotThrow(() =>
+    validateExtractionProof(explicitManifest, explicitProof, freshReport, source),
+  );
+  assert.throws(() => validateExtractionProof(explicitManifest, symbolProof, freshReport, source));
+  assert.throws(() => validateExtractionProof(symbolManifest, explicitProof, freshReport, source));
+  assert.throws(() =>
+    validateExtractionProof(
+      explicitManifest,
+      { ...explicitProof, assignmentContract: "symbol-inventory-v1" },
+      freshReport,
+      source,
+    ),
+  );
   for (const [candidate, reference, receipt] of [
     [freshManifest, pairedProof, freshReport],
     [pairedManifest, freshProof, pairedReport],
@@ -293,7 +322,7 @@ test("paired proofs bind file receipts and participant count separately", () => 
 });
 
 test(
-  "the model entry refuses a legacy header-only case before reading its proof",
+  "the model entry rejects a legacy case before reading its proof or creating output",
   { skip: process.platform === "win32" },
   async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "extraction-scope-"));
@@ -334,6 +363,7 @@ test(
       assert.equal(result.error, undefined);
       assert.equal(result.signal, null);
       assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /EXTRACTION_CONTRACT_INCOMPLETE/);
       assert.equal(existsSync(output), false);
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -7,7 +7,8 @@ import { prepareHeaderExtraction } from "./plan.mjs";
 
 const version = "renderer-module-extraction-v1";
 const scope = "experimental-project-headers";
-const pairedVersion = "renderer-module-extraction-v4";
+const pairedVersion = "renderer-module-extraction-v5";
+const symbolPairedVersion = "renderer-module-extraction-v4";
 const previousPairedVersion = "renderer-module-extraction-v3";
 const legacyPairedVersion = "renderer-module-extraction-v2";
 const pairedScope = "experimental-module-pairs";
@@ -81,8 +82,10 @@ export async function prepareExtraction(
     });
   } else plan = { ...prepareHeaderExtraction({ initial, headers, modules }), headers };
   if (paired) {
-    const { publicSymbolAssignments } = await import("./public-assignments.mjs");
-    await publicSymbolAssignments(plan);
+    const { publicExplicitAssignments } = await import("./public-assignments.mjs");
+    const assignments = await publicExplicitAssignments(plan);
+    assert.ok(assignments instanceof Map && assignments.size === plan.tasks.length);
+    for (const task of plan.tasks) assert.ok(Array.isArray(assignments.get(task.id)?.entities));
   }
   const planBytes = JSON.stringify(plan) + "\n";
   const manifest = {
@@ -94,7 +97,7 @@ export async function prepareExtraction(
     ...(paired
       ? {
           headerProtection: plan.headerProtection,
-          assignmentContract: "symbol-inventory-v1",
+          assignmentContract: "explicit-inventory-v2",
           agents: plan.agents,
           files: plan.tasks.map(({ id, file }) => ({ id, file })),
         }
@@ -125,12 +128,14 @@ export async function loadExtraction(preparedPath) {
   const prepared = path.resolve(preparedPath);
   const manifest = JSON.parse(await readFile(path.join(prepared, "manifest.json"), "utf8"));
   assert.ok(record(manifest));
-  const symbolOnly = manifest.version === pairedVersion;
-  const fresh = symbolOnly || manifest.version === previousPairedVersion;
+  const explicit = manifest.version === pairedVersion;
+  const symbolOnly = manifest.version === symbolPairedVersion;
+  const fresh = explicit || symbolOnly || manifest.version === previousPairedVersion;
   const paired = fresh || manifest.version === legacyPairedVersion;
   assert.ok(paired || manifest.version === version);
   if (fresh) assert.equal(manifest.headerProtection, "pragma-once");
-  if (symbolOnly) assert.equal(manifest.assignmentContract, "symbol-inventory-v1");
+  if (explicit) assert.equal(manifest.assignmentContract, "explicit-inventory-v2");
+  else if (symbolOnly) assert.equal(manifest.assignmentContract, "symbol-inventory-v1");
   else assert.equal(manifest.assignmentContract, undefined);
   assert.equal(manifest.scope, paired ? pairedScope : scope);
   assert.ok(sha256(manifest.initial) && sha256(manifest.expected) && sha256(manifest.planSha256));
@@ -179,8 +184,15 @@ export async function loadExtraction(preparedPath) {
   }
   assert.equal(plan.initialIdentity, manifest.initial);
   assert.equal(treeIdentity(plan.expected), manifest.expected);
-  const publicAssignments = symbolOnly
-    ? await (await import("./public-assignments.mjs")).publicSymbolAssignments(plan)
-    : undefined;
-  return { manifest, plan, ...(symbolOnly ? { publicAssignments } : {}) };
+  const publicAssignments = explicit
+    ? await (await import("./public-assignments.mjs")).publicExplicitAssignments(plan)
+    : symbolOnly
+      ? await (await import("./public-assignments.mjs")).publicSymbolAssignments(plan)
+      : undefined;
+  if (explicit) {
+    assert.ok(publicAssignments instanceof Map && publicAssignments.size === plan.tasks.length);
+    for (const task of plan.tasks)
+      assert.ok(Array.isArray(publicAssignments.get(task.id)?.entities));
+  }
+  return { manifest, plan, ...(publicAssignments ? { publicAssignments } : {}) };
 }

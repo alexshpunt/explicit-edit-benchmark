@@ -152,6 +152,9 @@ test("canonical C++ sorts method placement but preserves member layout and acces
     "struct A { int a(){return 2;} int x; int y; int z(){return 1;} private: int p(){return 3;} };";
   assert.equal(await text(first), await text(reordered));
   assert.notEqual(await text(first), await text(first.replace("int x; int y;", "int y; int x;")));
+  const changedFieldSlot =
+    "struct A { int x; int z(){return 1;} int y; int a(){return 2;} private: int p(){return 3;} };";
+  assert.notEqual(await text(first), await text(changedFieldSlot));
   assert.notEqual(await text(first), await text(first.replace("private:", "public:")));
   const privateMethod = "struct A { int a(){return 1;} private: int z(){return 2;} };";
   const switched = "struct A { int z(){return 2;} private: int a(){return 1;} };";

@@ -14,6 +14,7 @@ import {
   moduleRecoveryPrompt,
   moduleSymbolPrompt,
   moduleSymbolRecoveryPrompt,
+  moduleExplicitPrompt,
 } from "./prompt.mjs";
 import { writeTree } from "../generation/generator.mjs";
 import { runExtractionRecovery } from "./recovery.mjs";
@@ -24,11 +25,13 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const proofVersion = (manifest) =>
   manifest.scope !== "experimental-module-pairs"
     ? "renderer-module-extraction-proof-v1"
-    : manifest.version === "renderer-module-extraction-v4"
-      ? "renderer-module-extraction-proof-v6"
-      : manifest.version === "renderer-module-extraction-v3"
-        ? "renderer-module-extraction-proof-v5"
-        : "renderer-module-extraction-proof-v4";
+    : manifest.version === "renderer-module-extraction-v5"
+      ? "renderer-module-extraction-proof-v7"
+      : manifest.version === "renderer-module-extraction-v4"
+        ? "renderer-module-extraction-proof-v6"
+        : manifest.version === "renderer-module-extraction-v3"
+          ? "renderer-module-extraction-proof-v5"
+          : "renderer-module-extraction-proof-v4";
 
 /** Require an actual passed reference report bound to the exact clean runner. */
 export function validateExtractionProof(manifest, proof, report, sourceIdentity) {
@@ -47,10 +50,15 @@ export function validateExtractionProof(manifest, proof, report, sourceIdentity)
         "renderer-module-extraction-v2",
         "renderer-module-extraction-v3",
         "renderer-module-extraction-v4",
+        "renderer-module-extraction-v5",
       ].includes(manifest.version),
     );
     if (
-      ["renderer-module-extraction-v3", "renderer-module-extraction-v4"].includes(manifest.version)
+      [
+        "renderer-module-extraction-v3",
+        "renderer-module-extraction-v4",
+        "renderer-module-extraction-v5",
+      ].includes(manifest.version)
     ) {
       assert.equal(manifest.headerProtection, "pragma-once");
       assert.equal(proof.headerProtection, manifest.headerProtection);
@@ -58,6 +66,10 @@ export function validateExtractionProof(manifest, proof, report, sourceIdentity)
     }
     if (manifest.version === "renderer-module-extraction-v4") {
       assert.equal(manifest.assignmentContract, "symbol-inventory-v1");
+      assert.equal(proof.assignmentContract, manifest.assignmentContract);
+    }
+    if (manifest.version === "renderer-module-extraction-v5") {
+      assert.equal(manifest.assignmentContract, "explicit-inventory-v2");
       assert.equal(proof.assignmentContract, manifest.assignmentContract);
     }
     assert.equal(report.version, "renderer-module-extraction-run-v4");
@@ -191,6 +203,22 @@ export async function verifyExtraction(prepared, outputPath, { signal } = {}) {
   return proof;
 }
 
+// Historical symbol inventories do not identify every verifier-enforced obligation.
+// Permit model execution only with the explicit versioned contract.
+function requireCompletePublicContract(manifest) {
+  if (
+    manifest.version === "renderer-module-extraction-v5" &&
+    manifest.assignmentContract === "explicit-inventory-v2"
+  )
+    return;
+  throw Object.assign(
+    new Error(
+      "Model extraction requires a fresh explicit assignment contract; legacy inventories are incomplete",
+    ),
+    { code: "EXTRACTION_CONTRACT_INCOMPLETE" },
+  );
+}
+
 /** Start model inference only through explicit configuration and a verified case.
  * Each participant receives its fixed queue as separate whole-file prompts,
  * inline or in complete read-only assignment files. No expected tree or grading contract is mounted.
@@ -209,11 +237,12 @@ export async function runModelExtraction(
       { code: "EXTRACTION_LIVE_CONTEXT_REQUIRED" },
     );
   const { manifest, plan, publicAssignments } = await loadExtraction(prepared);
+  requireCompletePublicContract(manifest);
   assert.equal(manifest.scope, "experimental-module-pairs");
   assert.equal(
     manifest.version,
-    "renderer-module-extraction-v4",
-    "Prepare a fresh symbol-only case before model execution",
+    "renderer-module-extraction-v5",
+    "Prepare a fresh explicit-contract case before model execution",
   );
   assert.ok(publicAssignments instanceof Map);
   assert.equal(typeof proofPath, "string");
@@ -230,7 +259,9 @@ export async function runModelExtraction(
     const result = await runExtractionRecovery(plan, output, {
       ...drivers,
       signal,
-      publicAssignments,
+      publicAssignments: new Map(
+        [...publicAssignments].map(([id, assignment]) => [id, assignment.entities]),
+      ),
       expectedPixels: manifest.pixels,
     });
     assert.deepEqual(await restoringSourceIdentity(), sourceIdentity);
@@ -304,7 +335,7 @@ export function modelExtractionDrivers(outputPath, config, { workspace, publicAs
     if (!symbolOnly) return moduleExtractionPrompt(task);
     const spec = publicAssignments.get(task.id);
     assert.ok(spec, "Missing public symbol assignment");
-    return moduleSymbolPrompt(task, spec);
+    return Array.isArray(spec) ? moduleSymbolPrompt(task, spec) : moduleExplicitPrompt(task, spec);
   };
   delete participantConfig.cppCorrectionCommand;
   const feedback = new Map();

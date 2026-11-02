@@ -194,6 +194,34 @@ for (const mode of ["parallel", "serial", "skip", "exhausted", "regression", "sh
     },
   );
 
+test("owner recovery accepts versioned public assignment objects", async () => {
+  const f = await fixture("serial");
+  f.options.publicAssignments = new Map(
+    f.plan.tasks.map((task, index) => [
+      task.id,
+      {
+        entities: [
+          {
+            scope: "",
+            kind: "function-definition",
+            signature: `int ${["alpha", "beta", "gamma"][index]}()`,
+          },
+        ],
+        contract: {},
+        hints: [],
+      },
+    ]),
+  );
+  try {
+    const report = await runExtractionRecovery(f.plan, f.output, f.options);
+    assert.equal(report.passed, true);
+    assert.equal(f.repairs.length, 2);
+    assert.ok(f.repairs.every((task) => Array.isArray(task.recovery.publicFeedback)));
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
 test("physical-only damage is present in the first shared feedback without duplicating file penalties", async () => {
   for (const emptyDirectory of [false, true]) {
     const f = await fixture("skip");

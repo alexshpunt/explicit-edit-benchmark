@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { conditionalContractsProse } from "./conditional-contract.mjs";
+import { explicitExtractionProse } from "./explicit-prose.mjs";
+import { preambleContractProse } from "./preamble-contract.mjs";
+import { vendorActivationInstructions, vendorPhaseInstructions } from "./vendor-contract.mjs";
 
 /** Recovery keeps the original public file goal, but starts from existing partial work. */
 export function moduleRecoveryPrompt(task, { assignmentsDirectory, initialDirectory } = {}) {
@@ -99,6 +103,21 @@ export function moduleSymbolPrompt(task, entities) {
       : []),
     "Preserve the project and its build behavior. Hold an exclusive flock on /workspace across each shared-source read and write. Keep the directory inode unchanged; /tmp is private to this participant. Do not compile or render in this turn.",
     ...inventory,
+  ].join("\n\n");
+}
+
+/** Deliver explicit file obligations and only the disambiguation hints selected for this task. */
+export function moduleExplicitPrompt(task, { entities, contract, hints }) {
+  assert.ok(Array.isArray(entities) && Array.isArray(hints));
+  assert.ok(hints.every((hint) => typeof hint === "string"));
+  return [
+    moduleSymbolPrompt(task, entities),
+    explicitExtractionProse(task),
+    ...(contract.preamble ? [preambleContractProse(contract.preamble)] : []),
+    ...(contract.conditionals ? [conditionalContractsProse(contract.conditionals)] : []),
+    ...(contract.vendor ? [vendorPhaseInstructions(contract.vendor)] : []),
+    ...(contract.vendorActivation ? [vendorActivationInstructions(contract.vendorActivation)] : []),
+    ...hints,
   ].join("\n\n");
 }
 

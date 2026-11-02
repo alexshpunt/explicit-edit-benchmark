@@ -11,6 +11,7 @@ import {
 import { pairedExtractionFixture } from "../helpers/module-extraction-generation.mjs";
 import { restoreProjectGuards } from "../../src/suites/explicit-edit-multi-agent/generation/project-header-guards.mjs";
 import { preparePairedExtraction } from "../../src/suites/explicit-edit-multi-agent/extraction/paired-plan.mjs";
+import { runModelExtraction } from "../../src/suites/explicit-edit-multi-agent/extraction/case.mjs";
 import {
   prepareExtraction,
   loadExtraction,
@@ -116,6 +117,50 @@ test("legacy serialized paired cases retain guard-based reconstruction", async (
     await rm(root, { recursive: true, force: true });
   }
 });
+test("legacy symbol cases remain readable but cannot start a model", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "extraction-legacy-symbol-"));
+  try {
+    const plan = preparePairedExtraction({
+      ...pairedExtractionFixture(),
+      modules: ["frond_a"],
+      agents: 1,
+    });
+    const bytes = JSON.stringify(plan) + "\n";
+    const manifest = {
+      version: "renderer-module-extraction-v4",
+      scope: plan.scope,
+      initial: plan.initialIdentity,
+      expected: treeIdentity(plan.expected),
+      modules: plan.modules,
+      agents: plan.agents,
+      files: plan.tasks.map(({ id, file }) => ({ id, file })),
+      pixels: ["0".repeat(64), "1".repeat(64)],
+      headerProtection: "pragma-once",
+      assignmentContract: "symbol-inventory-v1",
+      planSha256: createHash("sha256").update(bytes).digest("hex"),
+      provenance: {
+        initial: plan.initialIdentity,
+        preparationInitial: plan.parentInitial,
+        workloadSha256: "2".repeat(64),
+        generationSha256: createHash("sha256")
+          .update(JSON.stringify(plan.generation))
+          .digest("hex"),
+      },
+    };
+    await writeFile(path.join(root, "plan.json"), bytes);
+    await writeFile(path.join(root, "manifest.json"), JSON.stringify(manifest));
+    const loaded = await loadExtraction(root);
+    assert.deepEqual(loaded.manifest, manifest);
+    assert.ok([...loaded.publicAssignments.values()].every(Array.isArray));
+    await assert.rejects(
+      runModelExtraction(root, path.join(root, "no-output"), {}, { proofPath: "missing" }),
+      { code: "EXTRACTION_CONTRACT_INCOMPLETE" },
+    );
+    await assert.rejects(readFile(path.join(root, "no-output", "execution.json")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 async function pairedInput(root) {
   const fixture = pairedExtractionFixture();
   const directory = path.join(root, "input"),
@@ -161,13 +206,22 @@ test("paired preparation seals generation ownership, file tasks and the selected
       generation: source.generation,
       agents: 1,
     });
-    assert.equal(manifest.version, "renderer-module-extraction-v4");
-    assert.equal(manifest.assignmentContract, "symbol-inventory-v1");
+    assert.equal(manifest.version, "renderer-module-extraction-v5");
+    assert.equal(manifest.assignmentContract, "explicit-inventory-v2");
     assert.equal(manifest.headerProtection, "pragma-once");
     assert.equal(manifest.scope, "experimental-module-pairs");
     assert.equal(manifest.agents, 1);
     const loaded = await loadExtraction(output);
     assert.deepEqual(loaded.manifest, manifest);
+    await assert.rejects(
+      runModelExtraction(
+        output,
+        path.join(root, "new-model-output"),
+        {},
+        { proofPath: "missing-proof" },
+      ),
+      { code: "ENOENT" },
+    );
     assert.deepEqual(
       restoreProjectGuards(loaded.plan.initial, loaded.plan.generation.manifest.operations.at(-1)),
       source.fixture.initial,
@@ -182,6 +236,25 @@ test("paired preparation seals generation ownership, file tasks and the selected
       source.fixture.generation.manifest.operations,
     );
     assert.equal(manifest.provenance.preparationInitial, source.fixture.generation.manifest.final);
+    const legacy = {
+      ...manifest,
+      version: "renderer-module-extraction-v4",
+      assignmentContract: "symbol-inventory-v1",
+    };
+    await writeFile(path.join(output, "manifest.json"), JSON.stringify(legacy));
+    const old = await loadExtraction(output);
+    assert.ok(old.publicAssignments instanceof Map);
+    assert.ok([...old.publicAssignments.values()].every(Array.isArray));
+    await assert.rejects(
+      runModelExtraction(
+        output,
+        path.join(root, "model-output"),
+        {},
+        { proofPath: "missing-proof" },
+      ),
+      { code: "EXTRACTION_CONTRACT_INCOMPLETE" },
+    );
+    await writeFile(path.join(output, "manifest.json"), JSON.stringify(manifest));
     await writeFile(path.join(output, "manifest.json"), JSON.stringify({ ...manifest, agents: 2 }));
     await assert.rejects(loadExtraction(output));
   } finally {

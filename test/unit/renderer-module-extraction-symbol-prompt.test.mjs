@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   moduleSymbolPrompt,
   moduleSymbolRecoveryPrompt,
+  moduleExplicitPrompt,
 } from "../../src/suites/explicit-edit-multi-agent/extraction/prompt.mjs";
 
 test("symbol assignment exposes public declarations but never private plan fields", () => {
@@ -32,6 +33,26 @@ test("symbol assignment exposes public declarations but never private plan field
   ])
     assert.ok(prompt.includes(value));
   for (const value of ["PRIVATE_BODY_829", "PRIVATE_TEMPLATE_829", "PRIVATE_POSITION_829", "913"])
+    assert.ok(!prompt.includes(value));
+});
+
+test("explicit assignment delivers required inventories and selected ambiguity hints without other private fields", () => {
+  const task = {
+    file: "shape.h",
+    kind: "header",
+    replacement: '#include "shape.h"\n',
+    fragments: [{ text: "PRIVATE_BODY_829" }],
+    destination: "PRIVATE_TEMPLATE_829",
+  };
+  const spec = {
+    entities: [{ scope: "", kind: "function-definition", signature: "int shade()" }],
+    contract: { preamble: [{ kind: "include", name: "<vector>" }], conditionals: [] },
+    hints: ["Snapshot line 83: ANCHOR_123"],
+  };
+  const prompt = moduleExplicitPrompt(task, spec);
+  for (const value of ["int shade()", "<vector>", "83", "ANCHOR_123"])
+    assert.ok(prompt.includes(value));
+  for (const value of ["PRIVATE_BODY_829", "PRIVATE_TEMPLATE_829"])
     assert.ok(!prompt.includes(value));
 });
 

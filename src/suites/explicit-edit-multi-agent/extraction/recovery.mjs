@@ -328,7 +328,8 @@ export async function runExtractionRecovery(
         await Promise.all(
           ready.map(async ({ task }) => {
             if (task.kind === "main-recovery") return;
-            const entities = publicAssignments.get(task.id);
+            const assignment = publicAssignments.get(task.id);
+            const entities = Array.isArray(assignment) ? assignment : assignment?.entities;
             assert.ok(Array.isArray(entities), "Missing public recovery assignment");
             const feedback = [];
             const actual = state.completeTree[task.file];

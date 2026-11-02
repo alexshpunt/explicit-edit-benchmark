@@ -91,7 +91,7 @@ function maskBracedDefaults(parser, source) {
 }
 
 /** Derive public identifiers from private ownership fragments. Never return ranges or bodies. */
-export async function symbolSpecifications(task) {
+export async function symbolSpecifications(task, { allowDuplicates = false } = {}) {
   assert.ok(task && Array.isArray(task.fragments));
   const cpp = await language();
   const parser = new Parser();
@@ -272,7 +272,8 @@ export async function symbolSpecifications(task) {
     (a, b) =>
       compare(a.scope, b.scope) || compare(a.kind, b.kind) || compare(a.signature, b.signature),
   );
-  for (let i = 1; i < result.length; i++)
-    assert.notDeepEqual(result[i], result[i - 1], "Indistinguishable owned C++ entities");
+  if (!allowDuplicates)
+    for (let i = 1; i < result.length; i++)
+      assert.notDeepEqual(result[i], result[i - 1], "Indistinguishable owned C++ entities");
   return result;
 }

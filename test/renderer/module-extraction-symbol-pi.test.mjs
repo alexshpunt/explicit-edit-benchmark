@@ -6,6 +6,70 @@ import { modelExtractionDrivers } from "../../src/suites/explicit-edit-multi-age
 import { providerFixture } from "./provider-fixture.mjs";
 
 const runtime = process.env.RENDERER_PI_RUNTIME;
+
+test(
+  "real participant receives the selected anchor and file obligations again in recovery",
+  { skip: process.platform !== "linux" || !runtime, timeout: 60000 },
+  async () => {
+    await mkdir(path.resolve(".tmp"), { recursive: true });
+    const root = await mkdtemp(path.resolve(".tmp/explicit-pi-"));
+    let provider, drivers, driver;
+    try {
+      const workspace = path.join(root, "workspace");
+      await mkdir(workspace);
+      await writeFile(path.join(workspace, "main.cpp"), "int first;\nint second;\n");
+      provider = await providerFixture(root, () => ({}));
+      const task = {
+        id: "task-1",
+        file: "shape.h",
+        kind: "header",
+        replacement: '#include "shape.h"\n',
+      };
+      const spec = {
+        entities: [{ scope: "", kind: "variable", signature: "int first" }],
+        contract: { preamble: [{ kind: "include", name: "<vector>" }], conditionals: [] },
+        hints: ["Snapshot line 2: EXACT_ANCHOR_518"],
+      };
+      const output = path.join(root, "out");
+      drivers = modelExtractionDrivers(output, provider.config, {
+        workspace,
+        publicAssignments: new Map([[task.id, spec]]),
+      });
+      driver = await drivers.createDriver(0, 0, {});
+      await drivers.execute(driver, task, { session: 0 });
+      await drivers.execute(
+        driver,
+        {
+          id: "repair",
+          kind: "main-recovery",
+          file: "main.cpp",
+          assignments: [task],
+          recovery: { diagnostics: [], publicFeedback: [] },
+        },
+        { session: 0 },
+      );
+      await driver.close();
+      await drivers.cleanup();
+      const original = await readFile(path.join(output, "feedback/session-0/module.txt"), "utf8");
+      const repair = await readFile(
+        path.join(output, "feedback/session-0/delivery-2/assignments/task-1.txt"),
+        "utf8",
+      );
+      for (const text of [original, repair])
+        for (const value of ["EXACT_ANCHOR_518", "<vector>", "int first"])
+          assert.ok(text.includes(value));
+      const delivered = JSON.stringify(provider.requests.map(({ messages }) => messages));
+      assert.ok(
+        delivered.includes("EXACT_ANCHOR_518") || delivered.includes("/feedback/module.txt"),
+      );
+    } finally {
+      if (driver && !driver.closed) await driver.close();
+      if (drivers) await drivers.cleanup();
+      if (provider) provider.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 test(
   "real participant receives only public symbol assignments during original and recovery deliveries",
   { skip: process.platform !== "linux" || !runtime, timeout: 60000 },

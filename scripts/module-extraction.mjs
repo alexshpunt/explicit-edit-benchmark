@@ -18,7 +18,9 @@ prepare and verify are model-free. verify uses isolated scripted participants,
 then structural assessment, compilation and one renderer process on build success.
 Score reuses the canonical structural credit and build/result factors. Recovery is
 bounded to one structural wave, one build agent/attempt and one image agent/attempt.
-run spends model credit and requires a matching clean-source reference proof.
+Model execution requires a fresh version 5 explicit-contract case and a matching
+clean-source reference proof. It spends model credit and requires explicit approval.
+Earlier assignment contracts cannot authorize model execution.
 After all original queues finish, structural recovery retains their live contexts.
 Overlapping repairs are serialized with refreshed checks; independent repairs may
 run together. Build and image corrections use fresh isolated contexts. Closed saved
