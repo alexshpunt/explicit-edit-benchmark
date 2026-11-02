@@ -230,6 +230,7 @@ export async function runModelExtraction(
     const result = await runExtractionRecovery(plan, output, {
       ...drivers,
       signal,
+      publicAssignments,
       expectedPixels: manifest.pixels,
     });
     assert.deepEqual(await restoringSourceIdentity(), sourceIdentity);

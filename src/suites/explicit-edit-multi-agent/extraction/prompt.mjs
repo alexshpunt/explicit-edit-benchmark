@@ -104,9 +104,12 @@ export function moduleSymbolPrompt(task, entities) {
 
 /** Keep diagnostic positions and source excerpts private in symbol-only cases. */
 export function moduleSymbolRecoveryPrompt(task, assignmentsDirectory) {
-  const scope = task.file
-    ? `Repair the extraction obligation for ${task.file}.`
-    : "Repair the reported project-preservation or integration failure.";
+  const scope =
+    task.kind === "main-recovery"
+      ? "Repair the reported shared project-preservation failures without changing unrelated work."
+      : task.file
+        ? `Repair the extraction obligation for ${task.file}.`
+        : "Repair the reported project-preservation or integration failure.";
   return [
     scope,
     "Inspect the current shared project and preserve unrelated changes. Do not assume assigned entities still occupy their original positions. Hold an exclusive flock on /workspace across each shared-source read and write.",
@@ -123,6 +126,44 @@ export function moduleSymbolRecoveryPrompt(task, assignmentsDirectory) {
             : "The destination fails verification.",
         ]
       : []),
+    ...(task.kind === "main-recovery"
+      ? (task.recovery?.diagnostics ?? [])
+          .filter(
+            ({ kind, file }) =>
+              kind === "extra-file" &&
+              typeof file === "string" &&
+              /^[A-Za-z0-9_./+-]+$/.test(file) &&
+              !file.startsWith("/") &&
+              !file.split("/").includes(".."),
+          )
+          .map(({ file }) => `The workspace contains an unexpected file: ${file}.`)
+      : []),
+    ...(task.recovery?.publicFeedback ?? []).map(
+      ({ status, entity, expectedCount, actualCount, source }) => {
+        if (status === "unavailable")
+          return "The destination could not be analyzed reliably; inspect it against the assignment.";
+        if (status === "condition-count")
+          return `The destination contains ${actualCount} ${entity.signature} directives; ${expectedCount} are required.`;
+        const scope = entity.scope ? `namespace ${entity.scope}` : "the global namespace";
+        const location = source ? `In main.cpp, in ${scope}` : `In ${scope}`;
+        if (status === "unlocated")
+          return `${location}, this ${entity.kind.replaceAll("-", " ")} could not be identified reliably in the destination. It might already be present; check before modifying:\n${entity.signature}`;
+        const issue =
+          status === "missing"
+            ? "has fewer occurrences than required"
+            : status === "extra"
+              ? "has extra occurrences"
+              : "differs from the required entity";
+        const counts =
+          expectedCount === undefined
+            ? ""
+            : `\nFound ${actualCount} occurrences; require ${expectedCount}.`;
+        const members = entity.members?.length
+          ? `\nIts members have these declarations: ${entity.members.join(" ")}`
+          : "";
+        return `${location}, this ${entity.kind.replaceAll("-", " ")} ${issue}:\n${entity.signature}${members}${counts}`;
+      },
+    ),
     ...(task.kind === "integration-recovery"
       ? [
           `Run the supplied ${task.recovery.stage === "build-correction" ? "build" : "image"} validation script from the project root, fix the failure, and run it again: bash ${task.recovery.stage === "build-correction" ? "/feedback/check-build.sh" : "/feedback/check-images.sh"}.`,

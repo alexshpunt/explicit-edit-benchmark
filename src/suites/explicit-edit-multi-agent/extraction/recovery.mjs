@@ -15,6 +15,7 @@ import { runExtractionWave } from "./wave.mjs";
 import { EXTRACTION_RECOVERY_POLICY, extractionScore } from "./score.mjs";
 import { recoveryResources } from "./recovery-resources.mjs";
 import { selectRecoveryBatch } from "./recovery-schedule.mjs";
+import { buildSymbolRecoveryFeedback } from "./symbol-feedback.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -77,6 +78,7 @@ export async function runExtractionRecovery(
     assess,
     usage,
     continuation,
+    publicAssignments,
   } = {},
 ) {
   if (continuation !== undefined)
@@ -322,6 +324,48 @@ export async function runExtractionRecovery(
       });
       await save();
       if (!ready.length) break;
+      if (publicAssignments) {
+        await Promise.all(
+          ready.map(async ({ task }) => {
+            if (task.kind === "main-recovery") return;
+            const entities = publicAssignments.get(task.id);
+            assert.ok(Array.isArray(entities), "Missing public recovery assignment");
+            const feedback = [];
+            const actual = state.completeTree[task.file];
+            if (
+              !task.recovery.verified?.targetMatched &&
+              (actual === undefined || typeof actual === "string")
+            )
+              feedback.push(
+                ...(await buildSymbolRecoveryFeedback({
+                  expected: plan.expected[task.file],
+                  actual: actual ?? "",
+                  entities,
+                  kind: task.kind,
+                })),
+              );
+            const main = state.completeTree["main.cpp"];
+            if (
+              !task.recovery.verified?.sourceMatched &&
+              typeof main === "string" &&
+              task.kind !== "vendor-header"
+            ) {
+              const sourceFeedback = await buildSymbolRecoveryFeedback({
+                expected: plan.expected["main.cpp"],
+                actual: main,
+                entities,
+                detectUnexpected: true,
+              });
+              feedback.push(
+                ...sourceFeedback
+                  .filter(({ status }) => status === "extra")
+                  .map((item) => ({ ...item, source: true })),
+              );
+            }
+            task.recovery.publicFeedback = feedback;
+          }),
+        );
+      }
       await assertCandidateUnchanged(workspace, state.candidate, { signal: activeSignal });
       releaseCandidateWorkspace(workspace);
       const results = await Promise.allSettled(

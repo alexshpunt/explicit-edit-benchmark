@@ -71,6 +71,14 @@ positions, neighbouring anchors, function bodies or destination template. The
 same boundary applies to recovery messages and their assignment files; an agent
 may inspect the workspace and run the supplied integration validation script.
 
+During structural recovery, compare the latest frozen candidate with the private
+reference and report identifiable missing, extra or changed assigned entities by
+their public signatures. Report unexpected candidate macro names, includes and
+files without copying their contents. Preserve occurrence counts and public member
+declarations when distinguishing vendor entities. Unsupported or ambiguous syntax
+may limit these details; do not infer a missing entity from an incomplete parse.
+Keep reference bodies, source locations and neighbouring code private.
+
 Preparation rejects unsupported syntax and indistinguishable definitions rather
 than issuing an incomplete inventory. The scripted reference retains private
 ownership data for execution and verification; it is not mounted for model

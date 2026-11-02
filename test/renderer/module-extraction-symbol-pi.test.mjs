@@ -57,6 +57,7 @@ test(
           recovery: {
             diagnostics: [{ line: 913, column: 26, message: "PRIVATE_DIAGNOSTIC_829" }],
             verified: { sourceMatched: true, targetMatched: false },
+            publicFeedback: [{ status: "changed", entity: spec[0] }],
           },
         },
         { session: 0 },
@@ -91,6 +92,7 @@ test(
         );
       assert.ok(original.includes("int shade(float value)"));
       assert.ok(recoveryAssignment.includes("using scalar = float;"));
+      assert.ok(recovery.includes("int shade(float value)"));
       const userMessages = provider.requests.flatMap(({ messages }) =>
         messages
           .filter(({ role }) => role === "user")
