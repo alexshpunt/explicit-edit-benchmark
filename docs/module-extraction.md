@@ -134,8 +134,8 @@ snapshot path, report path and candidate hash. Inspect the snapshot and report,
 then enter `approve <inspection number> <candidate hash>` to continue. A changed
 workspace, wrong approval, closed input or cancellation stops the run. The runner keeps the
 participant contexts alive while waiting; a closed run cannot resume them.
-Approval controls delivery batches. It does not prevent retries inside a model
-delivery.
+Each approval permits one delivery. Provider errors stop the run for inspection;
+the model runner disables automatic retries.
 
 The canonical structural credit and build/image factors are unchanged. Header
 protection is part of the existing file-transfer check. A matching render alone

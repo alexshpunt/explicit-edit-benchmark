@@ -50,6 +50,7 @@ export async function startPiParticipant(
     feedbackDirectory,
     onRecovery,
     onProviderFailure,
+    disableAutoRetry = false,
   } = {},
 ) {
   signal?.throwIfAborted();
@@ -68,8 +69,11 @@ export async function startPiParticipant(
   await mkdir(state, { mode: 0o700 });
   await mkdir(path.join(state, "pi"));
   await mkdir(path.join(state, "home"));
-  if (profile.settings)
-    await writeFile(path.join(state, "pi/settings.json"), JSON.stringify(profile.settings) + "\n", {
+  const settings = disableAutoRetry
+    ? { ...profile.settings, retry: { enabled: false, provider: { maxRetries: 0 } } }
+    : profile.settings;
+  if (settings)
+    await writeFile(path.join(state, "pi/settings.json"), JSON.stringify(settings) + "\n", {
       mode: 0o600,
     });
   for (const [key, name] of [

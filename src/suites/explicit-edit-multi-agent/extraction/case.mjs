@@ -255,7 +255,10 @@ export async function runModelExtraction(
   validateExtractionProof(manifest, proof, JSON.parse(reportBytes), sourceIdentity);
   assert.equal(typeof inspect, "function", "Model extraction requires round inspection");
   const output = path.resolve(outputPath);
-  const drivers = recoveryModelDrivers(output, config, { publicAssignments });
+  const drivers = recoveryModelDrivers(output, config, {
+    publicAssignments,
+    stopOnProviderError: true,
+  });
   try {
     const result = await runExtractionRecovery(plan, output, {
       inspect,
@@ -289,7 +292,11 @@ export async function runModelExtraction(
 }
 
 /** Structural recovery stays with its original live context; integration owns fresh participants. */
-export function recoveryModelDrivers(outputPath, config, { publicAssignments } = {}) {
+export function recoveryModelDrivers(
+  outputPath,
+  config,
+  { publicAssignments, stopOnProviderError = false } = {},
+) {
   const output = path.resolve(outputPath);
   const stages = new Map();
   const owners = new WeakMap();
@@ -301,6 +308,7 @@ export function recoveryModelDrivers(outputPath, config, { publicAssignments } =
         modelExtractionDrivers(path.join(output, "stages", stage), config, {
           workspace: path.join(output, "workspace"),
           publicAssignments,
+          stopOnProviderError,
         }),
       );
     return stages.get(stage);
@@ -328,7 +336,11 @@ export function recoveryModelDrivers(outputPath, config, { publicAssignments } =
  * The public model entry point validates its proof before constructing drivers.
  * Call cleanup only after the pool has closed every owned participant.
  */
-export function modelExtractionDrivers(outputPath, config, { workspace, publicAssignments } = {}) {
+export function modelExtractionDrivers(
+  outputPath,
+  config,
+  { workspace, publicAssignments, stopOnProviderError = false } = {},
+) {
   const output = path.resolve(outputPath);
   const project = workspace ?? path.join(output, "workspace");
   const participantConfig = { ...config };
@@ -362,7 +374,12 @@ export function modelExtractionDrivers(outputPath, config, { workspace, publicAs
         feedbackDirectory: directory,
         eventsFile: state + "-events.jsonl",
         enforceProcessBoundary: true,
-        onRecovery: (request) => recovery.wait(request),
+        disableAutoRetry: stopOnProviderError,
+        onRecovery: stopOnProviderError
+          ? (request) => {
+              throw new Error(`Provider failure requires inspection: ${request.reason}`);
+            }
+          : (request) => recovery.wait(request),
         onProviderFailure: (error) => recovery.stop(error),
       });
       states.set(state, driver);
