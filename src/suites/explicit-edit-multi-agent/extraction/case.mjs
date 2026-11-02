@@ -257,7 +257,7 @@ export async function runModelExtraction(
   const output = path.resolve(outputPath);
   const drivers = recoveryModelDrivers(output, config, {
     publicAssignments,
-    stopOnProviderError: true,
+    boundedProviderRetries: true,
   });
   try {
     const result = await runExtractionRecovery(plan, output, {
@@ -295,7 +295,7 @@ export async function runModelExtraction(
 export function recoveryModelDrivers(
   outputPath,
   config,
-  { publicAssignments, stopOnProviderError = false } = {},
+  { publicAssignments, boundedProviderRetries = false } = {},
 ) {
   const output = path.resolve(outputPath);
   const stages = new Map();
@@ -308,7 +308,7 @@ export function recoveryModelDrivers(
         modelExtractionDrivers(path.join(output, "stages", stage), config, {
           workspace: path.join(output, "workspace"),
           publicAssignments,
-          stopOnProviderError,
+          boundedProviderRetries,
         }),
       );
     return stages.get(stage);
@@ -339,7 +339,7 @@ export function recoveryModelDrivers(
 export function modelExtractionDrivers(
   outputPath,
   config,
-  { workspace, publicAssignments, stopOnProviderError = false } = {},
+  { workspace, publicAssignments, boundedProviderRetries = false, recoveryCooldownMs } = {},
 ) {
   const output = path.resolve(outputPath);
   const project = workspace ?? path.join(output, "workspace");
@@ -355,6 +355,7 @@ export function modelExtractionDrivers(
   const feedback = new Map();
   const states = new Map();
   const recovery = createProviderRecovery({
+    ...(recoveryCooldownMs === undefined ? {} : { cooldownMs: recoveryCooldownMs }),
     onEvent: (event) =>
       appendFileSync(path.join(output, "provider-recovery.jsonl"), JSON.stringify(event) + "\n", {
         mode: 0o600,
@@ -366,7 +367,7 @@ export function modelExtractionDrivers(
       const directory = path.join(output, "feedback", `session-${session}`);
       await mkdir(directory, { recursive: true, mode: 0o700 });
       await mkdir(path.join(output, "participants"), { recursive: true, mode: 0o700 });
-      feedback.set(session, { directory, deliveries: 0 });
+      feedback.set(session, { directory, deliveries: 0, recoveryAttempts: 0 });
       const state = path.join(output, "participants", `session-${session}`);
       states.set(state, null);
       const driver = await startPiParticipant(project, state, participantConfig, {
@@ -374,12 +375,14 @@ export function modelExtractionDrivers(
         feedbackDirectory: directory,
         eventsFile: state + "-events.jsonl",
         enforceProcessBoundary: true,
-        disableAutoRetry: stopOnProviderError,
-        onRecovery: stopOnProviderError
-          ? (request) => {
-              throw new Error(`Provider failure requires inspection: ${request.reason}`);
-            }
-          : (request) => recovery.wait(request),
+        disableAutoRetry: boundedProviderRetries,
+        onRecovery: (request) => {
+          const record = feedback.get(session);
+          assert.ok(record);
+          if (boundedProviderRetries && ++record.recoveryAttempts > 3)
+            throw new Error(`Provider retry limit reached: ${request.reason}`);
+          return recovery.wait(request);
+        },
         onProviderFailure: (error) => recovery.stop(error),
       });
       states.set(state, driver);
@@ -435,6 +438,7 @@ export function modelExtractionDrivers(
             ? `Read /feedback/${file} completely. Complete that one whole-file assignment in the shared workspace and finish.`
             : `Read /feedback/${file} completely, including every source fragment. Complete that one whole-file assignment in the shared workspace and finish.`;
       await admitProviderDelivery(recovery, { signal });
+      record.recoveryAttempts = 0;
       return driver.execute(prompt, { completion: "turn", signal });
     },
     async cleanup() {

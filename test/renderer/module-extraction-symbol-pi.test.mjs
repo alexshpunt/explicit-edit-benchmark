@@ -9,7 +9,7 @@ import { providerFixture } from "./provider-fixture.mjs";
 const runtime = process.env.RENDERER_PI_RUNTIME;
 
 test(
-  "a provider error stops the inspected run without another request",
+  "a transient provider failure resumes the same delivery without repeating tool effects",
   { skip: process.platform !== "linux" || !runtime, timeout: 60000 },
   async () => {
     await mkdir(path.resolve(".tmp"), { recursive: true });
@@ -19,20 +19,25 @@ test(
       const workspace = path.join(root, "workspace");
       await mkdir(workspace);
       await writeFile(path.join(workspace, "main.cpp"), "int value;\n");
-      provider = await providerFixture(root, () => ({
-        status: 503,
-        error: "temporary upstream failure",
-      }));
+      provider = await providerFixture(root, (_body, number) =>
+        number === 1
+          ? { command: "printf done >> /workspace/effects.txt" }
+          : number === 2
+            ? { status: 503, error: "temporary upstream failure" }
+            : {},
+      );
       const task = { id: "a", file: "a.h", kind: "header" };
       const specs = new Map([[task.id, [{ scope: "", kind: "variable", signature: "int value" }]]]);
       drivers = modelExtractionDrivers(path.join(root, "out"), provider.config, {
         workspace,
         publicAssignments: specs,
-        stopOnProviderError: true,
+        boundedProviderRetries: true,
+        recoveryCooldownMs: 20,
       });
       driver = await drivers.createDriver(0, 0, {});
-      await assert.rejects(drivers.execute(driver, task, { session: 0 }));
-      assert.equal(provider.requests.length, 1);
+      await drivers.execute(driver, task, { session: 0 });
+      assert.equal(provider.requests.length, 3);
+      assert.equal(await readFile(path.join(workspace, "effects.txt"), "utf8"), "done");
     } finally {
       if (driver && !driver.closed) await driver.close();
       if (drivers) await drivers.cleanup();
@@ -42,6 +47,44 @@ test(
   },
 );
 
+for (const [status, expectedRequests] of [
+  [503, 4],
+  [401, 1],
+]) {
+  test(
+    `inspected delivery stops after bounded retries for provider status ${status}`,
+    { skip: process.platform !== "linux" || !runtime, timeout: 60000 },
+    async () => {
+      await mkdir(path.resolve(".tmp"), { recursive: true });
+      const root = await mkdtemp(path.resolve(".tmp/bounded-retry-pi-"));
+      let provider, drivers, driver;
+      try {
+        const workspace = path.join(root, "workspace");
+        await mkdir(workspace);
+        await writeFile(path.join(workspace, "main.cpp"), "int value;\n");
+        provider = await providerFixture(root, () => ({ status, error: "provider failure" }));
+        const task = { id: "a", file: "a.h", kind: "header" };
+        const specs = new Map([
+          [task.id, [{ scope: "", kind: "variable", signature: "int value" }]],
+        ]);
+        drivers = modelExtractionDrivers(path.join(root, "out"), provider.config, {
+          workspace,
+          publicAssignments: specs,
+          boundedProviderRetries: true,
+          recoveryCooldownMs: 20,
+        });
+        driver = await drivers.createDriver(0, 0, {});
+        await assert.rejects(drivers.execute(driver, task, { session: 0 }));
+        assert.equal(provider.requests.length, expectedRequests);
+      } finally {
+        if (driver && !driver.closed) await driver.close();
+        if (drivers) await drivers.cleanup();
+        if (provider) provider.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+}
 test(
   "two real Pi participants receive one assignment per inspected round",
   { skip: process.platform !== "linux" || !runtime, timeout: 60000 },

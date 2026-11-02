@@ -134,8 +134,10 @@ snapshot path, report path and candidate hash. Inspect the snapshot and report,
 then enter `approve <inspection number> <candidate hash>` to continue. A changed
 workspace, wrong approval, closed input or cancellation stops the run. The runner keeps the
 participant contexts alive while waiting; a closed run cannot resume them.
-Each approval permits one delivery. Provider errors stop the run for inspection;
-the model runner disables automatic retries.
+Each approval permits one delivery. For transient provider errors, the runner
+keeps the same session and retries at most three times per delivery, with a
+60-second cooldown before each retry. Billing, quota and authentication errors
+stop the run.
 
 The canonical structural credit and build/image factors are unchanged. Header
 protection is part of the existing file-transfer check. A matching render alone
