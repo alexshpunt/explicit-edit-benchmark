@@ -18,11 +18,14 @@ For anything deeper, read the document the README's "Where to read more" points 
 This repository is public. Start every change on its own branch and merge it into `main` through a
 pull request. Never work directly on `main`.
 
+Commit and push work to the working branch as it progresses. Do not merge into `main` until the
+benchmark has been verified as working or the user explicitly instructs you to merge.
+
 Treat every local file as potentially private until you have checked it. Do not commit credentials,
 account details, machine paths, private configuration, raw run output, or Linear project bindings.
 
-Do nothing on your own initiative: no run, no commit, no publication until the user asks for it. A
-full observation spends real money, so confirm the suite, scope and publication before starting.
+Do not start an observation or publish one until the user asks for it. A full observation spends
+real money, so confirm the suite, scope and publication before starting.
 Use its documented smoke gate; not every suite permits partial scored runs.
 
 Before you commit, run `npm run check` as described in the README. It checks formatting, lint,
