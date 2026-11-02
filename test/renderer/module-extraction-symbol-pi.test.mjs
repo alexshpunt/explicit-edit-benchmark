@@ -31,7 +31,7 @@ test(
         { scope: "frond", kind: "using", signature: "using scalar = float;" },
       ];
       const longTask = { id: "task-2", file: "large.h", kind: "header" };
-      const longSpec = Array.from({ length: 100 }, (_, index) => ({
+      const longSpec = Array.from({ length: 200 }, (_, index) => ({
         scope: "frond",
         kind: "function",
         signature: `int function_${index}(float value)`,

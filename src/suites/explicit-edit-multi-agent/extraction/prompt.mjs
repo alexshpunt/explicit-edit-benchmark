@@ -52,7 +52,8 @@ function codeBlock(text) {
 export function moduleSymbolPrompt(task, entities) {
   assert.equal(typeof task.file, "string");
   assert.ok(Array.isArray(entities));
-  const inventory = entities.map(({ scope, kind, signature, members, action, occurrences }) => {
+  const scopes = new Map();
+  for (const { scope, kind, signature, members, action, occurrences } of entities) {
     assert.equal(typeof scope, "string");
     assert.equal(typeof kind, "string");
     assert.equal(typeof signature, "string");
@@ -62,14 +63,25 @@ export function moduleSymbolPrompt(task, entities) {
     );
     assert.ok(action === undefined || action === "copy");
     assert.ok(occurrences === undefined || (Number.isSafeInteger(occurrences) && occurrences > 1));
-    const location = scope ? `In namespace ${scope}` : "In the global namespace";
-    const verb = action === "copy" ? "copy" : "move";
+    if (!scopes.has(scope)) scopes.set(scope, new Map());
+    const groups = scopes.get(scope);
+    const key = `${action ?? "move"}\0${kind}`;
+    if (!groups.has(key)) groups.set(key, { action, kind, entries: [] });
     const count = occurrences ? `\nFind ${occurrences} occurrences.` : "";
     const fields = members?.length
       ? `\nIts members have these declarations: ${members.join(" ")}`
       : "";
-    return `${location}, ${verb} this ${kind.replaceAll("-", " ")}:\n${signature}${count}${fields}`;
-  });
+    groups.get(key).entries.push(`${signature}${count}${fields}`);
+  }
+  const inventory = [...scopes].map(([scope, groups]) =>
+    [
+      scope ? `In namespace ${scope}:` : "In the global namespace:",
+      ...[...groups.values()].map(
+        ({ action, kind, entries }) =>
+          `${action === "copy" ? "Copy" : "Move"} these ${kind.replaceAll("-", " ")} entities:\n${entries.join("\n\n")}`,
+      ),
+    ].join("\n\n"),
+  );
   return [
     `Extract the assigned entities into ${task.file}.`,
     "Find the complete entities in the shared source. Preserve their current code, declarations, dependencies, conditional behavior and compiler bindings. Do not rename or alter unrelated entities.",

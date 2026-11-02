@@ -35,6 +35,17 @@ test("symbol assignment exposes public declarations but never private plan field
     assert.ok(!prompt.includes(value));
 });
 
+test("repeated namespace is stated once while every assigned signature remains", () => {
+  const scope = "sample_scope_824";
+  const entities = Array.from({ length: 20 }, (_, index) => ({
+    scope,
+    kind: index % 2 ? "function-definition" : "function-declaration",
+    signature: `void example_${index}(int value)`,
+  }));
+  const prompt = moduleSymbolPrompt({ file: "sample.h", kind: "header" }, entities);
+  assert.equal(prompt.split(scope).length - 1, 1);
+  for (const entity of entities) assert.ok(prompt.includes(entity.signature));
+});
 test("symbol recovery excludes compiler excerpts and location metadata", () => {
   const task = {
     file: "shape.h",
