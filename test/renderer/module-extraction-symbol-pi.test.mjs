@@ -30,10 +30,19 @@ test(
         { scope: "frond", kind: "function", signature: "int shade(float value)" },
         { scope: "frond", kind: "using", signature: "using scalar = float;" },
       ];
+      const longTask = { id: "task-2", file: "large.h", kind: "header" };
+      const longSpec = Array.from({ length: 100 }, (_, index) => ({
+        scope: "frond",
+        kind: "function",
+        signature: `int function_${index}(float value)`,
+      }));
       const output = path.join(root, "out");
       drivers = modelExtractionDrivers(output, provider.config, {
         workspace,
-        publicAssignments: new Map([[task.id, spec]]),
+        publicAssignments: new Map([
+          [task.id, spec],
+          [longTask.id, longSpec],
+        ]),
       });
       driver = await drivers.createDriver(0, 0, {});
       await drivers.execute(driver, task, { session: 0 });
@@ -52,16 +61,20 @@ test(
         },
         { session: 0 },
       );
+      await drivers.execute(driver, longTask, { session: 0 });
       await driver.close();
       await drivers.cleanup();
       const feedback = path.join(output, "feedback/session-0");
       const original = await readFile(path.join(feedback, "module.txt"), "utf8");
       const recovery = await readFile(path.join(feedback, "module-2.txt"), "utf8");
+      const longAssignment = await readFile(path.join(feedback, "module-3.txt"), "utf8");
+      assert.ok(Buffer.byteLength(longAssignment) > 4096);
+      assert.ok(longAssignment.includes("int function_99(float value)"));
       const recoveryAssignment = await readFile(
         path.join(feedback, "delivery-2/assignments/task-1.txt"),
         "utf8",
       );
-      for (const text of [original, recovery, recoveryAssignment])
+      for (const text of [original, recovery, recoveryAssignment, longAssignment])
         for (const secret of [
           "PRIVATE_BODY_829",
           "PRIVATE_TEMPLATE_829",
@@ -71,7 +84,7 @@ test(
           "913",
         ])
           assert.ok(!text.includes(secret));
-      for (const text of [original, recovery, recoveryAssignment])
+      for (const text of [original, recovery, recoveryAssignment, longAssignment])
         assert.doesNotMatch(
           text,
           /"(?:scope|kind|signature|members|action|occurrences|sourceMatched|targetMatched)"\s*:/,
@@ -88,6 +101,7 @@ test(
           ),
       );
       assert.ok(userMessages.some((text) => text.includes("int shade(float value)")));
+      assert.ok(userMessages.some((text) => text.includes("/feedback/module-3.txt")));
       for (const text of userMessages)
         assert.doesNotMatch(
           text,
