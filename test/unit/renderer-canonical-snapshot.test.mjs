@@ -110,6 +110,25 @@ test("adjacent named namespace blocks represent the same structural scope", asyn
     await text("inline namespace N { int x; } namespace N { int y; }"),
   );
 });
+test("namespace normalization does not reorder definitions across using directives", async () => {
+  const before =
+    "namespace N { int z(){return value;} } namespace N { using namespace A; int a(){return value;} }";
+  const after =
+    "namespace N { int a(){return value;} } namespace N { using namespace A; int z(){return value;} }";
+  assert.notEqual(await text(before), await text(after));
+  assert.notEqual(
+    await text(before.replace("using namespace A", "using A::value")),
+    await text(after.replace("using namespace A", "using A::value")),
+  );
+  assert.notEqual(
+    await text(
+      "namespace N { int z(){return value;} } namespace N { int value; int a(){return value;} }",
+    ),
+    await text(
+      "namespace N { int a(){return value;} } namespace N { int value; int z(){return value;} }",
+    ),
+  );
+});
 test("namespace normalization preserves original projection coordinates and literals", async () => {
   const source =
     'const char* s = "namespace N { } café";\nnamespace N { int a; }\nnamespace N { int b; }';

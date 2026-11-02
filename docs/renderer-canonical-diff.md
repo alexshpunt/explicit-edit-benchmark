@@ -79,7 +79,10 @@ rewrites, repairs or replaces the measured working files.
 - Keep project-relative file identity, lexical scopes and nesting.
 - Sort the placement of structural definition blocks by deterministic keys within
   the appropriate container. Function, method and class placement can normalize;
-  their bodies are retained.
+  their bodies are retained. At translation-unit and namespace scope, non-sortable
+  named declarations are ordering barriers, including variables and `using`
+  declarations; moving a definition across one can change name lookup.
+  This heuristic does not prove equivalent compiler bindings.
 - Preserve parameter order, signatures, statement order, expression operand order,
   literals and other content inside definitions. Member layout and preprocessor
   boundaries must not be accidentally erased by moving sortable blocks.

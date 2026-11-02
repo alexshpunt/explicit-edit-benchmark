@@ -342,6 +342,9 @@ function canonicalChildren(node, cache) {
       barrier:
         child.hasError ||
         child.type === "access_specifier" ||
+        (["translation_unit", "declaration_list"].includes(node.type) &&
+          child.isNamed &&
+          !sortable(child)) ||
         child.type.startsWith("preproc_") ||
         child.type.startsWith("#"),
     });
