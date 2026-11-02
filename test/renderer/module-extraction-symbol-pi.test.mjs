@@ -45,7 +45,10 @@ test(
           file: "main.cpp",
           assignments: [task],
           initialSources: { "main.cpp": "PRIVATE_INITIAL_829" },
-          recovery: { diagnostics: [{ line: 913, column: 26, message: "PRIVATE_DIAGNOSTIC_829" }] },
+          recovery: {
+            diagnostics: [{ line: 913, column: 26, message: "PRIVATE_DIAGNOSTIC_829" }],
+            verified: { sourceMatched: true, targetMatched: false },
+          },
         },
         { session: 0 },
       );
@@ -68,8 +71,28 @@ test(
           "913",
         ])
           assert.ok(!text.includes(secret));
+      for (const text of [original, recovery, recoveryAssignment])
+        assert.doesNotMatch(
+          text,
+          /"(?:scope|kind|signature|members|action|occurrences|sourceMatched|targetMatched)"\s*:/,
+        );
       assert.ok(original.includes("int shade(float value)"));
       assert.ok(recoveryAssignment.includes("using scalar = float;"));
+      const userMessages = provider.requests.flatMap(({ messages }) =>
+        messages
+          .filter(({ role }) => role === "user")
+          .flatMap(({ content }) =>
+            typeof content === "string"
+              ? [content]
+              : content.filter(({ type }) => type === "text").map(({ text }) => text),
+          ),
+      );
+      assert.ok(userMessages.some((text) => text.includes("int shade(float value)")));
+      for (const text of userMessages)
+        assert.doesNotMatch(
+          text,
+          /"(?:scope|kind|signature|members|action|occurrences|sourceMatched|targetMatched)"\s*:/,
+        );
       const delivered = JSON.stringify(provider.requests.map(({ messages }) => messages));
       for (const secret of [
         "PRIVATE_BODY_829",

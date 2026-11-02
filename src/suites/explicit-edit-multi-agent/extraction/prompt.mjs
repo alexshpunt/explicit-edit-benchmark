@@ -62,24 +62,23 @@ export function moduleSymbolPrompt(task, entities) {
     );
     assert.ok(action === undefined || action === "copy");
     assert.ok(occurrences === undefined || (Number.isSafeInteger(occurrences) && occurrences > 1));
-    return {
-      scope,
-      kind,
-      signature,
-      ...(members ? { members } : {}),
-      ...(action ? { action } : {}),
-      ...(occurrences ? { occurrences } : {}),
-    };
+    const location = scope ? `In namespace ${scope}` : "In the global namespace";
+    const verb = action === "copy" ? "copy" : "move";
+    const count = occurrences ? `\nFind ${occurrences} occurrences.` : "";
+    const fields = members?.length
+      ? `\nIts members have these declarations: ${members.join(" ")}`
+      : "";
+    return `${location}, ${verb} this ${kind.replaceAll("-", " ")}:\n${signature}${count}${fields}`;
   });
   return [
     `Extract the assigned entities into ${task.file}.`,
     "Find the complete entities in the shared source. Preserve their current code, declarations, dependencies, conditional behavior and compiler bindings. Do not rename or alter unrelated entities.",
-    "Move each listed entity into the destination; copy entries marked copy and leave their originals intact. Entries with occurrences require that many copies. The inventory is sorted independently of source order.",
+    "Follow the move or copy instruction for each entity. Leave copied originals intact. The entities are sorted independently of source order.",
     ...(task.kind === "header"
       ? ["Begin the destination header with #pragma once; do not add an include guard."]
       : []),
     ...(task.includes?.length
-      ? [`Destination project dependencies: ${JSON.stringify([...task.includes].sort())}`]
+      ? [`The destination depends on these project files: ${[...task.includes].sort().join(", ")}.`]
       : []),
     ...(task.kind === "header" || task.kind === "vendor-header"
       ? [
@@ -87,7 +86,7 @@ export function moduleSymbolPrompt(task, entities) {
         ]
       : []),
     "Preserve the project and its build behavior. Hold an exclusive flock on /workspace across each shared-source read and write. Keep the directory inode unchanged; /tmp is private to this participant. Do not compile or render in this turn.",
-    JSON.stringify(inventory, null, 2),
+    ...inventory,
   ].join("\n\n");
 }
 
@@ -104,10 +103,12 @@ export function moduleSymbolRecoveryPrompt(task, assignmentsDirectory) {
       : []),
     ...(task.recovery?.verified
       ? [
-          JSON.stringify({
-            sourceMatched: task.recovery.verified.sourceMatched,
-            targetMatched: task.recovery.verified.targetMatched,
-          }),
+          task.recovery.verified.sourceMatched
+            ? "Source removal and replacement pass verification."
+            : "Source removal or replacement fails verification.",
+          task.recovery.verified.targetMatched
+            ? "The destination passes verification."
+            : "The destination fails verification.",
         ]
       : []),
     ...(task.kind === "integration-recovery"

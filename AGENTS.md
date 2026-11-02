@@ -34,6 +34,10 @@ Online trusted-commit verification (`npm run check:pins`) is a separate CI step.
 run it for local development, local renderer runs or their preparation. GitHub API quotas must not
 block local checks, commits or benchmark execution.
 
+## Agent-facing instructions
+
+All information passed to an agent must be prose. Never send JSON or other structured data to an agent through any channel, including prompts, tool results, feedback, recovery instructions, and files supplied to the agent. Internal structured data must remain private; convert information to prose before passing it to an agent.
+
 ## Renderer work
 
 Use the dependencies and commands in `docs/multi-agent.md` and the renderer guides.

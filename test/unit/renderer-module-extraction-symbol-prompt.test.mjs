@@ -16,16 +16,19 @@ test("symbol assignment exposes public declarations but never private plan field
   const spec = [
     { scope: "frond", kind: "function", signature: "int shade(float value)" },
     { scope: "frond", kind: "using", signature: "using scalar = float;" },
+    { scope: "frond", kind: "function", signature: 'void label(const char* value = "a\\b")' },
     { scope: "", kind: "typedef", signature: "Thing", members: ["int a;"], occurrences: 2 },
   ];
   const prompt = moduleSymbolPrompt(task, spec);
+  assert.doesNotMatch(prompt, /"(?:scope|kind|signature|members|action|occurrences)"\s*:/);
   for (const value of [
     "shape.h",
     "frond",
     "int shade(float value)",
     "using scalar = float;",
+    'void label(const char* value = "a\\b")',
     "int a;",
-    "occurrences",
+    "2",
   ])
     assert.ok(prompt.includes(value));
   for (const value of ["PRIVATE_BODY_829", "PRIVATE_TEMPLATE_829", "PRIVATE_POSITION_829", "913"])
@@ -42,6 +45,7 @@ test("symbol recovery excludes compiler excerpts and location metadata", () => {
     },
   };
   const prompt = moduleSymbolRecoveryPrompt(task);
+  assert.doesNotMatch(prompt, /"(?:sourceMatched|targetMatched)"\s*:/);
   assert.ok(prompt.includes("shape.h"));
   for (const value of ["PRIVATE_BODY_829", "913", "26", "main.cpp:913"])
     assert.ok(!prompt.includes(value));

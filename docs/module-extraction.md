@@ -61,8 +61,9 @@ case, and verify the chosen input with the language server and scripted editors.
 
 ## Agent assignments
 
-Each agent receives its destination file and a sorted inventory of its entities:
-namespace, kind and exact signature. Exact `using` declarations, repeated
+Each agent receives prose describing its destination file and a sorted inventory of its entities:
+namespace, kind and exact signature. Agent-facing assignments and recovery messages do not contain
+serialized structured data. Exact `using` declarations, repeated
 occurrence counts and destination dependencies are included. Shared `using`
 declarations are marked for copying. Some type entries include member signatures
 to distinguish different types with the same name. The inventory has no source
