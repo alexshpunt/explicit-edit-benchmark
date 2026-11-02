@@ -16,6 +16,7 @@ export async function runExtractionWave(
     createDriver,
     execute,
     afterOriginal = ignoreNotification,
+    beforeRound,
     onParticipant = ignoreNotification,
     onClosed = ignoreNotification,
     onDelivery = ignoreNotification,
@@ -40,6 +41,17 @@ export async function runExtractionWave(
     agent,
     tasks: tasks.filter((_task, index) => index % agents === agent),
   }));
+  if (beforeRound !== undefined) assert.equal(typeof beforeRound, "function");
+  const roundCount = beforeRound
+    ? tasks.length
+    : Math.max(...groups.map((group) => group.tasks.length));
+  const rounds = beforeRound
+    ? Array.from({ length: roundCount }, () => ({ arrived: 0, gate: Promise.withResolvers() }))
+    : [];
+  for (const round of rounds) void round.gate.promise.catch(() => {});
+  const rejectRounds = (reason) => {
+    for (const round of rounds) round.gate.reject(reason);
+  };
   const byGroup = new Map(groups.map((group) => [group.id, group]));
   const owners = new Map(tasks.map((task, index) => [task.id, index % agents]));
   const held = new Map();
@@ -108,7 +120,10 @@ export async function runExtractionWave(
     if (failure) {
       // Original peers may already be waiting. Recovery peers must first drain
       // their current batch; the barrier callback owns that all-settled join.
-      if (stage === "original") barrier.reject(failure);
+      if (stage === "original") {
+        rejectRounds(failure);
+        barrier.reject(failure);
+      }
       throw failure;
     }
     return delivery.receipt;
@@ -129,6 +144,37 @@ export async function runExtractionWave(
     );
   }
 
+  async function inspectionRound(index, context) {
+    const round = rounds[index];
+    round.arrived++;
+    if (round.arrived === agents) {
+      // The callback receives only idle, live participants. Its signal lets the
+      // controller interrupt approval without leaving a worker stuck forever.
+      Promise.resolve()
+        .then(async () => {
+          context.signal.throwIfAborted();
+          assertAdmissionOpen();
+          const participants = await idleParticipants();
+          await beforeRound({
+            round: index,
+            participants,
+            ids: [tasks[index].id],
+            assertIdle: idleParticipants,
+            signal: context.signal,
+          });
+          context.signal.throwIfAborted();
+          assertAdmissionOpen();
+          await idleParticipants();
+        })
+        .then(round.gate.resolve, (reason) => {
+          const failure = asError(reason);
+          failureState.error ??= failure;
+          rejectRounds(failure);
+          barrier.reject(failure);
+        });
+    }
+    await round.gate.promise;
+  }
   async function recover(owner, task) {
     assert.ok(Number.isSafeInteger(owner) && held.has(owner));
     assert.equal(task.recovery?.stage, "structural-correction");
@@ -181,10 +227,21 @@ export async function runExtractionWave(
           assert.ok(group);
           assert.equal(group.agent, context.agent);
           held.set(context.agent, { driver, context });
-          const abort = () => barrier.reject(context.signal.reason);
+          const abort = () => {
+            rejectRounds(context.signal.reason);
+            barrier.reject(context.signal.reason);
+          };
           context.signal.addEventListener("abort", abort, { once: true });
           try {
-            for (const task of group.tasks) await deliver(driver, task, context);
+            if (beforeRound) {
+              for (let index = 0; index < rounds.length; index++) {
+                await inspectionRound(index, context);
+                if (owners.get(tasks[index].id) === group.agent)
+                  await deliver(driver, tasks[index], context);
+              }
+            } else {
+              for (const task of group.tasks) await deliver(driver, task, context);
+            }
             if (afterOriginal !== ignoreNotification) {
               finished++;
               if (finished === agents) {

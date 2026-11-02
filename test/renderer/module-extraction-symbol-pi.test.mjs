@@ -3,9 +3,53 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import path from "node:path";
 import test from "node:test";
 import { modelExtractionDrivers } from "../../src/suites/explicit-edit-multi-agent/extraction/case.mjs";
+import { runExtractionWave } from "../../src/suites/explicit-edit-multi-agent/extraction/wave.mjs";
 import { providerFixture } from "./provider-fixture.mjs";
 
 const runtime = process.env.RENDERER_PI_RUNTIME;
+
+test(
+  "two real Pi participants receive one assignment per inspected round",
+  { skip: process.platform !== "linux" || !runtime, timeout: 60000 },
+  async () => {
+    await mkdir(path.resolve(".tmp"), { recursive: true });
+    const root = await mkdtemp(path.resolve(".tmp/serial-pi-"));
+    let provider, drivers;
+    try {
+      const workspace = path.join(root, "workspace");
+      await mkdir(workspace);
+      await writeFile(path.join(workspace, "main.cpp"), "int value;\n");
+      provider = await providerFixture(root, () => ({}));
+      const tasks = ["a", "b", "c"].map((id) => ({ id, file: `${id}.h`, kind: "header" }));
+      const specs = new Map(
+        tasks.map((task) => [task.id, [{ scope: "", kind: "variable", signature: "int value" }]]),
+      );
+      drivers = modelExtractionDrivers(path.join(root, "out"), provider.config, {
+        workspace,
+        publicAssignments: specs,
+      });
+      const seen = [];
+      await runExtractionWave(tasks, {
+        agents: 2,
+        ...drivers,
+        async beforeRound({ round, ids }) {
+          assert.deepEqual(ids, [tasks[round].id]);
+          assert.equal(provider.requests.length, round);
+          seen.push(ids[0]);
+        },
+      });
+      assert.deepEqual(
+        seen,
+        tasks.map(({ id }) => id),
+      );
+      assert.equal(provider.requests.length, tasks.length);
+    } finally {
+      if (drivers) await drivers.cleanup();
+      if (provider) provider.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "real participant receives the selected anchor and file obligations again in recovery",

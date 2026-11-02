@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, readdir, readlink, rm } from "node:fs/promises";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { preparePairedExtraction } from "../../src/suites/explicit-edit-multi-agent/extraction/paired-plan.mjs";
 import { runExtractionRecovery } from "../../src/suites/explicit-edit-multi-agent/extraction/recovery.mjs";
 import { recoveryModelDrivers } from "../../src/suites/explicit-edit-multi-agent/extraction/case.mjs";
+import { createTerminalInspector } from "../../src/suites/explicit-edit-multi-agent/extraction/terminal-inspection.mjs";
 import { pairedExtractionFixture } from "../helpers/module-extraction-generation.mjs";
 import { providerFixture } from "./provider-fixture.mjs";
 
@@ -99,7 +101,32 @@ bash /feedback/check-${kind === "build" ? "build" : "images"}.sh`;
         );
         const originalModels = await readFile(provider.config.modelsFile);
         drivers = recoveryModelDrivers(output, provider.config);
-        const report = await runExtractionRecovery(plan, output, { ...drivers, expectedPixels });
+        const input = new PassThrough();
+        const display = new PassThrough();
+        display.resume();
+        const terminalInspect = createTerminalInspector({ input, output: display });
+        const inspections = [];
+        const inspect = async (request) => {
+          const before = provider.requests.length;
+          await access(path.join(request.evidence, "source/main.cpp"));
+          const approval = terminalInspect(request);
+          await new Promise((resolve) => setImmediate(resolve));
+          assert.equal(provider.requests.length, before);
+          inspections.push(request.stage);
+          input.write(`approve ${request.sequence} ${request.candidateIdentity}\n`);
+          return approval;
+        };
+        let report;
+        try {
+          report = await runExtractionRecovery(plan, output, {
+            ...drivers,
+            expectedPixels,
+            inspect,
+          });
+        } finally {
+          terminalInspect.close();
+        }
+        assert.deepEqual(inspections, [...plan.tasks.map(() => "original"), stage]);
         await drivers.cleanup();
         assert.equal(report.status, "complete");
         assert.equal(report.passed, true);

@@ -227,7 +227,7 @@ export async function runModelExtraction(
   prepared,
   outputPath,
   config,
-  { proofPath, signal, fromRun, sourceReceipt } = {},
+  { proofPath, signal, fromRun, sourceReceipt, inspect } = {},
 ) {
   if (fromRun !== undefined || sourceReceipt !== undefined)
     throw Object.assign(
@@ -253,10 +253,12 @@ export async function runModelExtraction(
   assert.equal(hash(reportBytes), proof.runReportSha256);
   const sourceIdentity = await restoringSourceIdentity();
   validateExtractionProof(manifest, proof, JSON.parse(reportBytes), sourceIdentity);
+  assert.equal(typeof inspect, "function", "Model extraction requires round inspection");
   const output = path.resolve(outputPath);
   const drivers = recoveryModelDrivers(output, config, { publicAssignments });
   try {
     const result = await runExtractionRecovery(plan, output, {
+      inspect,
       ...drivers,
       signal,
       publicAssignments: new Map(

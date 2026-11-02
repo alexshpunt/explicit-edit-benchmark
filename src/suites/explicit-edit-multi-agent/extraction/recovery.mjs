@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { writeTree, treeIdentity } from "../generation/generator.mjs";
 import {
   assertCandidateUnchanged,
+  captureCandidate,
   releaseCandidateWorkspace,
 } from "../execution/candidate-evidence.mjs";
 import { canonicalIntegrationNodes } from "../execution/canonical-diagnostics.mjs";
@@ -79,6 +80,7 @@ export async function runExtractionRecovery(
     usage,
     continuation,
     publicAssignments,
+    inspect,
   } = {},
 ) {
   if (continuation !== undefined)
@@ -97,17 +99,20 @@ export async function runExtractionRecovery(
   assert.equal(treeIdentity(plan.initial), plan.initialIdentity);
   assert.equal(typeof createDriver, "function");
   assert.equal(typeof execute, "function");
+  if (inspect !== undefined) assert.equal(typeof inspect, "function");
   const assessment =
     assess ?? (await (await import("./structure.mjs")).prepareExtractionStructure(plan));
   const output = path.resolve(outputPath);
   await mkdir(output, { mode: 0o700 });
   await mkdir(path.join(output, "stages"), { mode: 0o700 });
+  if (inspect) await mkdir(path.join(output, "inspections"), { mode: 0o700 });
   const workspace = path.join(output, "workspace");
   await writeTree(workspace, plan.initial);
   const report = {
     version: "renderer-module-extraction-run-v4",
     ...(plan.headerProtection ? { headerProtection: plan.headerProtection } : {}),
     scope: plan.scope,
+    ...(inspect ? { inspectionRunId: randomUUID(), inspections: [] } : {}),
     policy: EXTRACTION_RECOVERY_POLICY,
     status: "running",
     initial: plan.initialIdentity,
@@ -145,6 +150,75 @@ export async function runExtractionRecovery(
     activeSignal = signal;
   await save();
 
+  // Approval is bound to this live run, sequence and immutable candidate bytes.
+  // Inspection evidence lives outside the participants' shared workspace.
+  async function inspectCandidate(stage, round, ids, candidate, barrier, currentSignal) {
+    if (!inspect) return;
+    currentSignal?.throwIfAborted();
+    await barrier.assertIdle();
+    await assertCandidateUnchanged(workspace, candidate, { signal: currentSignal });
+    const sequence = report.inspections.length;
+    const row = {
+      sequence,
+      stage,
+      round,
+      ids: [...ids],
+      candidateIdentity: candidate.identity,
+      evidence: path.relative(output, path.dirname(candidate.source)),
+      status: "awaiting",
+    };
+    report.inspections.push(row);
+    await save();
+    const request = Object.freeze({
+      runId: report.inspectionRunId,
+      sequence,
+      stage,
+      round,
+      ids: Object.freeze([...ids]),
+      candidateIdentity: candidate.identity,
+      evidence: path.dirname(candidate.source),
+      report: path.join(output, "report.json"),
+      signal: currentSignal,
+    });
+    let removeAbort = () => {};
+    try {
+      const aborted = new Promise((_resolve, reject) => {
+        const cancel = () => reject(currentSignal.reason);
+        if (currentSignal?.aborted) cancel();
+        else if (currentSignal) {
+          currentSignal.addEventListener("abort", cancel, { once: true });
+          removeAbort = () => currentSignal.removeEventListener("abort", cancel);
+        }
+      });
+      const approval = await Promise.race([
+        Promise.resolve().then(() => {
+          currentSignal?.throwIfAborted();
+          return inspect(request);
+        }),
+        aborted,
+      ]);
+      assert.ok(
+        approval &&
+          approval.runId === request.runId &&
+          approval.sequence === sequence &&
+          approval.candidateIdentity === candidate.identity,
+        "Inspection approval does not match this candidate",
+      );
+      currentSignal?.throwIfAborted();
+      await barrier.assertIdle();
+      await assertCandidateUnchanged(workspace, candidate, { signal: currentSignal });
+      row.status = "approved";
+      await save();
+      await barrier.assertIdle();
+      await assertCandidateUnchanged(workspace, candidate, { signal: currentSignal });
+    } catch (error) {
+      row.status = "interrupted";
+      await save();
+      throw error;
+    } finally {
+      removeAbort();
+    }
+  }
   async function capture(directory) {
     activeSignal?.throwIfAborted();
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -231,6 +305,29 @@ export async function runExtractionRecovery(
       signal,
       ...(usage ? { usage } : {}),
       ...(afterOriginal ? { afterOriginal } : {}),
+      ...(inspect
+        ? {
+            async beforeRound(barrier) {
+              const evidence = path.join(output, "inspections", String(report.inspections.length));
+              const candidate = await captureCandidate(workspace, evidence, {
+                signal: barrier.signal,
+                includeAllFiles: true,
+              });
+              try {
+                await inspectCandidate(
+                  stage,
+                  barrier.round,
+                  barrier.ids,
+                  candidate,
+                  barrier,
+                  barrier.signal,
+                );
+              } finally {
+                releaseCandidateWorkspace(workspace);
+              }
+            },
+          }
+        : {}),
       createDriver: (agent, session, context) =>
         createDriver(agent, session, { ...context, stage, workspace, directory }),
       execute: (driver, task, context) =>
@@ -313,7 +410,9 @@ export async function runExtractionRecovery(
             : footprints.get(task.id);
         return { id: record.id, owner: record.owner, resources, task, record };
       });
-      const { ready, deferred } = selectRecoveryBatch(candidates);
+      const batch = selectRecoveryBatch(candidates);
+      const ready = inspect ? batch.ready.slice(0, 1) : batch.ready;
+      const deferred = inspect ? [...batch.ready.slice(1), ...batch.deferred] : batch.deferred;
       report.recoveryChecks.push({
         index: report.recoveryChecks.length,
         candidateIdentity: state.candidate.identity,
@@ -367,6 +466,15 @@ export async function runExtractionRecovery(
           }),
         );
       }
+      if (inspect)
+        await inspectCandidate(
+          "structural-correction",
+          report.recoveryChecks.length - 1,
+          ready.map(({ id }) => id),
+          state.candidate,
+          barrier,
+          activeSignal,
+        );
       await assertCandidateUnchanged(workspace, state.candidate, { signal: activeSignal });
       releaseCandidateWorkspace(workspace);
       const results = await Promise.allSettled(

@@ -125,16 +125,17 @@ inputs, candidates and reports must not be rewritten.
 
 Original file queues finish before a common verification barrier. Participants
 remain live through that barrier. A failed file may receive one structural
-repair in its original owner's context. Independent repairs can run together;
-overlapping work is serialized and refreshed. Build and image correction each
+repair in its original owner's context. Model tasks and repairs run one at a
+time, with a fresh inspection after each one. Build and image correction each
 retain their separate bounded fresh-context budget.
 
-The model runner proceeds from the original barrier into structural recovery and
-then integration recovery without an operator approval pause. Saved candidates
-and reports can be inspected afterward, but a closed run cannot resume the
-original participants' contexts. An observation that requires inspection before
-each model round needs a live barrier control; the current runner does not
-provide one.
+Before each original round and each recovery batch, the model runner displays a
+snapshot path, report path and candidate hash. Inspect the snapshot and report,
+then enter `approve <inspection number> <candidate hash>` to continue. A changed
+workspace, wrong approval, closed input or cancellation stops the run. The runner keeps the
+participant contexts alive while waiting; a closed run cannot resume them.
+Approval controls delivery batches. It does not prevent retries inside a model
+delivery.
 
 The canonical structural credit and build/image factors are unchanged. Header
 protection is part of the existing file-transfer check. A matching render alone

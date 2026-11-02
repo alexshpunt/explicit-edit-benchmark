@@ -22,9 +22,11 @@ Model execution requires a fresh version 5 explicit-contract case and a matching
 clean-source reference proof. It spends model credit and requires explicit approval.
 Earlier assignment contracts cannot authorize model execution.
 After all original queues finish, structural recovery retains their live contexts.
-Overlapping repairs are serialized with refreshed checks; independent repairs may
-run together. Build and image corrections use fresh isolated contexts. Closed saved
+Model tasks and repairs run one at a time with refreshed checks. Build and image
+corrections use fresh isolated contexts. Closed saved
 runs cannot resume their original contexts. There is no source reset or publication.
+Before each delivery batch, inspect the displayed snapshot and report. Enter
+'approve <inspection number> <candidate hash>' to proceed, or interrupt to stop.
 Use fresh ignored output directories and the shared renderer lock on a capable worker.
 See docs/multi-agent.md for shared renderer prerequisites.
 `;
@@ -116,10 +118,19 @@ try {
       const config = JSON.parse(await readFile(values.config, "utf8"));
       const { runModelExtraction } =
         await import("../src/suites/explicit-edit-multi-agent/extraction/case.mjs");
-      const report = await runModelExtraction(input, output, config, {
-        proofPath: values.proof,
-        signal: controller.signal,
-      });
+      const { createTerminalInspector } =
+        await import("../src/suites/explicit-edit-multi-agent/extraction/terminal-inspection.mjs");
+      const inspect = createTerminalInspector();
+      let report;
+      try {
+        report = await runModelExtraction(input, output, config, {
+          proofPath: values.proof,
+          signal: controller.signal,
+          inspect,
+        });
+      } finally {
+        inspect.close();
+      }
       console.log(
         JSON.stringify({
           status: report.status,
