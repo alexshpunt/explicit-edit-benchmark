@@ -135,6 +135,166 @@ await test("whole functions mix across reopened namespaces without changing look
   }
 });
 
+await test("optimized mixing improves dispersion without changing bodies or legal bindings", async () => {
+  await mkdir(".tmp", { recursive: true });
+  const temporary = await mkdtemp(path.resolve(".tmp/mix-dispersion-"));
+  try {
+    const original = { "main.cpp": source };
+    const baseline = await mixFunctions(original, path.join(temporary, "baseline"), {
+      strategy: "baseline",
+    });
+    const defaultResult = await mixFunctions(original, path.join(temporary, "default"));
+    assert.deepEqual(defaultResult.stages, baseline.stages);
+    const optimized = await mixFunctions(original, path.join(temporary, "optimized"), {
+      strategy: "dispersion",
+    });
+    assert.ok(optimized.summary.optimization);
+    assert.ok(optimized.summary.optimization.sources.length > 0);
+    for (const row of optimized.summary.optimization.sources) {
+      const positions = optimized.summary.placements.filter(
+        (item) => item.from.source === row.file,
+      );
+      const exact = optimized.summary.optimization.after.sources.find(
+        (item) => item.owner === row.file,
+      );
+      const bytes = positions.map((item) => item.to.byte).sort((a, b) => a - b);
+      let pairDistance = 0;
+      for (let i = 0; i < bytes.length; i++)
+        for (let j = i + 1; j < bytes.length; j++) pairDistance += bytes[j] - bytes[i];
+      assert.equal(exact.distance, pairDistance);
+      assert.equal(row.count, positions.length);
+      assert.equal(
+        row.after.meanDisplacement,
+        positions.reduce((sum, item) => sum + Math.abs(item.to.line - item.from.line), 0) /
+          positions.length,
+      );
+    }
+    const bounded = await mixFunctions(original, path.join(temporary, "bounded"), {
+      strategy: "dispersion",
+      search: { restarts: 0, passes: 0 },
+    });
+    assert.equal(bounded.summary.optimization.search.passes, 0);
+    assert.equal(bounded.summary.optimization.search.restarts, 0);
+    assert.ok(
+      optimized.summary.optimization.after.dispersion >=
+        optimized.summary.optimization.before.dispersion,
+    );
+    assert.deepEqual(optimized.summary.optimization.before, baseline.summary.optimization.after);
+    assert.equal(optimized.summary.bindings.fingerprint, baseline.summary.bindings.fingerprint);
+    assert.deepEqual(
+      optimized.summary.placements.map((row) => row.bodyHash).sort(),
+      baseline.summary.placements.map((row) => row.bodyHash).sort(),
+    );
+    const repeat = await mixFunctions(original, path.join(temporary, "repeat"), {
+      strategy: "dispersion",
+    });
+    assert.deepEqual(repeat, optimized);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+await test("ordinary inline definitions can be mixed without moving constexpr definitions", async () => {
+  await mkdir(".tmp", { recursive: true });
+  const temporary = await mkdtemp(path.resolve(".tmp/mix-inline-"));
+  try {
+    const original = {
+      "main.cpp": `#include <cstdio>
+namespace demo {
+constexpr int constant() { return 2; }
+static_assert(constant() == 2);
+inline int first(int value) { return value + 1; }
+inline int second(int value) { return first(value) * 2; }
+inline int third(int value) { return second(value) + 1; }
+int fourth(int value) { return third(value) + constant(); }
+int fifth(int value) { return fourth(value) - 2; }
+}
+int main() { std::printf("%d\\n", demo::fifth(3)); }
+`,
+    };
+    const ordinary = await mixFunctions(original, path.join(temporary, "default"));
+    assert.ok(
+      ordinary.summary.placements.every(
+        ({ name }) => !["first", "second", "third", "constant"].includes(name),
+      ),
+    );
+    const mixed = await mixFunctions(original, path.join(temporary, "inline"), {
+      allowInline: true,
+    });
+    const names = new Set(mixed.summary.placements.map(({ name }) => name));
+    assert.ok(["first", "second", "third"].every((name) => names.has(name)));
+    assert.ok(!names.has("constant"));
+    assert.ok(mixed.summary.excluded.some(({ name }) => name === "constant"));
+    const bytes = Buffer.from(mixed.stages.at(-1).tree["main.cpp"]);
+    for (const placement of mixed.summary.placements.filter(({ name }) =>
+      ["first", "second", "third"].includes(name),
+    )) {
+      const { byte, length, hash } = placement.declaration;
+      const declaration = bytes.subarray(byte, byte + length);
+      assert.equal(createHash("sha256").update(declaration).digest("hex"), hash);
+      assert.match(
+        declaration.toString("utf8"),
+        new RegExp(`^inline int ${placement.name}\\(int value\\);\\n$`),
+      );
+    }
+    const states = [original, ...mixed.stages.map(({ tree }) => tree)];
+    let restored = mixed.stages.at(-1).tree;
+    for (const stage of [...mixed.stages].reverse())
+      restored = undoFunctionMix(restored, stage.record);
+    assert.deepEqual(restored, original);
+    for (const [index, tree] of states.entries()) {
+      const directory = path.join(temporary, `state-${index}`);
+      await writeTree(directory, tree);
+      const executable = path.join(directory, "program");
+      execFileSync("clang++", ["-std=c++17", path.join(directory, "main.cpp"), "-o", executable]);
+      assert.equal(execFileSync(executable, [], { encoding: "utf8" }).trim(), "9");
+    }
+    const repeat = await mixFunctions(original, path.join(temporary, "repeat"), {
+      allowInline: true,
+    });
+    assert.deepEqual(repeat, mixed);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+await test("inline mixing retains template and default-argument declaration boundaries", async () => {
+  await mkdir(".tmp", { recursive: true });
+  const temporary = await mkdtemp(path.resolve(".tmp/mix-inline-boundaries-"));
+  try {
+    const original = {
+      "main.cpp": `namespace demo {
+inline int beforeA(int n) { return n + 1; }
+inline int beforeB(int n) { return beforeA(n) + 1; }
+template <class T> int fixedTemplate(T value) { return value + 3; }
+inline int middleA(int n) { return fixedTemplate(n); }
+inline int middleB(int n) { return fixedTemplate(n) + 1; }
+static int withDefault(int n = 4) { return n; }
+inline int afterA(int n) { return withDefault() + n; }
+inline int afterB(int n) { return afterA(n) + 1; }
+}
+int main() { return demo::afterB(2) != 7; }
+`,
+    };
+    const result = await mixFunctions(original, path.join(temporary, "mixed"), {
+      allowInline: true,
+      strategy: "dispersion",
+    });
+    const bytes = Buffer.from(result.stages.at(-1).tree["main.cpp"]);
+    const template = bytes.indexOf("template <class T>"),
+      fixed = bytes.indexOf("static int withDefault");
+    for (const row of result.summary.placements) {
+      if (row.name.startsWith("before")) assert.ok(row.to.byte < template);
+      if (row.name.startsWith("middle")) assert.ok(template < row.to.byte && row.to.byte < fixed);
+      if (row.name.startsWith("after")) assert.ok(fixed < row.to.byte);
+    }
+    assert.ok(result.summary.placements.some((row) => row.name.startsWith("after")));
+    const file = path.join(temporary, "mixed", "permutation", "main.cpp");
+    const executable = path.join(temporary, "check");
+    execFileSync("clang++", ["-std=c++17", file, "-o", executable]);
+    execFileSync(executable);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
 await test("new declarations are rejected when they would change an imported overload binding", async () => {
   await mkdir(".tmp", { recursive: true });
   const temporary = await mkdtemp(path.resolve(".tmp/mix-lookup-"));

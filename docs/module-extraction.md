@@ -34,6 +34,31 @@ Temporary header-local macro overrides require matching literal-preserving
 conditions, one definition and a matching cleanup, with no include while the
 override is active. Unsupported macro lifetimes or dependencies fail preparation.
 
+## Scattered input
+
+Generate an aggressively scattered input with the experimental profile:
+
+```sh
+node src/suites/explicit-edit-multi-agent/generation/run.mjs \
+  generate-extraction-scatter NEW_GENERATION
+```
+
+The profile is deterministic. It moves eligible complete namespace-level
+functions, including supported `inline` definitions, across compatible slots.
+It searches for more moved definitions, then scores same-source separation and
+displacement. It retains a per-source separation floor using final byte positions,
+including shifts caused by moving definitions of different lengths. The generation
+report records the search budget, convergence, coverage and cross-source bounds.
+One bound accounts for slot dependency limits;
+neither accounts for the per-source separation floor. These bounds do not prove
+a globally optimal permutation.
+
+The generator checks compiler bindings and builds and renders every checkpoint.
+Unsupported templates, `constexpr` definitions and other unsafe units remain
+in place. The ordinary public suite generation retains its existing profile.
+Use the generated journal and matching preparation to prepare the extraction
+case, and verify the chosen input with the language server and scripted editors.
+
 ## Model-free reference
 
 Use the renderer prerequisites and shared-worker rules in [the Multi-Agent

@@ -4,6 +4,7 @@ import path from "node:path";
 import { projectAst } from "../cpp/compiler-ast.mjs";
 import { includeBoundaries } from "../cpp/compiler-includes.mjs";
 import { cppTokens, treeIdentity, writeTree } from "./generator.mjs";
+import { optimizeShuffle, shuffleMetrics } from "./shuffle-optimization.mjs";
 
 const flags = ["-std=c++17", "-pthread"];
 // Compiler-generated anonymous/lambda type labels carry source coordinates, not binding identity.
@@ -19,7 +20,7 @@ const walk = (node, visit) => {
   for (const child of node.inner ?? []) walk(child, visit);
 };
 
-function inventory(roots, bytes, repeatedIncludes = new Set()) {
+function inventory(roots, bytes, repeatedIncludes = new Set(), { inlineBarriers = false } = {}) {
   const declarations = new Map();
   const families = new Map();
   const definitions = [];
@@ -97,8 +98,17 @@ function inventory(roots, bytes, repeatedIncludes = new Set()) {
       for (const child of node.inner ?? []) fixed(child, next);
       return;
     }
-    if (node.kind === "FunctionDecl" || node.kind === "FunctionTemplateDecl" || node.isImplicit)
+    if (node.isImplicit) return;
+    if (node.kind === "FunctionDecl" || node.kind === "FunctionTemplateDecl") {
+      if (inlineBarriers) {
+        const fixedFunction =
+          node.kind === "FunctionTemplateDecl" ||
+          (node.inner ?? []).some((child) => child.kind === "ParmVarDecl" && child.init);
+        const end = endOf(node);
+        if (fixedFunction && end !== null) barriers.push({ scope, end });
+      }
       return;
+    }
     if (node.kind === "UsingShadowDecl") return;
     if (node.kind === "UsingDirectiveDecl" || node.kind === "UsingDecl") {
       const key = `${scope}:${node.kind}:${node.nominatedNamespace?.name ?? node.name}`;
@@ -234,14 +244,14 @@ function typeBound(entry, data, signatureOnly = false) {
   return Math.max(0, ...visible.values());
 }
 
-function reasonFor(entry, data, bytes) {
+function reasonFor(entry, data, bytes, { allowInline }) {
   const { node, body, scope, templated, start, end } = entry;
   if (!entry.free) return "nested or friend definition";
   if (!scope || scope.includes("(anonymous)")) return "global or anonymous namespace context";
   if (templated) return "template definition";
   if ((node.inner ?? []).some((child) => child.kind?.endsWith("Attr")))
     return "attributed definition";
-  if (node.inline || node.constexpr) return "inline or constexpr definition";
+  if (node.constexpr || (node.inline && !allowInline)) return "inline or constexpr definition";
   if (/\bauto\b/.test(node.type?.qualType ?? "")) return "auto return type";
   if ((node.inner ?? []).some((child) => child.kind === "ParmVarDecl" && child.init))
     return "default argument on definition";
@@ -285,11 +295,18 @@ function sourceOrigin(text, byte, history, region) {
   return "main.cpp";
 }
 /** Mix supported complete free functions in named namespaces; emit working declaration and relocation stages. */
-export async function mixFunctions(
-  tree,
-  directory,
-  { seed = "renderer-function-mix-v1", history = [] } = {},
-) {
+export async function mixFunctions(tree, directory, options = {}) {
+  const {
+    seed = "renderer-function-mix-v1",
+    history = [],
+    strategy = "baseline",
+    search = {},
+    allowInline = false,
+    inlineBarriers = allowInline,
+  } = options;
+  if (!["baseline", "dispersion"].includes(strategy)) throw new Error("Unknown shuffle strategy");
+  if (typeof allowInline !== "boolean" || typeof inlineBarriers !== "boolean")
+    throw new Error("Invalid inline mixing option");
   if (JSON.stringify(Object.keys(tree)) !== JSON.stringify(["main.cpp"]))
     throw new Error("Function mixing requires a monolith");
   if (cppTokens(tree["main.cpp"]).some((token) => ["__LINE__", "__COUNTER__"].includes(token.text)))
@@ -307,7 +324,7 @@ export async function mixFunctions(
     const repeated = new Set([...proof.repeated, ...proof.inactive]);
     const roots = await projectAst(sourcePath, flags);
     return {
-      ...inventory(roots, bytes, repeated),
+      ...inventory(roots, bytes, repeated, { inlineBarriers }),
       includeProof: { repeated: [...proof.repeated], inactive: [...proof.inactive] },
     };
   }
@@ -322,7 +339,7 @@ export async function mixFunctions(
       : `binding:${entry.key}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
-    const reason = reasonFor(entry, data, bytes);
+    const reason = reasonFor(entry, data, bytes, { allowInline });
     if (reason)
       excluded.push({
         name: entry.node.name,
@@ -436,7 +453,9 @@ export async function mixFunctions(
     end: shifted(entry.end, false),
   }));
   const indexOf = new Map(selected.map((entry, index) => [entry, index]));
-  const permutation = selected.map((_, index) => index);
+  let permutation = selected.map((_, index) => index);
+  const lowerBounds = new Map();
+  const groupIds = new Map([...groups.values()].map((entries, index) => [entries, String(index)]));
   for (const entries of groups.values()) {
     const peers = selected.filter((entry) => entry.group === entries);
     if (peers.length < 2) continue;
@@ -466,6 +485,7 @@ export async function mixFunctions(
         if (ends.length) bound = Math.max(bound, Math.min(...ends));
       }
       lower.set(entry, bound);
+      lowerBounds.set(entry, shifted(bound));
     }
     const remaining = [...peers].sort((a, b) =>
       hash(`${seed}:${a.key}`).localeCompare(hash(`${seed}:${b.key}`)),
@@ -477,6 +497,30 @@ export async function mixFunctions(
       const [entry] = remaining.splice(position, 1);
       permutation[indexOf.get(slot)] = indexOf.get(entry);
     }
+  }
+  let optimization;
+  if (Object.hasOwn(options, "strategy")) {
+    const optimizationItems = selected.map((entry, index) => ({
+      id: entry.key,
+      owner: sourceOrigin(tree["main.cpp"], entry.start, history, entry.region),
+      origin: slots[index].start,
+      length: slots[index].end - slots[index].start,
+      lower: lowerBounds.get(entry),
+      group: groupIds.get(entry.group),
+    }));
+    const optimizationSlots = slots.map((slot) => slot.start);
+    const before = shuffleMetrics(optimizationItems, optimizationSlots, permutation);
+    const optimized =
+      strategy === "dispersion"
+        ? optimizeShuffle(optimizationItems, optimizationSlots, permutation, { ...search, seed })
+        : null;
+    if (optimized) permutation = optimized.assignment;
+    optimization = {
+      strategy,
+      before,
+      after: shuffleMetrics(optimizationItems, optimizationSlots, permutation),
+      ...(optimized ? { search: optimized.search } : {}),
+    };
   }
   const declaredBytes = Buffer.from(declaredTree["main.cpp"]);
   const units = slots.map((slot) => declaredBytes.subarray(slot.start, slot.end));
@@ -578,7 +622,48 @@ export async function mixFunctions(
         after: Math.abs(placements[index].to.line - placements[callee].to.line),
       });
   }
+  if (optimization) {
+    const files = new Map();
+    for (const placement of placements) {
+      if (!files.has(placement.from.source)) files.set(placement.from.source, []);
+      files.get(placement.from.source).push(placement);
+    }
+    const beforeLines = tree["main.cpp"].split("\n").length;
+    const afterLines = mixedTree["main.cpp"].split("\n").length;
+    const spread = (rows, side, lines) => {
+      const values = rows.map((row) => row[side].line).sort((a, b) => a - b);
+      let sum = 0,
+        prefix = 0;
+      for (const [index, value] of values.entries()) {
+        sum += value * index - prefix;
+        prefix += value;
+      }
+      const pairs = (values.length * (values.length - 1)) / 2;
+      const bands = new Set(
+        values.map((value) => Math.min(9, Math.floor(((value - 1) * 10) / lines))),
+      );
+      return {
+        firstLine: values[0],
+        lastLine: values.at(-1),
+        occupiedBands: bands.size,
+        meanPairDistance: pairs ? sum / pairs : 0,
+      };
+    };
+    optimization.sources = [...files]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([file, rows]) => ({
+        file,
+        count: rows.length,
+        before: spread(rows, "from", beforeLines),
+        after: {
+          ...spread(rows, "to", afterLines),
+          meanDisplacement:
+            rows.reduce((sum, row) => sum + Math.abs(row.to.line - row.from.line), 0) / rows.length,
+        },
+      }));
+  }
   const summary = {
+    ...(Object.hasOwn(options, "strategy") ? { optimization } : {}),
     seed,
     selected: placements.length,
     moved: permutation.filter((occupant, index) => occupant !== index).length,

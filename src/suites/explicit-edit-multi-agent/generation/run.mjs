@@ -78,7 +78,7 @@ export async function buildAndRender(source, scratch, tree, compiler, { signal }
 /** Generate packing and optional naming/mixing records, then verify every forward and inverse state. */
 export async function generateSeries(
   output,
-  { verify = true, compiler = "clang++", names = false, log = console.log } = {},
+  { verify = true, compiler = "clang++", names = false, log = console.log, mixing = {} } = {},
 ) {
   output = path.resolve(output);
   await mkdir(path.dirname(output), { recursive: true });
@@ -197,6 +197,7 @@ export async function generateSeries(
   if (names) {
     log("MIX: compiler-bound declarations and whole definitions");
     const result = await mixFunctions(current, path.join(output, "mixing"), {
+      ...mixing,
       history: operations,
     });
     report.mixing = {
@@ -357,8 +358,25 @@ export async function restoreSeries(
   return report;
 }
 async function main(args) {
-  if (args.length === 2 && ["generate", "generate-names"].includes(args[0])) {
-    await generateSeries(args[1], { names: args[0] === "generate-names" });
+  if (
+    args.length === 2 &&
+    ["generate", "generate-names", "generate-extraction-scatter"].includes(args[0])
+  ) {
+    const scatter = args[0] === "generate-extraction-scatter";
+    await generateSeries(args[1], {
+      names: args[0] !== "generate",
+      ...(scatter
+        ? {
+            mixing: {
+              strategy: "dispersion",
+              allowInline: true,
+              inlineBarriers: false,
+              seed: "renderer-scatter-275-2",
+              search: { restarts: 0, passes: 1000, priority: "moved" },
+            },
+          }
+        : {}),
+    });
   } else if (args.length === 4 && args[0] === "restore") {
     await restoreSeries(args[1], args[2], args[3]);
   } else if (args.length === 4 && args[0] === "unpack") {
@@ -377,7 +395,7 @@ async function main(args) {
     );
   } else {
     throw new Error(
-      "Usage: node src/suites/explicit-edit-multi-agent/generation/run.mjs generate|generate-names OUTPUT\n   or: node src/suites/explicit-edit-multi-agent/generation/run.mjs unpack|restore PACKED_SOURCE OPERATIONS_JSON OUTPUT",
+      "Usage: node src/suites/explicit-edit-multi-agent/generation/run.mjs generate|generate-names|generate-extraction-scatter OUTPUT\n   or: node src/suites/explicit-edit-multi-agent/generation/run.mjs unpack|restore PACKED_SOURCE OPERATIONS_JSON OUTPUT",
     );
   }
 }
