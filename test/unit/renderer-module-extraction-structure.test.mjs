@@ -61,6 +61,19 @@ test("cosmetic destination and residual-source layout does not lose structural c
   assert.deepEqual(actual.differenceIds, []);
 });
 
+test("an extracted destination may reopen a namespace without losing structural credit", async () => {
+  const plan = textFixture();
+  const assess = await prepareExtractionStructure(plan);
+  const source = plan.expected["a.h"];
+  const split = source.replace(
+    "namespace first { inline",
+    "namespace first {} namespace first { inline",
+  );
+  assert.notEqual(split, source);
+  const actual = await assess({ ...plan.expected, "a.h": split });
+  assert.equal(actual.status, "pass");
+  assert.deepEqual(actual.differenceIds, []);
+});
 test("missing files and changed literals, inactive conditions and malformed code fail the affected target", async () => {
   const plan = textFixture();
   const assess = await prepareExtractionStructure(plan);

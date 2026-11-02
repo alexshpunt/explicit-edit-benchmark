@@ -96,15 +96,17 @@ rewrites, repairs or replaces the measured working files.
   model damage. A malformed candidate is a measured input, not a reason to heal
   its source before comparison.
 
-Serialization `ordered-cpp-source-v4` contains sorted, normalized C++ source,
-not a JSON dump of parser nodes. The parser selects definition ordering; all
-source tokens, complete bodies and literal bytes remain in the output. Statements
+Serialization `ordered-cpp-source-v5` contains sorted, normalized C++ source,
+not a JSON dump of parser nodes. Adjacent plain named namespace blocks with the same
+name share a canonical scope. Separate scopes, preprocessing barriers, inline
+namespaces and namespace attributes remain explicit. The parser selects definition
+ordering; declaration contents, complete bodies and literal bytes remain in the output. Statements
 and block boundaries have deterministic whitespace. Function-like macro names
 remain adjacent to their parameter lists, and significant macro token gaps remain
 intact. Syntax diagnostics stay separate and explicit. Physical non-source entries
 and malformed byte contents retain their lossless encodings.
 
-Project snapshot v2 identifies this representation. Earlier CST snapshots, caches
+Project snapshot v3 identifies this representation. Earlier CST snapshots, caches
 and hunk denominators are not interchangeable: prepare a new cache from retained
 proof-bound source endpoints. Do not replay edits, rescore historical observations,
 or discard bodies to reduce the diff.

@@ -84,6 +84,41 @@ test("canonical C++ sorts function and class definition placement inside a names
   );
 });
 
+test("adjacent named namespace blocks represent the same structural scope", async () => {
+  const joined = "namespace N { int x; int y; int f(){return 2;} }";
+  const split = "namespace N { int x; } namespace N { int y; int f(){return 2;} }";
+  assert.equal(await text(joined), await text(split));
+  assert.equal(
+    await text("namespace A { namespace B { int x; int y; } }"),
+    await text("namespace A { namespace B { int x; } namespace B { int y; } }"),
+  );
+  assert.notEqual(await text(joined), await text(split.replace("int y;", "int y = 1;")));
+  assert.notEqual(
+    await text(joined),
+    await text(split.replace("namespace N { int y", "namespace M { int y")),
+  );
+  assert.notEqual(
+    await text("namespace N { int x; int y; }"),
+    await text("namespace N { int x; }\n#define X 1\nnamespace N { int y; }"),
+  );
+  assert.notEqual(
+    await text("namespace N { int x; int y; }"),
+    await text("namespace N { int x; }\n#if FOO\nnamespace N { int y; }\n#endif"),
+  );
+  assert.notEqual(
+    await text("namespace N { int x; int y; }"),
+    await text("inline namespace N { int x; } namespace N { int y; }"),
+  );
+});
+test("namespace normalization preserves original projection coordinates and literals", async () => {
+  const source =
+    'const char* s = "namespace N { } café";\nnamespace N { int a; }\nnamespace N { int b; }';
+  const result = await canonicalizeCpp(source, { projection: true });
+  assert.ok(result.text.includes('"namespace N { } café"'));
+  const nodes = result.projection.children.filter((item) => item.type === "namespace_definition");
+  assert.equal(nodes.length, 2);
+  assert.equal(source.slice(nodes[1].start, nodes[1].end), "namespace N { int b; }");
+});
 test("reopened namespaces have stable ordering after their nested definitions normalize", async () => {
   const one = "namespace N { int z(){return 1;} int a(){return 2;} }";
   const two = "namespace N { int m(){return 3;} }";

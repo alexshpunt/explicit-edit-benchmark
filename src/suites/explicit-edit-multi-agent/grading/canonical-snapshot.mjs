@@ -6,7 +6,7 @@ import { cppTokens } from "../cpp/cpp-tokens.mjs";
 import { decodeSourceBytes, encodeSourceBytes } from "../cpp/source-bytes.mjs";
 
 const require = createRequire(import.meta.url);
-const version = "renderer-canonical-snapshot-v2";
+const version = "renderer-canonical-snapshot-v3";
 const cppExtension = /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|ipp|inl|tcc|inc)$/i;
 const literals = new Set([
   "string_literal",
@@ -34,7 +34,7 @@ async function language() {
           version: "0.23.4",
           sha256: createHash("sha256").update(grammarBytes).digest("hex"),
         },
-        serialization: "ordered-cpp-source-v4",
+        serialization: "ordered-cpp-source-v5",
         macroLayout: "project-definitions-and-arguments-token-gaps-v1",
       },
     };
@@ -600,6 +600,38 @@ function sourceProjection(root, macros) {
   return visit(root);
 }
 
+// Merge only adjacent, plain named namespace nodes in the parsed structure.
+// Preprocessor nodes, attributes, inline namespaces and other scopes remain
+// boundaries. Keep the original tree for source projections and coordinates.
+function coalesceNamespaceScopes(source, root) {
+  const removals = [];
+  const plainNamespace = (node) => {
+    if (node.type !== "namespace_definition" || node.hasError) return null;
+    const name = node.childForFieldName("name");
+    const body = node.childForFieldName("body");
+    if (!name || !body || node.children.length !== 3 || node.children[0].type !== "namespace")
+      return null;
+    return { name: name.text, body };
+  };
+  const visit = (node) => {
+    const children = node.children.filter((child) => child.type !== "comment");
+    let previous = null;
+    for (const child of children) {
+      const current = plainNamespace(child);
+      if (previous && current && previous.name === current.name) {
+        removals.push([previous.body.endIndex - 1, previous.body.endIndex]);
+        removals.push([child.startIndex, current.body.startIndex + 1]);
+      }
+      previous = current;
+      if (child.childCount) visit(child);
+    }
+  };
+  visit(root);
+  if (!removals.length) return source;
+  removals.sort((a, b) => b[0] - a[0]);
+  for (const [start, end] of removals) source = source.slice(0, start) + source.slice(end);
+  return source;
+}
 /** Input is a lossless source lexical view, as returned by decodeSourceBytes.
  * Invalid UTF-8 uses an explicit byte-preserving representation, never U+FFFD.
  * No candidate file is modified or repaired by this function.
@@ -619,10 +651,23 @@ export async function canonicalizeCpp(source, { macros, projection = false } = {
     tree = parser.parse(source);
     if (!tree) throw new Error("The canonical parser did not produce a syntax tree");
     const context = macros ?? projectMacros([source]);
-    const result = render(tree.rootNode, context);
-    return projection
-      ? { ...result, projection: sourceProjection(tree.rootNode, context) }
-      : result;
+    const normalized = coalesceNamespaceScopes(source, tree.rootNode);
+    if (normalized === source) {
+      const result = render(tree.rootNode, context);
+      return projection
+        ? { ...result, projection: sourceProjection(tree.rootNode, context) }
+        : result;
+    }
+    const normalizedTree = parser.parse(normalized);
+    if (!normalizedTree) throw new Error("The canonical parser did not produce a normalized tree");
+    try {
+      const result = render(normalizedTree.rootNode, context);
+      return projection
+        ? { ...result, projection: sourceProjection(tree.rootNode, context) }
+        : result;
+    } finally {
+      normalizedTree.delete();
+    }
   } finally {
     tree?.delete();
     parser.delete();
