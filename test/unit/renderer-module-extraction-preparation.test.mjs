@@ -161,7 +161,8 @@ test("paired preparation seals generation ownership, file tasks and the selected
       generation: source.generation,
       agents: 1,
     });
-    assert.equal(manifest.version, "renderer-module-extraction-v3");
+    assert.equal(manifest.version, "renderer-module-extraction-v4");
+    assert.equal(manifest.assignmentContract, "symbol-inventory-v1");
     assert.equal(manifest.headerProtection, "pragma-once");
     assert.equal(manifest.scope, "experimental-module-pairs");
     assert.equal(manifest.agents, 1);

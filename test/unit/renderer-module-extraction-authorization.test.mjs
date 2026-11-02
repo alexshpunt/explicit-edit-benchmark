@@ -190,6 +190,29 @@ test("paired proofs bind file receipts and participant count separately", () => 
   assert.doesNotThrow(() =>
     validateExtractionProof(freshManifest, freshProof, freshReport, source),
   );
+  const symbolManifest = {
+    ...freshManifest,
+    version: "renderer-module-extraction-v4",
+    assignmentContract: "symbol-inventory-v1",
+  };
+  const symbolProof = {
+    ...freshProof,
+    version: "renderer-module-extraction-proof-v6",
+    assignmentContract: "symbol-inventory-v1",
+  };
+  assert.doesNotThrow(() =>
+    validateExtractionProof(symbolManifest, symbolProof, freshReport, source),
+  );
+  assert.throws(() => validateExtractionProof(symbolManifest, freshProof, freshReport, source));
+  assert.throws(() =>
+    validateExtractionProof(
+      symbolManifest,
+      { ...symbolProof, assignmentContract: "other" },
+      freshReport,
+      source,
+    ),
+  );
+  assert.throws(() => validateExtractionProof(freshManifest, symbolProof, freshReport, source));
   for (const [candidate, reference, receipt] of [
     [freshManifest, pairedProof, freshReport],
     [pairedManifest, freshProof, pairedReport],

@@ -48,6 +48,78 @@ function codeBlock(text) {
   return `${fence}cpp\n${text}${text.endsWith("\n") ? "" : "\n"}${fence}`;
 }
 
+/** Render only the independently prepared public symbol inventory. */
+export function moduleSymbolPrompt(task, entities) {
+  assert.equal(typeof task.file, "string");
+  assert.ok(Array.isArray(entities));
+  const inventory = entities.map(({ scope, kind, signature, members, action, occurrences }) => {
+    assert.equal(typeof scope, "string");
+    assert.equal(typeof kind, "string");
+    assert.equal(typeof signature, "string");
+    assert.ok(
+      members === undefined ||
+        (Array.isArray(members) && members.every((member) => typeof member === "string")),
+    );
+    assert.ok(action === undefined || action === "copy");
+    assert.ok(occurrences === undefined || (Number.isSafeInteger(occurrences) && occurrences > 1));
+    return {
+      scope,
+      kind,
+      signature,
+      ...(members ? { members } : {}),
+      ...(action ? { action } : {}),
+      ...(occurrences ? { occurrences } : {}),
+    };
+  });
+  return [
+    `Extract the assigned entities into ${task.file}.`,
+    "Find the complete entities in the shared source. Preserve their current code, declarations, dependencies, conditional behavior and compiler bindings. Do not rename or alter unrelated entities.",
+    "Move each listed entity into the destination; copy entries marked copy and leave their originals intact. Entries with occurrences require that many copies. The inventory is sorted independently of source order.",
+    ...(task.kind === "header"
+      ? ["Begin the destination header with #pragma once; do not add an include guard."]
+      : []),
+    ...(task.includes?.length
+      ? [`Destination project dependencies: ${JSON.stringify([...task.includes].sort())}`]
+      : []),
+    ...(task.kind === "header" || task.kind === "vendor-header"
+      ? [
+          "Keep the shared program using the extracted header without changing preceding preprocessing context.",
+        ]
+      : []),
+    "Preserve the project and its build behavior. Hold an exclusive flock on /workspace across each shared-source read and write. Keep the directory inode unchanged; /tmp is private to this participant. Do not compile or render in this turn.",
+    JSON.stringify(inventory, null, 2),
+  ].join("\n\n");
+}
+
+/** Keep diagnostic positions and source excerpts private in symbol-only cases. */
+export function moduleSymbolRecoveryPrompt(task, assignmentsDirectory) {
+  const scope = task.file
+    ? `Repair the extraction obligation for ${task.file}.`
+    : "Repair the reported project-preservation or integration failure.";
+  return [
+    scope,
+    "Inspect the current shared project and preserve unrelated changes. Do not assume assigned entities still occupy their original positions. Hold an exclusive flock on /workspace across each shared-source read and write.",
+    ...(assignmentsDirectory
+      ? [`Read the public assignment specifications under ${assignmentsDirectory}.`]
+      : []),
+    ...(task.recovery?.verified
+      ? [
+          JSON.stringify({
+            sourceMatched: task.recovery.verified.sourceMatched,
+            targetMatched: task.recovery.verified.targetMatched,
+          }),
+        ]
+      : []),
+    ...(task.kind === "integration-recovery"
+      ? [
+          `Run the supplied ${task.recovery.stage === "build-correction" ? "build" : "image"} validation script from the project root, fix the failure, and run it again: bash ${task.recovery.stage === "build-correction" ? "/feedback/check-build.sh" : "/feedback/check-images.sh"}.`,
+        ]
+      : [
+          "Finish this repair without compiling or rendering. The controller verifies the result after the repair.",
+        ]),
+  ].join("\n\n");
+}
+
 function fileAssignment(task) {
   const parts = [];
   let cursor = 0;

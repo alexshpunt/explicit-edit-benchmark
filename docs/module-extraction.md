@@ -16,8 +16,8 @@ capable of spelling a guard are unsupported. Internal conditions, vendor
 protection and activation-macro/include
 ordering remain unchanged. No `#pragma once` is inserted into `main.cpp`.
 
-Each own-header assignment and destination template requires exactly one
-`#pragma once` as the first non-empty line, with no include guard. Structural
+Each own-header assignment requires exactly one `#pragma once` as the first
+non-empty line, with no include guard. Structural
 verification checks this requirement independently of successful compilation.
 Missing, duplicate, inactive or misplaced pragmas and retained old guards fail
 that file's transfer obligation; they do not create a new scoring stage.
@@ -59,6 +59,23 @@ in place. The ordinary public suite generation retains its existing profile.
 Use the generated journal and matching preparation to prepare the extraction
 case, and verify the chosen input with the language server and scripted editors.
 
+## Agent assignments
+
+Each agent receives its destination file and a sorted inventory of its entities:
+namespace, kind and exact signature. Exact `using` declarations, repeated
+occurrence counts and destination dependencies are included. Shared `using`
+declarations are marked for copying. Some type entries include member signatures
+to distinguish different types with the same name. The inventory has no source
+positions, neighbouring anchors, function bodies or destination template. The
+same boundary applies to recovery messages and their assignment files; an agent
+may inspect the workspace and run the supplied integration validation script.
+
+Preparation rejects unsupported syntax and indistinguishable definitions rather
+than issuing an incomplete inventory. The scripted reference retains private
+ownership data for execution and verification; it is not mounted for model
+participants. A passed scripted reference establishes the checked extraction,
+not that an agent can independently solve it from the inventory.
+
 ## Model-free reference
 
 Use the renderer prerequisites and shared-worker rules in [the Multi-Agent
@@ -75,10 +92,11 @@ it does not modify its input preparation or journal. `verify` uses isolated
 scripted editors, then checks structure, compilation and both reference scenes.
 These editors verify the machinery, not a model's extraction ability.
 
-Fresh paired artifacts use case/plan version 3 and proof version 5. Their input
-and proof identities differ from earlier guarded cases. Legacy header-only and
-paired version-2 artifacts retain their original guard-based reconstruction;
-historical inputs, candidates and reports must not be rewritten.
+Fresh paired artifacts use case version 4, plan version 3 and proof version 6.
+Earlier artifacts remain loadable and retain their original reconstruction and
+proof rules. Model execution requires a fresh case; old assignments exposed
+source fragments and must not be delivered under the new contract. Historical
+inputs, candidates and reports must not be rewritten.
 
 ## Recovery and Score
 

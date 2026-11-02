@@ -9,7 +9,12 @@ import { admitProviderDelivery, createProviderRecovery } from "../execution/prov
 import { loadExtraction } from "./prepare.mjs";
 import { runExtraction } from "./run.mjs";
 import { prepareExtractionReference, extractionReference } from "./reference.mjs";
-import { moduleExtractionPrompt, moduleRecoveryPrompt } from "./prompt.mjs";
+import {
+  moduleExtractionPrompt,
+  moduleRecoveryPrompt,
+  moduleSymbolPrompt,
+  moduleSymbolRecoveryPrompt,
+} from "./prompt.mjs";
 import { writeTree } from "../generation/generator.mjs";
 import { runExtractionRecovery } from "./recovery.mjs";
 import { EXTRACTION_RECOVERY_POLICY, extractionScore } from "./score.mjs";
@@ -19,9 +24,11 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const proofVersion = (manifest) =>
   manifest.scope !== "experimental-module-pairs"
     ? "renderer-module-extraction-proof-v1"
-    : manifest.version === "renderer-module-extraction-v3"
-      ? "renderer-module-extraction-proof-v5"
-      : "renderer-module-extraction-proof-v4";
+    : manifest.version === "renderer-module-extraction-v4"
+      ? "renderer-module-extraction-proof-v6"
+      : manifest.version === "renderer-module-extraction-v3"
+        ? "renderer-module-extraction-proof-v5"
+        : "renderer-module-extraction-proof-v4";
 
 /** Require an actual passed reference report bound to the exact clean runner. */
 export function validateExtractionProof(manifest, proof, report, sourceIdentity) {
@@ -36,12 +43,22 @@ export function validateExtractionProof(manifest, proof, report, sourceIdentity)
   assert.equal(report.initial, manifest.initial);
   if (paired) {
     assert.ok(
-      ["renderer-module-extraction-v2", "renderer-module-extraction-v3"].includes(manifest.version),
+      [
+        "renderer-module-extraction-v2",
+        "renderer-module-extraction-v3",
+        "renderer-module-extraction-v4",
+      ].includes(manifest.version),
     );
-    if (manifest.version === "renderer-module-extraction-v3") {
+    if (
+      ["renderer-module-extraction-v3", "renderer-module-extraction-v4"].includes(manifest.version)
+    ) {
       assert.equal(manifest.headerProtection, "pragma-once");
       assert.equal(proof.headerProtection, manifest.headerProtection);
       assert.equal(report.headerProtection, manifest.headerProtection);
+    }
+    if (manifest.version === "renderer-module-extraction-v4") {
+      assert.equal(manifest.assignmentContract, "symbol-inventory-v1");
+      assert.equal(proof.assignmentContract, manifest.assignmentContract);
     }
     assert.equal(report.version, "renderer-module-extraction-run-v4");
     assert.equal(report.scope, manifest.scope);
@@ -146,6 +163,7 @@ export async function verifyExtraction(prepared, outputPath, { signal } = {}) {
   const proof = {
     version: proofVersion(manifest),
     ...(manifest.headerProtection ? { headerProtection: manifest.headerProtection } : {}),
+    ...(manifest.assignmentContract ? { assignmentContract: manifest.assignmentContract } : {}),
     ...(manifest.scope === "experimental-module-pairs"
       ? {
           scope: manifest.scope,
@@ -190,8 +208,14 @@ export async function runModelExtraction(
       ),
       { code: "EXTRACTION_LIVE_CONTEXT_REQUIRED" },
     );
-  const { manifest, plan } = await loadExtraction(prepared);
+  const { manifest, plan, publicAssignments } = await loadExtraction(prepared);
   assert.equal(manifest.scope, "experimental-module-pairs");
+  assert.equal(
+    manifest.version,
+    "renderer-module-extraction-v4",
+    "Prepare a fresh symbol-only case before model execution",
+  );
+  assert.ok(publicAssignments instanceof Map);
   assert.equal(typeof proofPath, "string");
   const proof = JSON.parse(await readFile(proofPath, "utf8"));
   const reportBytes = await readFile(
@@ -201,7 +225,7 @@ export async function runModelExtraction(
   const sourceIdentity = await restoringSourceIdentity();
   validateExtractionProof(manifest, proof, JSON.parse(reportBytes), sourceIdentity);
   const output = path.resolve(outputPath);
-  const drivers = recoveryModelDrivers(output, config);
+  const drivers = recoveryModelDrivers(output, config, { publicAssignments });
   try {
     const result = await runExtractionRecovery(plan, output, {
       ...drivers,
@@ -231,7 +255,7 @@ export async function runModelExtraction(
 }
 
 /** Structural recovery stays with its original live context; integration owns fresh participants. */
-export function recoveryModelDrivers(outputPath, config) {
+export function recoveryModelDrivers(outputPath, config, { publicAssignments } = {}) {
   const output = path.resolve(outputPath);
   const stages = new Map();
   const owners = new WeakMap();
@@ -242,6 +266,7 @@ export function recoveryModelDrivers(outputPath, config) {
         stage,
         modelExtractionDrivers(path.join(output, "stages", stage), config, {
           workspace: path.join(output, "workspace"),
+          publicAssignments,
         }),
       );
     return stages.get(stage);
@@ -269,10 +294,17 @@ export function recoveryModelDrivers(outputPath, config) {
  * The public model entry point validates its proof before constructing drivers.
  * Call cleanup only after the pool has closed every owned participant.
  */
-export function modelExtractionDrivers(outputPath, config, { workspace } = {}) {
+export function modelExtractionDrivers(outputPath, config, { workspace, publicAssignments } = {}) {
   const output = path.resolve(outputPath);
   const project = workspace ?? path.join(output, "workspace");
   const participantConfig = { ...config };
+  const symbolOnly = publicAssignments !== undefined;
+  const assignmentFor = (task) => {
+    if (!symbolOnly) return moduleExtractionPrompt(task);
+    const spec = publicAssignments.get(task.id);
+    assert.ok(spec, "Missing public symbol assignment");
+    return moduleSymbolPrompt(task, spec);
+  };
   delete participantConfig.cppCorrectionCommand;
   const feedback = new Map();
   const states = new Map();
@@ -318,11 +350,11 @@ export function modelExtractionDrivers(outputPath, config, { workspace } = {}) {
             assert.match(member.id, /^[a-z0-9-]+$/);
             await writeFile(
               path.join(directory, "assignments", member.id + ".txt"),
-              moduleExtractionPrompt(member),
+              assignmentFor(member),
               { flag: "wx", mode: 0o600 },
             );
           }
-          await writeTree(path.join(directory, "initial"), task.initialSources);
+          if (!symbolOnly) await writeTree(path.join(directory, "initial"), task.initialSources);
           directories = {
             assignmentsDirectory: `/feedback/${name}/assignments`,
             initialDirectory: `/feedback/${name}/initial`,
@@ -336,8 +368,10 @@ export function modelExtractionDrivers(outputPath, config, { workspace } = {}) {
             mode: 0o600,
           });
         }
-        assignment = moduleRecoveryPrompt(task, directories);
-      } else assignment = moduleExtractionPrompt(task);
+        assignment = symbolOnly
+          ? moduleSymbolRecoveryPrompt(task, directories?.assignmentsDirectory)
+          : moduleRecoveryPrompt(task, directories);
+      } else assignment = assignmentFor(task);
       const file = number === 1 ? "module.txt" : `module-${number}.txt`;
       await writeFile(path.join(record.directory, file), assignment, {
         flag: "wx",
@@ -346,7 +380,9 @@ export function modelExtractionDrivers(outputPath, config, { workspace } = {}) {
       const prompt =
         Buffer.byteLength(assignment) <= 4096
           ? assignment
-          : `Read /feedback/${file} completely, including every source fragment. Complete that one whole-file assignment in the shared workspace and finish.`;
+          : symbolOnly
+            ? `Read /feedback/${file} completely. Complete that one whole-file assignment in the shared workspace and finish.`
+            : `Read /feedback/${file} completely, including every source fragment. Complete that one whole-file assignment in the shared workspace and finish.`;
       await admitProviderDelivery(recovery, { signal });
       return driver.execute(prompt, { completion: "turn", signal });
     },
