@@ -9,7 +9,8 @@ test("a selected pair and its header-only dependencies are complete separate fil
   const input = fixture(),
     initial = structuredClone(input.initial);
   const plan = preparePairedExtraction({ ...input, modules: ["frond_a"], agents: 1 });
-  assert.equal(plan.version, "renderer-module-extraction-plan-v2");
+  assert.equal(plan.version, "renderer-module-extraction-plan-v3");
+  assert.equal(plan.headerProtection, "pragma-once");
   assert.equal(plan.scope, "experimental-module-pairs");
   assert.equal(plan.agents, 1);
   assert.deepEqual(plan.modules, ["frond_a"]);
@@ -22,14 +23,17 @@ test("a selected pair and its header-only dependencies are complete separate fil
   assert.ok(implementation.destination.includes("int operation_a() { return identity(1); }"));
   assert.ok(!plan.expected["main.cpp"].includes("int operation_a() { return identity(1); }"));
   assert.ok(plan.expected["main.cpp"].includes("int operation_b() { return 2; }"));
-  assert.ok(plan.expected["main.cpp"].includes("#ifndef B_H"));
+  assert.ok(!plan.expected["main.cpp"].includes("#ifndef B_H"));
+  assert.ok(plan.initial["main.cpp"].includes("int operation_b();"));
   assert.ok(!Object.hasOwn(plan.expected, "frond_b.h"));
   assert.equal(plan.expected["frond_a.cpp"], implementation.destination);
   assert.deepEqual(input.initial, initial);
-  assert.equal(plan.initialIdentity, treeIdentity(initial));
+  assert.equal(plan.parentInitial, treeIdentity(initial));
+  assert.equal(plan.initialIdentity, treeIdentity(plan.initial));
+  assert.notEqual(plan.initialIdentity, plan.parentInitial);
   for (const task of plan.tasks)
     for (const fragment of task.fragments)
-      assert.equal(fragment.text, initial["main.cpp"].slice(fragment.start, fragment.end));
+      assert.equal(fragment.text, plan.initial["main.cpp"].slice(fragment.start, fragment.end));
   const pieces = plan.tasks.flatMap((task) => task.fragments).sort((a, b) => a.start - b.start);
   for (let index = 1; index < pieces.length; index++)
     assert.ok(pieces[index - 1].end <= pieces[index].start);

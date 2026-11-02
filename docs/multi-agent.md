@@ -459,3 +459,7 @@ receive an explicit editing-code allowlist, never the whole trusted suite.
 not relabelled common-protocol submissions. The independent reference editors
 and their shared-file behavior are described in
 [rotating concurrent editing](renderer-concurrent.md).
+
+[Experimental module extraction](module-extraction.md) is a separate whole-file
+experiment with generation-derived ownership and pragma-once project headers.
+Its observations are not results for the public 71-task suite.

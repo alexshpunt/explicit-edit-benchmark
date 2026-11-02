@@ -215,7 +215,11 @@ export function prepareHeaderExtraction({ initial, headers, modules } = {}) {
 export function gradeExtraction(plan, tree) {
   requirePlan(
     record(plan) &&
-      [version, "renderer-module-extraction-plan-v2"].includes(plan.version) &&
+      [
+        version,
+        "renderer-module-extraction-plan-v2",
+        "renderer-module-extraction-plan-v3",
+      ].includes(plan.version) &&
       record(plan.initial) &&
       record(plan.expected) &&
       typeof plan.expected["main.cpp"] === "string" &&

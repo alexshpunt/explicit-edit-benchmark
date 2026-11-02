@@ -11,6 +11,8 @@ const help = `Experimental paired-module extraction
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
 whole-file assignments, never pre-extracted from the initial monolith.
+Fresh cases remove outer project-header guards through generation replay. Own
+headers require #pragma once as their first non-empty line, not an include guard.
 One to ten participants start together, with fixed ownership of their file tasks.
 prepare and verify are model-free. verify uses isolated scripted participants,
 then structural assessment, compilation and one renderer process on build success.

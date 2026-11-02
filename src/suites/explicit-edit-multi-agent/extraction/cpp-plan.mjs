@@ -4,6 +4,7 @@ import { cppStructure } from "../cpp/cpp-structure.mjs";
 import { cppTokens, includeDirectives } from "../cpp/cpp-tokens.mjs";
 import { treeIdentity } from "../generation/generator.mjs";
 import { neutralSourcePath } from "../generation/origin-markers.mjs";
+import { stripProjectGuards } from "../generation/project-header-guards.mjs";
 
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 const standardUsing = (text) => /^using\s+(?:namespace\s+)?std\b/.test(text);
@@ -22,7 +23,14 @@ function wrapped(scope, text) {
 }
 
 /** Build complete implementation assignments from current physical units and replayed file ownership. */
-export function implementationTasks({ initial, provenance, files, startIndex = 0 }) {
+export function implementationTasks({
+  initial,
+  provenance,
+  files,
+  startIndex = 0,
+  kind = "implementation",
+}) {
+  assert.ok(["implementation", "header"].includes(kind));
   assert.equal(treeIdentity(initial), provenance.initialIdentity);
   assert.ok(Array.isArray(files) && files.length > 0 && new Set(files).size === files.length);
   assert.ok(Number.isSafeInteger(startIndex) && startIndex >= 0);
@@ -30,7 +38,7 @@ export function implementationTasks({ initial, provenance, files, startIndex = 0
   assert.equal(typeof source, "string");
   const metadata = new Map(provenance.files.map((file) => [file.file, file]));
   for (const file of files) {
-    assert.match(file, /^[A-Za-z_]\w*\.cpp$/);
+    assert.match(file, kind === "header" ? /^[A-Za-z_]\w*\.h$/ : /^[A-Za-z_]\w*\.cpp$/);
     assert.ok(file !== "main.cpp" && metadata.has(file) && !Object.hasOwn(initial, file));
   }
   const ownerNames = [],
@@ -74,6 +82,17 @@ export function implementationTasks({ initial, provenance, files, startIndex = 0
   const comments = tokens.filter(
     (token) => token.text.startsWith("//") || token.text.startsWith("/*"),
   );
+  const fragmentKey = (fragment) =>
+    JSON.stringify([fragment.text.trim(), fragment.scope, fragment.kind]);
+  const occurrences = new Map();
+  for (const unit of [
+    ...structure.units,
+    ...structure.directives.map((unit) => ({ ...unit, kind: "directive" })),
+    ...comments.map((unit) => ({ ...unit, scope: scopeAt(unit.start, unit.end), kind: "comment" })),
+  ]) {
+    const key = fragmentKey({ ...unit, text: source.slice(unit.start, unit.end) });
+    occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+  }
   const protectedBytes = new Uint8Array(source.length);
   for (const token of tokens)
     if (!/^[A-Za-z_]\w*$/.test(token.text)) protectedBytes.fill(1, token.start, token.end);
@@ -92,8 +111,18 @@ export function implementationTasks({ initial, provenance, files, startIndex = 0
       namespaceShells.push({ start: namespace.end, end: namespace.end + semicolon[0].length });
   }
   return files.map((file, index) => {
-    const original = metadata.get(file),
-      originalStructure = cppStructure(original.text);
+    const original = metadata.get(file);
+    let originalText = original.text;
+    if (kind === "header") {
+      const guard = /^[ \t\r\n]*#[ \t]*ifndef[ \t]+([A-Za-z_]\w*)/.exec(originalText)?.[1];
+      const { record } = stripProjectGuards({ "main.cpp": originalText }, [{ file, guard }]);
+      for (const edit of [...record.edits].reverse())
+        originalText =
+          originalText.slice(0, edit.start) +
+          edit.removed.replace(/[^\r\n]/g, " ") +
+          originalText.slice(edit.start + edit.removed.length);
+    }
+    const originalStructure = cppStructure(originalText);
     assert.ok(
       originalStructure.namespaces.length > 0,
       "Implementation has no supported namespace envelope",
@@ -138,7 +167,7 @@ export function implementationTasks({ initial, provenance, files, startIndex = 0
       assert.equal(piece.text, source.slice(piece.start, piece.end));
       assert.ok(namesIn(piece.start, piece.end).every((owner) => owner === file));
     }
-    const preamble = preambleParts.join("");
+    const preamble = (kind === "header" ? "#pragma once\n" : "") + preambleParts.join("");
     preprocessorOnly(preamble);
     const expectedIncludes = includeDirectives(originalPrefix).map((include) => ({
       file: neutralSourcePath(include.file, provenance.originName),
@@ -157,17 +186,25 @@ export function implementationTasks({ initial, provenance, files, startIndex = 0
     const mark = (range) => classified.fill(1, range.start, range.end);
     prefixParts.forEach(mark);
     namespaceShells.forEach(mark);
-    const add = (range, scope, kind) => {
+    const add = (range, scope, kind, inPreamble = false) => {
       assert.ok(namesIn(range.start, range.end).every((owner) => owner === file));
       fragments.push({
         start: range.start,
         end: range.end,
         text: source.slice(range.start, range.end),
+        ...(inPreamble ? { inPreamble: true } : {}),
         scope,
         kind,
       });
       mark(range);
     };
+    if (kind === "header") {
+      for (const unit of [...structure.units, ...structure.directives]) {
+        if (!prefixParts.some((part) => part.start <= unit.start && unit.end <= part.end)) continue;
+        if (/^\s*#\s*include\b/.test(source.slice(unit.start, unit.end))) continue;
+        add(unit, unit.scope, unit.kind, true);
+      }
+    }
     for (const unit of structure.units) {
       const unitOwners = namesIn(unit.start, unit.end);
       if (!unitOwners.includes(file)) continue;
@@ -228,6 +265,23 @@ export function implementationTasks({ initial, provenance, files, startIndex = 0
       id: `${id}-fragment-${String(number + 1).padStart(3, "0")}`,
       sha256: hash(fragment.text),
     }));
+    if (kind === "header") {
+      const unique = finalFragments.filter(
+        (fragment) => occurrences.get(fragmentKey(fragment)) === 1,
+      );
+      for (const fragment of finalFragments) {
+        const key = fragmentKey(fragment);
+        if (
+          occurrences.get(key) <= finalFragments.filter((item) => fragmentKey(item) === key).length
+        )
+          continue;
+        const previous = unique.findLast((item) => item.end <= fragment.start);
+        const next = unique.find((item) => item.start >= fragment.end);
+        assert.ok(previous || next, "Repeated header unit has no unique live context");
+        if (previous) fragment.afterFragment = previous.id;
+        if (next) fragment.beforeFragment = next.id;
+      }
+    }
     const usingGroups = new Map();
     for (const item of using) {
       if (!usingGroups.has(item.scope)) usingGroups.set(item.scope, []);
@@ -244,6 +298,7 @@ export function implementationTasks({ initial, provenance, files, startIndex = 0
       group = [];
     };
     for (const fragment of finalFragments) {
+      if (fragment.inPreamble) continue;
       if (scope !== fragment.scope) {
         flush();
         scope = fragment.scope;
@@ -254,7 +309,7 @@ export function implementationTasks({ initial, provenance, files, startIndex = 0
     return {
       id,
       file,
-      kind: "implementation",
+      kind,
       guard: null,
       parent: null,
       includes: [...new Set(includes)],

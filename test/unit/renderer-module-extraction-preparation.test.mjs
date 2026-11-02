@@ -9,6 +9,8 @@ import {
   writeTree,
 } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
 import { pairedExtractionFixture } from "../helpers/module-extraction-generation.mjs";
+import { restoreProjectGuards } from "../../src/suites/explicit-edit-multi-agent/generation/project-header-guards.mjs";
+import { preparePairedExtraction } from "../../src/suites/explicit-edit-multi-agent/extraction/paired-plan.mjs";
 import {
   prepareExtraction,
   loadExtraction,
@@ -78,6 +80,42 @@ test("changed preparation source is rejected before an extraction output is crea
   }
 });
 
+test("legacy serialized paired cases retain guard-based reconstruction", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "extraction-legacy-paired-"));
+  try {
+    const plan = preparePairedExtraction({
+      ...pairedExtractionFixture(),
+      modules: ["frond_a"],
+      agents: 1,
+      headerProtection: "guard",
+    });
+    const bytes = JSON.stringify(plan) + "\n";
+    const manifest = {
+      version: "renderer-module-extraction-v2",
+      scope: plan.scope,
+      initial: plan.initialIdentity,
+      expected: treeIdentity(plan.expected),
+      modules: plan.modules,
+      agents: plan.agents,
+      files: plan.tasks.map(({ id, file }) => ({ id, file })),
+      pixels: ["0".repeat(64), "1".repeat(64)],
+      planSha256: createHash("sha256").update(bytes).digest("hex"),
+      provenance: {
+        initial: plan.initialIdentity,
+        workloadSha256: "2".repeat(64),
+        generationSha256: createHash("sha256")
+          .update(JSON.stringify(plan.generation))
+          .digest("hex"),
+      },
+    };
+    await writeFile(path.join(root, "plan.json"), bytes);
+    await writeFile(path.join(root, "manifest.json"), JSON.stringify(manifest));
+    assert.deepEqual(await loadExtraction(root), { manifest, plan });
+    assert.match(plan.expected["frond_a.h"], /^#ifndef A_H\n#define A_H\n/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 async function pairedInput(root) {
   const fixture = pairedExtractionFixture();
   const directory = path.join(root, "input"),
@@ -123,17 +161,26 @@ test("paired preparation seals generation ownership, file tasks and the selected
       generation: source.generation,
       agents: 1,
     });
-    assert.equal(manifest.version, "renderer-module-extraction-v2");
+    assert.equal(manifest.version, "renderer-module-extraction-v3");
+    assert.equal(manifest.headerProtection, "pragma-once");
     assert.equal(manifest.scope, "experimental-module-pairs");
     assert.equal(manifest.agents, 1);
     const loaded = await loadExtraction(output);
     assert.deepEqual(loaded.manifest, manifest);
-    assert.deepEqual(loaded.plan.initial, source.fixture.initial);
+    assert.deepEqual(
+      restoreProjectGuards(loaded.plan.initial, loaded.plan.generation.manifest.operations.at(-1)),
+      source.fixture.initial,
+    );
     assert.deepEqual(
       new Set(manifest.files.map((file) => file.file)),
       new Set(["frond_a.h", "frond_a.cpp", "frond_math.h"]),
     );
-    assert.deepEqual(loaded.plan.generation, source.fixture.generation);
+    assert.deepEqual(loaded.plan.generation.mixing, source.fixture.generation.mixing);
+    assert.deepEqual(
+      loaded.plan.generation.manifest.operations.slice(0, -1),
+      source.fixture.generation.manifest.operations,
+    );
+    assert.equal(manifest.provenance.preparationInitial, source.fixture.generation.manifest.final);
     await writeFile(path.join(output, "manifest.json"), JSON.stringify({ ...manifest, agents: 2 }));
     await assert.rejects(loadExtraction(output));
   } finally {

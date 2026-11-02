@@ -7,7 +7,8 @@ import { prepareHeaderExtraction } from "./plan.mjs";
 
 const version = "renderer-module-extraction-v1";
 const scope = "experimental-project-headers";
-const pairedVersion = "renderer-module-extraction-v2";
+const pairedVersion = "renderer-module-extraction-v3";
+const legacyPairedVersion = "renderer-module-extraction-v2";
 const pairedScope = "experimental-module-pairs";
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const sha256 = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -86,12 +87,17 @@ export async function prepareExtraction(
     expected: treeIdentity(plan.expected),
     modules: [...modules],
     ...(paired
-      ? { agents: plan.agents, files: plan.tasks.map(({ id, file }) => ({ id, file })) }
+      ? {
+          headerProtection: plan.headerProtection,
+          agents: plan.agents,
+          files: plan.tasks.map(({ id, file }) => ({ id, file })),
+        }
       : {}),
     pixels: [...source.pixels],
     planSha256: hash(planBytes),
     provenance: {
-      initial: source.initial,
+      initial: plan.initialIdentity,
+      ...(paired ? { preparationInitial: source.initial } : {}),
       workloadSha256: source.workloadSha256,
       ...(paired ? { generationSha256: hash(JSON.stringify(plan.generation)) } : {}),
     },
@@ -113,8 +119,10 @@ export async function loadExtraction(preparedPath) {
   const prepared = path.resolve(preparedPath);
   const manifest = JSON.parse(await readFile(path.join(prepared, "manifest.json"), "utf8"));
   assert.ok(record(manifest));
-  const paired = manifest.version === pairedVersion;
-  assert.equal(manifest.version, paired ? pairedVersion : version);
+  const fresh = manifest.version === pairedVersion;
+  const paired = fresh || manifest.version === legacyPairedVersion;
+  assert.ok(paired || manifest.version === version);
+  if (fresh) assert.equal(manifest.headerProtection, "pragma-once");
   assert.equal(manifest.scope, paired ? pairedScope : scope);
   assert.ok(sha256(manifest.initial) && sha256(manifest.expected) && sha256(manifest.planSha256));
   assert.ok(pixelsValid(manifest.pixels) && modulesValid(manifest.modules, paired));
@@ -125,7 +133,11 @@ export async function loadExtraction(preparedPath) {
   const plan = JSON.parse(bytes.toString("utf8"));
   assert.ok(record(plan));
   if (paired) {
-    assert.equal(plan.version, "renderer-module-extraction-plan-v2");
+    assert.equal(
+      plan.version,
+      fresh ? "renderer-module-extraction-plan-v3" : "renderer-module-extraction-plan-v2",
+    );
+    if (fresh) assert.equal(manifest.provenance.preparationInitial, plan.parentInitial);
     assert.ok(sha256(manifest.provenance.generationSha256));
     assert.equal(hash(JSON.stringify(plan.generation)), manifest.provenance.generationSha256);
     const { preparePairedExtraction } = await import("./paired-plan.mjs");
@@ -135,6 +147,7 @@ export async function loadExtraction(preparedPath) {
       modules: manifest.modules,
       generation: plan.generation,
       agents: manifest.agents,
+      headerProtection: fresh ? "pragma-once" : "guard",
     });
     assert.deepEqual(plan, expected);
     assert.deepEqual(

@@ -62,22 +62,34 @@ function fileAssignment(task) {
     `Extract the complete current file into ${task.file}.`,
     "Move every assigned fragment below in its listed order. Locate complete current units in their stated namespace. Keep every identifier, prototype, definition, comment, literal and inactive branch unchanged.",
     "Assemble the destination from the following fenced C++ template. Replace each [[fragment-id]] slot with that complete source fragment. Copy only the code inside the template fence; keep all instruction paragraphs outside the source file. Keep the template's includes, namespace shells, imports and conditional wrappers in their shown positions. Keep an activation include after its implementation macro.",
+    ...(task.kind === "header"
+      ? [
+          "Add #pragma once as the first non-empty line of the destination header. Do not add an include guard.",
+        ]
+      : []),
     codeBlock(parts.join("")),
-    task.replacement
-      ? `Replace the first removed source fragment in main.cpp with:\n\n${task.replacement}`
-      : "Remove the assigned source fragments from main.cpp without inserting another include.",
+    task.kind === "header"
+      ? `Remove the assigned fragments without a local replacement. Insert ${task.replacement.trim()} at the current first owned unit's global position: before its outermost containing namespace opener, or immediately before the unit if it is already global. Leave all preceding source and imports in place. Do not collect, sort or hoist project includes to the start of main.cpp. Preserve activation macros and include ordering.`
+      : task.replacement
+        ? `Replace the first removed source fragment in main.cpp with:\n\n${task.replacement}`
+        : "Remove the assigned source fragments from main.cpp without inserting another include.",
     "Retain shared namespace shells, standard-library imports and include context in main.cpp where peer fragments still need them. Preserve every unassigned fragment. Hold an exclusive flock on the shared /workspace directory while re-reading and updating main.cpp; use flock -x /workspace around the whole read-modify-write command. Keep the directory inode unchanged. Use this same shared lock for every participant; /tmp is private to each participant.",
     "Complete this one whole-file assignment and return control. Do not rename, reorder, clean up, compile or render. Shared verification starts after every original file queue finishes; your live context may then receive one bounded repair for a failed obligation.",
     ...task.fragments.map(
-      ({ id, text, scope }, index) =>
-        `Source fragment ${index + 1} (${id}), namespace ${scope || "(global)"}:\n\n${codeBlock(text)}`,
+      ({ id, text, scope, beforeFragment, afterFragment }, index) =>
+        `Source fragment ${index + 1} (${id}), namespace ${scope || "(global)"}:${beforeFragment || afterFragment ? `\nLive context: ${afterFragment ? `after ${afterFragment}` : ""}${beforeFragment && afterFragment ? ", " : ""}${beforeFragment ? `before ${beforeFragment}` : ""}. Locate those unique complete owned units in current source. Choose the nearest matching block toward these anchors, without crossing a substantive peer unit; retained standard imports and comments may intervene. Refuse missing or ambiguous context. Never use old offsets or a global occurrence number.` : ""}\n\n${codeBlock(text)}`,
     ),
   ].join("\n\n");
 }
 
 /** Render one complete assignment without the old atomic or JSON-hunk wrapper. */
 export function moduleExtractionPrompt(task) {
-  if (task.kind === "implementation" || task.kind === "vendor-header") return fileAssignment(task);
+  if (
+    task.kind === "implementation" ||
+    task.kind === "vendor-header" ||
+    (task.kind === "header" && !task.guard)
+  )
+    return fileAssignment(task);
   const includes = task.includes.length
     ? task.includes.map((file) => `#include "${file}"`).join("\n")
     : "(none)";

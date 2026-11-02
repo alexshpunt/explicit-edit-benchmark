@@ -4,6 +4,7 @@ import { byteToCharacter } from "../cpp/cpp-offsets.mjs";
 import { cppTokens, pack, treeIdentity } from "../generation/generator.mjs";
 import { reverseOperation } from "../generation/inverse.mjs";
 import { neutralFiles, neutralSourcePath } from "../generation/origin-markers.mjs";
+import { stripProjectGuards } from "../generation/project-header-guards.mjs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 function uniform(block, start, end) {
@@ -241,6 +242,18 @@ export function traceGenerationOrigins({ initial, manifest, mixing }) {
       delete blocks[source];
     } else if (record.kind === "rename" || record.kind === "origin-markers") {
       blocks["main.cpp"] = renamed(blocks["main.cpp"], record.edits);
+    } else if (record.kind === "project-header-guards") {
+      const replay = stripProjectGuards(texts(blocks), record.headers);
+      assert.deepEqual(replay.record, record);
+      const block = blocks["main.cpp"];
+      blocks["main.cpp"] = replace(
+        block,
+        record.edits.map((edit) => ({
+          start: edit.start,
+          end: edit.start + edit.removed.length,
+          block: literal("", 0),
+        })),
+      );
     } else if (record.kind === "compact") {
       const block = blocks["main.cpp"];
       blocks["main.cpp"] = replace(

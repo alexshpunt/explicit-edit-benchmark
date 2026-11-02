@@ -11,6 +11,7 @@ import {
   writeTree,
 } from "../../src/suites/explicit-edit-multi-agent/generation/generator.mjs";
 import { loadExtraction } from "../../src/suites/explicit-edit-multi-agent/extraction/prepare.mjs";
+import { restoreProjectGuards } from "../../src/suites/explicit-edit-multi-agent/generation/project-header-guards.mjs";
 
 import { pairedExtractionFixture } from "../helpers/module-extraction-generation.mjs";
 const script = new URL("../../scripts/module-extraction.mjs", import.meta.url);
@@ -107,7 +108,11 @@ test("the separate extraction CLI prepares the requested current-source module",
     assert.equal(result.status, 0);
     assert.deepEqual(JSON.parse(result.stdout).modules, ["frond_a"]);
     const loaded = await loadExtraction(output);
-    assert.deepEqual(loaded.plan.initial, initial);
+    assert.equal(loaded.plan.headerProtection, "pragma-once");
+    assert.deepEqual(
+      restoreProjectGuards(loaded.plan.initial, loaded.plan.generation.manifest.operations.at(-1)),
+      initial,
+    );
     assert.equal(loaded.plan.tasks.length, 3);
     assert.equal(loaded.plan.agents, 1);
     assert.deepEqual(

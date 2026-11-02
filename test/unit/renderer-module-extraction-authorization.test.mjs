@@ -176,6 +176,28 @@ test("paired proofs bind file receipts and participant count separately", () => 
   assert.doesNotThrow(() =>
     validateExtractionProof(pairedManifest, pairedProof, pairedReport, source),
   );
+  const freshManifest = {
+    ...pairedManifest,
+    version: "renderer-module-extraction-v3",
+    headerProtection: "pragma-once",
+  };
+  const freshProof = {
+    ...pairedProof,
+    version: "renderer-module-extraction-proof-v5",
+    headerProtection: "pragma-once",
+  };
+  const freshReport = { ...pairedReport, headerProtection: "pragma-once" };
+  assert.doesNotThrow(() =>
+    validateExtractionProof(freshManifest, freshProof, freshReport, source),
+  );
+  for (const [candidate, reference, receipt] of [
+    [freshManifest, pairedProof, freshReport],
+    [pairedManifest, freshProof, pairedReport],
+    [{ ...freshManifest, headerProtection: "guard" }, freshProof, freshReport],
+    [freshManifest, { ...freshProof, headerProtection: "guard" }, freshReport],
+    [freshManifest, freshProof, { ...freshReport, headerProtection: "guard" }],
+  ])
+    assert.throws(() => validateExtractionProof(candidate, reference, receipt, source));
   for (const version of [
     "renderer-module-extraction-proof-v1",
     "renderer-module-extraction-proof-v2",

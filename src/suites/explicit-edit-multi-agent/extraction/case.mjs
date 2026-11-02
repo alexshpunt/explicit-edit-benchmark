@@ -16,14 +16,17 @@ import { EXTRACTION_RECOVERY_POLICY, extractionScore } from "./score.mjs";
 import { validateExtractionDeliveries } from "./continuation.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const proofVersion = (manifest) =>
+  manifest.scope !== "experimental-module-pairs"
+    ? "renderer-module-extraction-proof-v1"
+    : manifest.version === "renderer-module-extraction-v3"
+      ? "renderer-module-extraction-proof-v5"
+      : "renderer-module-extraction-proof-v4";
 
 /** Require an actual passed reference report bound to the exact clean runner. */
 export function validateExtractionProof(manifest, proof, report, sourceIdentity) {
   const paired = manifest.scope === "experimental-module-pairs";
-  assert.equal(
-    proof.version,
-    paired ? "renderer-module-extraction-proof-v4" : "renderer-module-extraction-proof-v1",
-  );
+  assert.equal(proof.version, proofVersion(manifest));
   assert.equal(proof.kind, "scripted-reference");
   assert.equal(proof.status, "pass");
   assert.equal(proof.planSha256, manifest.planSha256);
@@ -32,7 +35,14 @@ export function validateExtractionProof(manifest, proof, report, sourceIdentity)
   assert.equal(report.status, "complete");
   assert.equal(report.initial, manifest.initial);
   if (paired) {
-    assert.equal(manifest.version, "renderer-module-extraction-v2");
+    assert.ok(
+      ["renderer-module-extraction-v2", "renderer-module-extraction-v3"].includes(manifest.version),
+    );
+    if (manifest.version === "renderer-module-extraction-v3") {
+      assert.equal(manifest.headerProtection, "pragma-once");
+      assert.equal(proof.headerProtection, manifest.headerProtection);
+      assert.equal(report.headerProtection, manifest.headerProtection);
+    }
     assert.equal(report.version, "renderer-module-extraction-run-v4");
     assert.equal(report.scope, manifest.scope);
     assert.equal(proof.scope, manifest.scope);
@@ -134,10 +144,8 @@ export async function verifyExtraction(prepared, outputPath, { signal } = {}) {
   assert.deepEqual(await restoringSourceIdentity(), sourceIdentity);
   const bytes = await readFile(path.join(output, "report.json"));
   const proof = {
-    version:
-      manifest.scope === "experimental-module-pairs"
-        ? "renderer-module-extraction-proof-v4"
-        : "renderer-module-extraction-proof-v1",
+    version: proofVersion(manifest),
+    ...(manifest.headerProtection ? { headerProtection: manifest.headerProtection } : {}),
     ...(manifest.scope === "experimental-module-pairs"
       ? {
           scope: manifest.scope,

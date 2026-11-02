@@ -34,10 +34,14 @@ export async function runExtraction(
   await mkdir(output, { mode: 0o700 });
   const workspace = path.join(output, "workspace");
   await writeTree(workspace, plan.initial);
-  const paired = plan.version === "renderer-module-extraction-plan-v2";
+  const paired = [
+    "renderer-module-extraction-plan-v2",
+    "renderer-module-extraction-plan-v3",
+  ].includes(plan.version);
   const agents = plan.agents ?? Math.min(plan.tasks.length, 10);
   const report = {
     version: paired ? "renderer-module-extraction-run-v2" : "renderer-module-extraction-run-v1",
+    ...(plan.headerProtection ? { headerProtection: plan.headerProtection } : {}),
     status: "running",
     initial: plan.initialIdentity,
     modules: paired ? plan.modules : plan.tasks.map(({ id, file }) => ({ id, file })),
@@ -142,7 +146,10 @@ export async function captureExtractionState(plan, workspace, evidence, { signal
   const physicalInventoryMatched =
     entries.length === expectedInventory.size &&
     entries.every(({ path, type }) => expectedInventory.get(path) === type);
-  const paired = plan.version === "renderer-module-extraction-plan-v2";
+  const paired = [
+    "renderer-module-extraction-plan-v2",
+    "renderer-module-extraction-plan-v3",
+  ].includes(plan.version);
   const checked = (paired ? gradeExtraction : gradeHeaderExtraction)(plan, completeTree);
   const extraction = {
     ...checked,

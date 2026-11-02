@@ -66,9 +66,9 @@ from pathlib import Path
 source = Path('main.cpp')
 text = source.read_text()
 fragments = ${JSON.stringify(task.fragments.map(({ text }) => text))}
-for index, fragment in enumerate(fragments):
+${task.kind === "header" ? `first = text.index(fragments[0])\npoint = text.rfind("namespace frond {", 0, first)\nassert point >= 0\ntext = text[:point] + ${JSON.stringify(task.replacement)} + text[point:]\n` : ""}for index, fragment in enumerate(fragments):
     assert text.count(fragment) == 1
-    text = text.replace(fragment, ${JSON.stringify(task.replacement)} if index == 0 else '', 1)
+    text = text.replace(fragment, ${JSON.stringify(task.kind === "header" ? "" : task.replacement)} if index == 0 else '', 1)
 body = ${JSON.stringify(task.destination)}
 ${kind === "structural" && task.id === damagedTask.id ? "body += '\\nint recovery_error = ;\\n'" : ""}
 with Path(${JSON.stringify(task.file)}).open('x') as target:

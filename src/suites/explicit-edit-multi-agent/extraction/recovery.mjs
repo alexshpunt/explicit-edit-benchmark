@@ -86,7 +86,11 @@ export async function runExtractionRecovery(
       ),
       { code: "EXTRACTION_LIVE_CONTEXT_REQUIRED" },
     );
-  assert.equal(plan.version, "renderer-module-extraction-plan-v2");
+  assert.ok(
+    ["renderer-module-extraction-plan-v2", "renderer-module-extraction-plan-v3"].includes(
+      plan.version,
+    ),
+  );
   assert.equal(plan.scope, "experimental-module-pairs");
   assert.equal(treeIdentity(plan.initial), plan.initialIdentity);
   assert.equal(typeof createDriver, "function");
@@ -100,6 +104,7 @@ export async function runExtractionRecovery(
   await writeTree(workspace, plan.initial);
   const report = {
     version: "renderer-module-extraction-run-v4",
+    ...(plan.headerProtection ? { headerProtection: plan.headerProtection } : {}),
     scope: plan.scope,
     policy: EXTRACTION_RECOVERY_POLICY,
     status: "running",

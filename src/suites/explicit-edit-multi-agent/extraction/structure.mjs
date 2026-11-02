@@ -5,6 +5,30 @@ import {
   projectMacros,
 } from "../grading/canonical-snapshot.mjs";
 import { decodeSourceBytes } from "../cpp/source-bytes.mjs";
+import { cppTokens } from "../cpp/cpp-tokens.mjs";
+
+function pragmaProtected(source, guard) {
+  if (
+    typeof source !== "string" ||
+    !/^(?:[ \t]*\r?\n)*[ \t]*#[ \t]*pragma[ \t]+once[ \t]*(?:\r?\n|$)/.test(source)
+  )
+    return false;
+  let masked = "",
+    cursor = 0;
+  for (const token of cppTokens(source)) {
+    if (/^[A-Za-z_]\w*$/.test(token.text)) continue;
+    masked += source.slice(cursor, token.start) + token.text.replace(/[^\r\n]/g, " ");
+    cursor = token.end;
+  }
+  masked = (masked + source.slice(cursor)).replace(/\\\r?\n/g, "");
+  return (
+    (masked.match(/^[ \t]*#[ \t]*pragma[ \t]+once\b/gm) ?? []).length === 1 &&
+    !new RegExp(
+      `^[ \\t]*#[ \\t]*(?:if|ifdef|ifndef|define|undef)\\b[^\\n]*\\b${guard}\\b`,
+      "m",
+    ).test(masked)
+  );
+}
 
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const lexical = (value) => (Buffer.isBuffer(value) ? decodeSourceBytes(value) : value);
@@ -107,9 +131,10 @@ export async function prepareExtractionStructure(plan) {
   assert.equal(typeof plan.expected["main.cpp"], "string");
   assert.ok(Array.isArray(plan.tasks) && plan.tasks.length > 0);
   const expectedTree = { ...plan.expected };
-  const tasks = plan.tasks.map(({ id, file, fragments, replacement }) => ({
+  const tasks = plan.tasks.map(({ id, file, kind, fragments, replacement }) => ({
     id,
     file,
+    kind,
     fragments,
     replacement,
   }));
@@ -175,7 +200,14 @@ export async function prepareExtractionStructure(plan) {
     const files = tasks.map(({ id, file }) => ({
       id,
       file,
-      targetMatched: same(file),
+      targetMatched:
+        same(file) &&
+        (plan.headerProtection !== "pragma-once" ||
+          !tasks.some((task) => task.file === file && task.kind === "header") ||
+          pragmaProtected(
+            lexical(tree[file]),
+            plan.headers.find((header) => header.file === file).guard,
+          )),
       sourceMatched: true,
     }));
     const byId = new Map(files.map((file) => [file.id, file]));

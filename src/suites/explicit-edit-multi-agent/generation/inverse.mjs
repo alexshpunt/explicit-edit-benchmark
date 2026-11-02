@@ -2,6 +2,7 @@ import { unpack, restoreBlankLines } from "./generator.mjs";
 import { undoNames } from "./semantic-names.mjs";
 import { undoFunctionMix } from "./function-mix.mjs";
 import { restoreOrigin } from "./origin-markers.mjs";
+import { restoreProjectGuards } from "./project-header-guards.mjs";
 
 /** Replay a guarded inverse from serialized records, extracting code from the supplied tree. */
 export function reverseOperation(tree, record) {
@@ -10,5 +11,6 @@ export function reverseOperation(tree, record) {
   if (["function-declarations", "function-permutation"].includes(record.kind))
     return undoFunctionMix(tree, record);
   if (record.kind === "compact") return restoreBlankLines(tree, record);
+  if (record.kind === "project-header-guards") return restoreProjectGuards(tree, record);
   return unpack(tree, record);
 }
