@@ -62,6 +62,7 @@ export function extractCurrentFile(before, task) {
       fragment.kind,
       fragment.beforeFragment,
       fragment.afterFragment,
+      fragment.isolatedAnchor,
     ]);
     if (!groups.has(key)) groups.set(key, { fragment, count: 0 });
     groups.get(key).count++;
@@ -138,6 +139,24 @@ export function extractCurrentFile(before, task) {
   const edits = [];
   for (const { fragment, count } of groups.values()) {
     let matches = matching(fragment);
+    if (fragment.isolatedAnchor) {
+      const { context, offset } = fragment.isolatedAnchor;
+      assert.equal(typeof context, "string");
+      assert.ok(
+        context.length > 0 &&
+          source.indexOf(context) >= 0 &&
+          source.indexOf(context) === source.lastIndexOf(context),
+        "Isolated context is missing or ambiguous",
+      );
+      assert.ok(Number.isSafeInteger(offset) && offset >= 0);
+      assert.equal(
+        context.slice(offset, offset + fragment.text.length),
+        fragment.text,
+        "Isolated target context changed",
+      );
+      const start = source.indexOf(context) + offset;
+      matches = matches.filter((match) => match.start === start);
+    }
     const anchors = [];
     for (const [field, before] of [
       ["beforeFragment", true],

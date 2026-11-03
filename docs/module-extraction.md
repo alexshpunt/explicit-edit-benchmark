@@ -123,6 +123,30 @@ loadable and retain their original reconstruction and proof rules, but their
 incomplete assignment contracts cannot authorize model execution. Historical
 inputs, candidates and reports must not be rewritten.
 
+## Isolated task diagnostics
+
+For debugging, `debug` runs each selected assignment in a separate copy of the
+original source and a new participant session. It first runs the scripted
+reference independently on every selected assignment; any failure stops the
+model before it starts. The normal clean-source reference proof is still
+required. Each finished candidate and its individual report must be inspected
+and approved before the next task starts. A failure is retained and does not
+change the next task's input. To diagnose one task, add `--task TASK_ID`.
+
+```sh
+node scripts/module-extraction.mjs debug CASE NEW_DEBUG_RUN \
+  --config PRIVATE_JSON --proof REFERENCE_RUN/verification.json --allow-model-calls
+```
+
+The `preflight` and `model` directories contain separate diagnostic reports and
+snapshots. The assessment compares the assigned destination, residual source,
+unrelated files and physical inventory against a one-task reference, allowing
+the same C++ structural normalization as the benchmark. It does not establish
+compiler bindings. A partial extraction may depend on files belonging to other
+assignments, so diagnostics do not build, render, run recovery or produce a
+benchmark score. They are not benchmark observations. The ordinary `run`
+continues to use its shared candidate and normal scoring.
+
 ## Recovery and Score
 
 Original file queues finish before a common verification barrier. Participants

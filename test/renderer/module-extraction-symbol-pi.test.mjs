@@ -4,9 +4,69 @@ import path from "node:path";
 import test from "node:test";
 import { modelExtractionDrivers } from "../../src/suites/explicit-edit-multi-agent/extraction/case.mjs";
 import { runExtractionWave } from "../../src/suites/explicit-edit-multi-agent/extraction/wave.mjs";
+import { prepareHeaderExtraction } from "../../src/suites/explicit-edit-multi-agent/extraction/plan.mjs";
+import { runIsolatedExtraction } from "../../src/suites/explicit-edit-multi-agent/extraction/isolated.mjs";
 import { providerFixture } from "./provider-fixture.mjs";
 
 const runtime = process.env.RENDERER_PI_RUNTIME;
+
+test(
+  "isolated diagnostics start a new real participant on a clean project per task",
+  { skip: process.platform !== "linux" || !runtime, timeout: 60000 },
+  async () => {
+    await mkdir(path.resolve(".tmp"), { recursive: true });
+    const root = await mkdtemp(path.resolve(".tmp/isolated-pi-"));
+    let provider;
+    try {
+      const plan = prepareHeaderExtraction({
+        initial: {
+          "main.cpp":
+            "#ifndef A_H\n#define A_H\nint a = 1;\n#endif\n#ifndef B_H\n#define B_H\nint b = 2;\n#endif\nint main() { return a+b; }\n",
+          "asset.txt": "original\n",
+        },
+        headers: [
+          { file: "a.h", guard: "A_H", includes: [] },
+          { file: "b.h", guard: "B_H", includes: [] },
+        ],
+        modules: ["a.h", "b.h"],
+      });
+      provider = await providerFixture(root, (_body, number) =>
+        number === 1 ? { command: "printf damaged > /workspace/asset.txt" } : {},
+      );
+      const seen = [];
+      const report = await runIsolatedExtraction(plan, path.join(root, "run"), {
+        async createDrivers({ workspace, directory }) {
+          assert.equal(await readFile(path.join(workspace, "asset.txt"), "utf8"), "original\n");
+          return modelExtractionDrivers(path.join(directory, "driver"), provider.config, {
+            workspace,
+          });
+        },
+        async inspect(request) {
+          seen.push(request.ids[0]);
+          return {
+            runId: request.runId,
+            sequence: request.sequence,
+            candidateIdentity: request.candidateIdentity,
+          };
+        },
+      });
+      assert.deepEqual(
+        seen,
+        plan.tasks.map(({ id }) => id),
+      );
+      assert.equal(report.tasks.length, 2);
+      assert.equal(report.tasks[0].structure.unrelatedMatched, false);
+      assert.equal(report.tasks[1].structure.unrelatedMatched, true);
+      assert.notEqual(
+        report.tasks[0].participants[0].participant.sessionId,
+        report.tasks[1].participants[0].participant.sessionId,
+      );
+    } finally {
+      if (provider) provider.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "a transient provider failure resumes the same delivery without repeating tool effects",

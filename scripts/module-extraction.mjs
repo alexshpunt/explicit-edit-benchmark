@@ -7,6 +7,7 @@ const help = `Experimental paired-module extraction
   prepare PREPARATION NEW_CASE --modules module_stem[,other_stem] --generation GENERATION [--agents N]
   verify CASE NEW_RUN
   run CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/verification.json --allow-model-calls
+  debug CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/verification.json --allow-model-calls [--task TASK_ID]
 
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
@@ -25,6 +26,10 @@ After all original queues finish, structural recovery retains their live context
 Model tasks and repairs run one at a time with refreshed checks. Build and image
 corrections use fresh isolated contexts. Closed saved
 runs cannot resume their original contexts. There is no source reset or publication.
+The debug command uses a clean project and new participant for every task. It
+first verifies each selected task with a scripted reference. Its individual
+structural assessments are diagnostic only: no benchmark score, build or render.
+Inspect each completed debug task before starting the next.
 Before each delivery batch, inspect the displayed snapshot and report. Enter
 'approve <inspection number> <candidate hash>' to proceed, or interrupt to stop.
 Use fresh ignored output directories and the shared renderer lock on a capable worker.
@@ -52,6 +57,7 @@ try {
       agents: { type: "string" },
       config: { type: "string" },
       proof: { type: "string" },
+      task: { type: "string" },
       "from-run": { type: "string" },
       "source-receipt": { type: "string" },
       "allow-model-calls": { type: "boolean" },
@@ -61,9 +67,10 @@ try {
   else {
     const [command, input, output] = positionals;
     assert.equal(positionals.length, 3, help);
-    assert.ok(["prepare", "verify", "run", "recover"].includes(command), help);
+    assert.ok(["prepare", "verify", "run", "recover", "debug"].includes(command), help);
+    if (command !== "debug") assert.equal(values.task, undefined, help);
     if (command !== "recover") assert.ok(!values["from-run"] && !values["source-receipt"], help);
-    if (!["run", "recover"].includes(command))
+    if (!["run", "recover", "debug"].includes(command))
       assert.ok(!values.config && !values.proof && !values["allow-model-calls"], help);
     if (command !== "prepare")
       for (const option of ["modules", "generation", "agents"])
@@ -116,33 +123,50 @@ try {
           { code: "EXTRACTION_LIVE_CONTEXT_REQUIRED" },
         );
       const config = JSON.parse(await readFile(values.config, "utf8"));
-      const { runModelExtraction } =
+      const { runModelExtraction, runModelIsolatedExtraction } =
         await import("../src/suites/explicit-edit-multi-agent/extraction/case.mjs");
       const { createTerminalInspector } =
         await import("../src/suites/explicit-edit-multi-agent/extraction/terminal-inspection.mjs");
       const inspect = createTerminalInspector();
       let report;
       try {
-        report = await runModelExtraction(input, output, config, {
-          proofPath: values.proof,
-          signal: controller.signal,
-          inspect,
-        });
+        report = await (command === "debug" ? runModelIsolatedExtraction : runModelExtraction)(
+          input,
+          output,
+          config,
+          {
+            proofPath: values.proof,
+            signal: controller.signal,
+            inspect,
+            ...(command === "debug" ? { taskId: values.task } : {}),
+          },
+        );
       } finally {
         inspect.close();
       }
-      console.log(
-        JSON.stringify({
-          status: report.status,
-          strictPreservation: report.extraction.status,
-          structure: report.structure.status,
-          firstScore: report.first.score.score,
-          score: report.score.score,
-          buildPassed: report.integration.buildPassed,
-          resultMatched: report.integration.resultMatched,
-        }),
-      );
-      if (!report.passed) process.exitCode = 1;
+      if (command === "debug") {
+        console.log(
+          JSON.stringify({
+            status: report.status,
+            kind: report.kind,
+            tasks: report.tasks.map(({ id, structure }) => ({ id, status: structure.status })),
+          }),
+        );
+        if (!report.passed) process.exitCode = 1;
+      } else {
+        console.log(
+          JSON.stringify({
+            status: report.status,
+            strictPreservation: report.extraction.status,
+            structure: report.structure.status,
+            firstScore: report.first.score.score,
+            score: report.score.score,
+            buildPassed: report.integration.buildPassed,
+            resultMatched: report.integration.resultMatched,
+          }),
+        );
+        if (!report.passed) process.exitCode = 1;
+      }
     }
   }
 } catch (error) {

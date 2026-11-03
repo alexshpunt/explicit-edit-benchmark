@@ -236,23 +236,10 @@ export async function runModelExtraction(
       ),
       { code: "EXTRACTION_LIVE_CONTEXT_REQUIRED" },
     );
-  const { manifest, plan, publicAssignments } = await loadExtraction(prepared);
-  requireCompletePublicContract(manifest);
-  assert.equal(manifest.scope, "experimental-module-pairs");
-  assert.equal(
-    manifest.version,
-    "renderer-module-extraction-v5",
-    "Prepare a fresh explicit-contract case before model execution",
+  const { manifest, plan, publicAssignments, sourceIdentity } = await authorizeModelExtraction(
+    prepared,
+    proofPath,
   );
-  assert.ok(publicAssignments instanceof Map);
-  assert.equal(typeof proofPath, "string");
-  const proof = JSON.parse(await readFile(proofPath, "utf8"));
-  const reportBytes = await readFile(
-    path.join(path.dirname(path.resolve(proofPath)), "report.json"),
-  );
-  assert.equal(hash(reportBytes), proof.runReportSha256);
-  const sourceIdentity = await restoringSourceIdentity();
-  validateExtractionProof(manifest, proof, JSON.parse(reportBytes), sourceIdentity);
   assert.equal(typeof inspect, "function", "Model extraction requires round inspection");
   const output = path.resolve(outputPath);
   const drivers = recoveryModelDrivers(output, config, {
@@ -289,6 +276,105 @@ export async function runModelExtraction(
   } finally {
     await drivers.cleanup();
   }
+}
+
+async function authorizeModelExtraction(prepared, proofPath) {
+  const { manifest, plan, publicAssignments } = await loadExtraction(prepared);
+  requireCompletePublicContract(manifest);
+  assert.equal(manifest.scope, "experimental-module-pairs");
+  assert.equal(manifest.version, "renderer-module-extraction-v5");
+  assert.ok(publicAssignments instanceof Map);
+  assert.equal(typeof proofPath, "string");
+  const proof = JSON.parse(await readFile(proofPath, "utf8"));
+  const reportBytes = await readFile(
+    path.join(path.dirname(path.resolve(proofPath)), "report.json"),
+  );
+  assert.equal(hash(reportBytes), proof.runReportSha256);
+  const sourceIdentity = await restoringSourceIdentity();
+  validateExtractionProof(manifest, proof, JSON.parse(reportBytes), sourceIdentity);
+  return { manifest, plan, publicAssignments, sourceIdentity };
+}
+
+/** Prove each selected assignment independently before allowing any model calls. */
+export async function runModelIsolatedExtraction(
+  prepared,
+  outputPath,
+  config,
+  { proofPath, inspect, signal, taskId } = {},
+) {
+  assert.equal(typeof inspect, "function", "Isolated model diagnostics require inspection");
+  const { manifest, plan, publicAssignments, sourceIdentity } = await authorizeModelExtraction(
+    prepared,
+    proofPath,
+  );
+  const { isolatedAnchors } = await import("./isolated-anchors.mjs");
+  const { runIsolatedExtraction } = await import("./isolated.mjs");
+  const anchored = isolatedAnchors(plan);
+  const assignments = new Map(
+    [...publicAssignments].map(([id, assignment]) => [
+      id,
+      {
+        ...assignment,
+        hints: [...assignment.hints, ...(anchored.hints.has(id) ? [anchored.hints.get(id)] : [])],
+      },
+    ]),
+  );
+  const output = path.resolve(outputPath);
+  await mkdir(output, { mode: 0o700 });
+  const tools = path.join(output, "reference-tools");
+  await prepareExtractionReference(tools);
+  const preflight = await runIsolatedExtraction(anchored.plan, path.join(output, "preflight"), {
+    signal,
+    taskId,
+    async createDrivers({ workspace }) {
+      return {
+        createDriver: (_agent, _session, { signal }) =>
+          extractionReference(workspace, tools, { signal }),
+        execute: (driver, task) => driver.execute(task),
+        async cleanup() {},
+      };
+    },
+    async inspect(request) {
+      return {
+        runId: request.runId,
+        sequence: request.sequence,
+        candidateIdentity: request.candidateIdentity,
+      };
+    },
+  });
+  assert.ok(
+    preflight.passed && preflight.tasks.every(({ extraction }) => extraction.status === "pass"),
+    "Independent reference preflight failed",
+  );
+  assert.deepEqual(await restoringSourceIdentity(), sourceIdentity);
+  const result = await runIsolatedExtraction(anchored.plan, path.join(output, "model"), {
+    signal,
+    taskId,
+    inspect,
+    async createDrivers({ workspace, directory }) {
+      return modelExtractionDrivers(path.join(directory, "driver"), config, {
+        workspace,
+        publicAssignments: assignments,
+        boundedProviderRetries: true,
+      });
+    },
+  });
+  assert.deepEqual(await restoringSourceIdentity(), sourceIdentity);
+  await writeFile(
+    path.join(output, "execution.json"),
+    JSON.stringify(
+      {
+        kind: "model",
+        mode: "isolated-diagnostic",
+        sourceIdentity,
+        planSha256: manifest.planSha256,
+      },
+      null,
+      2,
+    ) + "\n",
+    { flag: "wx", mode: 0o600 },
+  );
+  return result;
 }
 
 /** Structural recovery stays with its original live context; integration owns fresh participants. */

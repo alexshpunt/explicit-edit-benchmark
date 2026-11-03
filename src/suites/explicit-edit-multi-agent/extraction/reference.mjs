@@ -44,7 +44,7 @@ export function extractionReference(workspace, tools, { signal } = {}) {
         guard: task.guard,
         kind: task.kind,
         fragments: task.fragments.map(
-          ({ id, text, scope, kind, prefix, suffix, beforeFragment, afterFragment }) => ({
+          ({
             id,
             text,
             scope,
@@ -53,6 +53,17 @@ export function extractionReference(workspace, tools, { signal } = {}) {
             suffix,
             beforeFragment,
             afterFragment,
+            isolatedAnchor,
+          }) => ({
+            id,
+            text,
+            scope,
+            kind,
+            prefix,
+            suffix,
+            beforeFragment,
+            afterFragment,
+            isolatedAnchor,
           }),
         ),
         preamble: task.preamble,
