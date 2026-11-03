@@ -209,6 +209,10 @@ function fence(text) {
   return `${mark}\n${text}${text.endsWith("\n") ? "" : "\n"}${mark}`;
 }
 
+function exactExcerpt(label, text) {
+  const ending = text.endsWith("\r\n") ? "CRLF" : text.endsWith("\n") ? "LF" : "no line break";
+  return `${label} Its exact length is ${text.length} JavaScript UTF-16 code units; it ends with ${ending}. Its UTF-8 SHA-256 is ${hash(text)}. The code fence itself is not part of the text.\n${fence(text)}`;
+}
 /** Present ambiguous snippets as prose, not an executable destination template. */
 export function ambiguityAnchorsProse(entries) {
   assert.ok(Array.isArray(entries));
@@ -220,15 +224,13 @@ export function ambiguityAnchorsProse(entries) {
         ? [
             `The ambiguous portion was on snapshot lines ${entry.startLine} through ${entry.endLine}. Its unique context is shown below.`,
             `Under the lock, find that context exactly once. The target starts ${entry.offset} JavaScript UTF-16 code units into it and has length ${entry.target.length} code units. If the context is missing or ambiguous, do not guess.`,
-            fence(entry.anchor),
+            exactExcerpt("Exact unique context:", entry.anchor),
           ].join("\n")
         : [
             `The ambiguous portion was on snapshot lines ${entry.startLine} through ${entry.endLine}. It is ${entry.targetSide} the unique anchor.`,
             "Under the lock, confirm the anchor occurs exactly once, choose the nearest exact target on the stated side, and verify that the UTF-8 SHA-256 of the exact intervening text matches the digest below.",
-            "Exact ambiguous portion:",
-            fence(entry.target),
-            "Unique anchor excerpt:",
-            fence(entry.anchor),
+            exactExcerpt("Exact ambiguous portion:", entry.target),
+            exactExcerpt("Unique anchor excerpt:", entry.anchor),
             `SHA-256 of the original intervening text encoded as UTF-8: ${entry.gapSha256}.`,
             `Also check the ${entry.edgeLength} JavaScript UTF-16 code units immediately ${entry.targetSide === "before" ? "before" : "after"} the target; their UTF-8 SHA-256 is ${entry.edgeSha256}.${entry.edgeAtBoundary ? " This edge must also remain at the file boundary." : ""}`,
           ].join("\n"),

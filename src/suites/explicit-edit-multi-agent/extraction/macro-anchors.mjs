@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { cppTokens } from "../cpp/cpp-tokens.mjs";
 import { symbolSpecifications } from "./symbol-spec.mjs";
 
@@ -153,7 +154,9 @@ export function macroAmbiguityAnchorsProse(entries) {
       let length = 3;
       for (const [run] of text.matchAll(/`+/g)) length = Math.max(length, run.length + 1);
       const fence = "`".repeat(length);
-      return `For ${signature}, ${action} the definition at snapshot line ${line}; its exact context begins at snapshot line ${contextLine}. Within that context, the directive begins ${offset} JavaScript UTF-16 code units from the start and has length ${extent} code units:\n${fence}\n${text}${text.endsWith("\n") ? "" : "\n"}${fence}`;
+      const ending = text.endsWith("\r\n") ? "CRLF" : text.endsWith("\n") ? "LF" : "no line break";
+      const digest = createHash("sha256").update(text).digest("hex");
+      return `For ${signature}, ${action} the definition at snapshot line ${line}; its exact context begins at snapshot line ${contextLine}. Within that context, the directive begins ${offset} JavaScript UTF-16 code units from the start and has length ${extent} code units. The exact context has length ${text.length} JavaScript UTF-16 code units, ends with ${ending}, and has UTF-8 SHA-256 ${digest}. The code fence itself is not part of the context:\n${fence}\n${text}${text.endsWith("\n") ? "" : "\n"}${fence}`;
     }),
   ].join("\n\n");
 }

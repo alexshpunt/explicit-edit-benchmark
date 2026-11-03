@@ -69,8 +69,10 @@ does not prove. Unsupported or unresolved source ambiguity fails preparation rat
 assigned by guesswork.
 
 When ownership or a macro definition is ambiguous, assignments include exact source anchors and
-snapshot line numbers. Those coordinates are hints, not edit positions. Participants must re-find
-and verify anchors under the shared lock and report unresolved ambiguity rather than guessing.
+snapshot line numbers. Each displayed exact excerpt has a length, ending and digest so its boundary,
+including any final newline, can be verified independently of the code fence. Coordinates are hints,
+not edit positions. Participants must re-find and verify anchors under the shared lock and report
+unresolved ambiguity rather than guessing.
 The same requirements and selected anchors are available during recovery. A scripted reference
 uses private ownership data; passing it does not by itself prove that a model can solve the task.
 

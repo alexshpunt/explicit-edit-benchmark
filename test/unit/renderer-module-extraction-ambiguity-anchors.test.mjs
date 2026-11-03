@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import {
   ambiguityAnchors,
@@ -53,6 +54,16 @@ test("ambiguous owned occurrence has a uniquely revalidated anchor and snapshot 
   assert.ok(ambiguityAnchorsProse([entry]).includes("unique_target"));
 });
 
+test("the exact target boundary is independently identifiable from the assignment", async () => {
+  const { source, task } = fixture();
+  const [entry] = await ambiguityAnchors(source, task);
+  assert.ok(entry.target.endsWith("\n"));
+  const digest = (value) => createHash("sha256").update(value).digest("hex");
+  const prose = ambiguityAnchorsProse([entry]);
+  assert.ok(prose.includes(digest(entry.target)));
+  assert.ok(prose.includes(digest(entry.anchor)));
+  assert.notEqual(digest(entry.target), digest(entry.target.slice(0, -1)));
+});
 test("an anchor before the target validates the target on its other side", async () => {
   const anchor = "int unique_before() { return 1234; }";
   const repeated = "#ifdef FLAG\n#define ITEM 1\n#endif\n";
