@@ -27,7 +27,7 @@ export async function runIsolatedExtraction(
   await mkdir(output, { mode: 0o700 });
   await mkdir(path.join(output, "tasks"), { mode: 0o700 });
   const report = {
-    version: "renderer-module-extraction-isolated-v1",
+    version: "renderer-module-extraction-isolated-v2",
     kind: "diagnostic",
     runId: randomUUID(),
     status: "running",
@@ -53,14 +53,17 @@ export async function runIsolatedExtraction(
       const workspace = path.join(directory, "workspace");
       const expected = extractCurrentFile(plan.initial, task);
       const isolated = { ...plan, tasks: [task], expected };
-      const assess = await prepareExtractionStructure(isolated);
+      const assess = await prepareExtractionStructure(isolated, { sorted: true });
       await writeTree(workspace, plan.initial);
       let drivers;
       try {
         drivers = await createDrivers({ task, workspace, directory, signal });
         const wave = await runExtractionWave([task], { ...drivers, agents: 1, signal });
         assert.ok(wave.records.every(({ closed }) => closed));
-        const state = await captureExtractionState(isolated, workspace, directory, { signal });
+        const state = await captureExtractionState(isolated, workspace, directory, {
+          signal,
+          gradeStrict: false,
+        });
         const structure = await assess(state.completeTree);
         if (state.physicalDiagnostics.length) {
           structure.status = "fail";
@@ -77,7 +80,6 @@ export async function runIsolatedExtraction(
           participants: wave.records,
           deliveries: wave.deliveries,
           structure,
-          extraction: state.extraction,
           inspection: "awaiting",
         };
         report.tasks.push(row);

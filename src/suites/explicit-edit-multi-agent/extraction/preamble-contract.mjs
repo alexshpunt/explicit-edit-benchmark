@@ -91,7 +91,7 @@ export function preambleContract(source, { anchoredMacros = new Set() } = {}) {
   return items;
 }
 
-export function preambleContractProse(items) {
+export function preambleContractProse(items, { sorted = false } = {}) {
   assert.ok(Array.isArray(items));
   const describe = (item) => {
     switch (item.kind) {
@@ -123,7 +123,9 @@ export function preambleContractProse(items) {
   };
   if (!items.length) return "No preamble directives are required.";
   return [
-    "The preamble requires the following directive barriers in order. Preserve original macro replacement text from the source; this inventory does not contain replacements:",
+    sorted
+      ? "The destination requires these directives and their conditional nesting. Their peer order is not significant. Preserve original macro replacement text from the source; this inventory does not contain replacements:"
+      : "The preamble requires the following directive barriers in order. Preserve original macro replacement text from the source; this inventory does not contain replacements:",
     ...items.map((item, index) => `${index + 1}. ${describe(item)}.`),
   ].join("\n");
 }

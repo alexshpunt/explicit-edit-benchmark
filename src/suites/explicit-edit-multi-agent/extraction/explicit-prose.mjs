@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 
 /** Explain the common structural and shared-source obligations without source fragments. */
-export function explicitExtractionProse(task) {
+export function explicitExtractionProse(task, { sorted = false } = {}) {
+  if (sorted) {
+    const source = task.replacement
+      ? `Remove the assigned source portions from main.cpp and add ${task.replacement.trim()} at global scope.`
+      : "Remove the assigned source portions from main.cpp without inserting a replacement include.";
+    return [
+      "Preserve each assigned declaration, definition, body, literal, macro replacement, conditional branch, namespace and required occurrence. Preserve the contents of unrelated project files and residual source. Do not introduce extra files. Ordinary formatting and comments do not affect structural comparison. Non-C++ project files are compared losslessly.",
+      "Structural comparison sorts peer units, including includes, within each namespace and conditional branch. Plain named namespaces may be reopened, combined or left empty. Preserve namespace and conditional membership, multiplicities, complete declarations and function bodies, macro payloads and class member structure. This comparison does not prove compiler binding equivalence.",
+      source,
+    ].join("\n\n");
+  }
   let source;
   if (task.kind === "header" || task.kind === "vendor-header") {
     assert.equal(task.replacement, `#include "${task.file}"\n`);

@@ -53,7 +53,7 @@ function codeBlock(text) {
 }
 
 /** Render only the independently prepared public symbol inventory. */
-export function moduleSymbolPrompt(task, entities) {
+export function moduleSymbolPrompt(task, entities, { sorted = false } = {}) {
   assert.equal(typeof task.file, "string");
   assert.ok(Array.isArray(entities));
   const scopes = new Map();
@@ -91,7 +91,11 @@ export function moduleSymbolPrompt(task, entities) {
     "Find the complete entities in the shared source. Preserve their current code, declarations, dependencies, conditional behavior and compiler bindings. Do not rename or alter unrelated entities.",
     "Follow the move or copy instruction for each entity. Leave copied originals intact. The entities are sorted independently of source order.",
     ...(task.kind === "header"
-      ? ["Begin the destination header with #pragma once; do not add an include guard."]
+      ? [
+          sorted
+            ? "Include #pragma once in the destination header; do not add an include guard."
+            : "Begin the destination header with #pragma once; do not add an include guard.",
+        ]
       : []),
     ...(task.includes?.length
       ? [`The destination depends on these project files: ${[...task.includes].sort().join(", ")}.`]
@@ -107,13 +111,13 @@ export function moduleSymbolPrompt(task, entities) {
 }
 
 /** Deliver explicit file obligations and only the disambiguation hints selected for this task. */
-export function moduleExplicitPrompt(task, { entities, contract, hints }) {
+export function moduleExplicitPrompt(task, { entities, contract, hints }, { sorted = false } = {}) {
   assert.ok(Array.isArray(entities) && Array.isArray(hints));
   assert.ok(hints.every((hint) => typeof hint === "string"));
   return [
-    moduleSymbolPrompt(task, entities),
-    explicitExtractionProse(task),
-    ...(contract.preamble ? [preambleContractProse(contract.preamble)] : []),
+    moduleSymbolPrompt(task, entities, { sorted }),
+    explicitExtractionProse(task, { sorted }),
+    ...(contract.preamble ? [preambleContractProse(contract.preamble, { sorted })] : []),
     ...(contract.conditionals ? [conditionalContractsProse(contract.conditionals)] : []),
     ...(contract.vendor ? [vendorPhaseInstructions(contract.vendor)] : []),
     ...(contract.vendorActivation ? [vendorActivationInstructions(contract.vendorActivation)] : []),

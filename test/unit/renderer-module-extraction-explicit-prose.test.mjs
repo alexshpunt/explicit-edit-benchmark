@@ -16,6 +16,16 @@ test("explicit prose describes preservation, ordering, and header replacement wi
   assert.doesNotMatch(prose, /private_function_body|private_destination/);
 });
 
+test("isolated prose describes sorted peers without historical position rules", () => {
+  const prose = explicitExtractionProse(
+    { kind: "header", file: "part.h", replacement: '#include "part.h"\n' },
+    { sorted: true },
+  );
+  assert.match(prose, /sorts peer units, including includes/);
+  assert.match(prose, /global scope/);
+  assert.doesNotMatch(prose, /barrier-free|first owned|outermost/);
+});
+
 test("explicit prose distinguishes implementation and vendor source replacement", () => {
   assert.match(
     explicitExtractionProse({ kind: "implementation", replacement: "" }),

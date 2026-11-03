@@ -6,6 +6,7 @@ import {
 } from "../grading/canonical-snapshot.mjs";
 import { decodeSourceBytes } from "../cpp/source-bytes.mjs";
 import { cppTokens } from "../cpp/cpp-tokens.mjs";
+import { sortedExtractionProject } from "./sorted-structure.mjs";
 
 function pragmaProtected(source, guard) {
   if (
@@ -125,7 +126,7 @@ function owners(items = []) {
 /** Prepare private structural evidence from immutable current-fragment ranges.
  * The returned assessor never writes source and returns no expected source body.
  */
-export async function prepareExtractionStructure(plan) {
+export async function prepareExtractionStructure(plan, { sorted = false } = {}) {
   assert.ok(record(plan) && record(plan.initial) && record(plan.expected));
   assert.equal(typeof plan.initial["main.cpp"], "string");
   assert.equal(typeof plan.expected["main.cpp"], "string");
@@ -159,7 +160,8 @@ export async function prepareExtractionStructure(plan) {
   }
   ranges.sort((left, right) => left.start - right.start);
   for (let at = 1; at < ranges.length; at++) assert.ok(ranges[at - 1].end <= ranges[at].start);
-  const expected = await canonicalizeProject(expectedTree);
+  const canonicalize = sorted ? sortedExtractionProject : canonicalizeProject;
+  const expected = await canonicalize(expectedTree);
   const macros = projectMacros(Object.values(expectedTree).map(lexical));
   const initialProjection = await canonicalizeCpp(plan.initial["main.cpp"], {
     macros,
@@ -194,7 +196,7 @@ export async function prepareExtractionStructure(plan) {
 
   return async function assess(tree) {
     assert.ok(record(tree));
-    const actual = await canonicalizeProject(tree);
+    const actual = await canonicalize(tree);
     const same = (file) =>
       Object.hasOwn(actual.files, file) && actual.files[file] === expected.files[file];
     const files = tasks.map(({ id, file }) => ({
@@ -202,7 +204,8 @@ export async function prepareExtractionStructure(plan) {
       file,
       targetMatched:
         same(file) &&
-        (plan.headerProtection !== "pragma-once" ||
+        (sorted ||
+          plan.headerProtection !== "pragma-once" ||
           !tasks.some((task) => task.file === file && task.kind === "header") ||
           pragmaProtected(
             lexical(tree[file]),
@@ -307,7 +310,9 @@ export async function prepareExtractionStructure(plan) {
         diagnostics.push({ id: `preservation:${file}`, file, kind: "unrelated-file" });
       }
     return {
-      version: "renderer-module-extraction-structure-v1",
+      version: sorted
+        ? "renderer-module-extraction-sorted-structure-v1"
+        : "renderer-module-extraction-structure-v1",
       status:
         mainMatched && inventoryMatched && unrelatedMatched && !differenceIds.size
           ? "pass"

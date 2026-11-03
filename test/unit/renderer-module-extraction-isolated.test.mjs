@@ -71,7 +71,8 @@ test("independent assignments start clean and failures do not contaminate the ne
     assert.equal(result.tasks[0].structure.status, "fail");
     assert.equal(result.tasks[0].structure.unrelatedMatched, false);
     assert.equal(result.tasks[1].structure.status, "pass");
-    assert.equal(result.tasks[1].extraction.inventoryMatched, true);
+    assert.equal(result.tasks[1].structure.inventoryMatched, true);
+    assert.equal("extraction" in result.tasks[1], false);
     assert.equal("score" in result, false);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -152,6 +153,40 @@ test("identical declarations in two owners use unique context and fail closed on
     assert.notEqual(changed, source);
     assert.throws(() => extractCurrentFile({ "main.cpp": changed }, task), /context/);
   }
+});
+
+test("sorted assessment applies to destination, residual source and unrelated C++ files", async () => {
+  const plan = fixture();
+  const task = plan.tasks[0];
+  const expected = extractCurrentFile(plan.initial, task);
+  expected[task.file] = `#include "x.h"\n${expected[task.file]}\n#include "y.h"\n`;
+  expected["main.cpp"] += '#include "x.h"\n#include "y.h"\n';
+  expected["other.cpp"] = '#include "x.h"\nint z;\n#include "y.h"\n';
+  const assess = await prepareExtractionStructure(
+    { ...plan, tasks: [task], expected },
+    { sorted: true },
+  );
+  const reordered = {
+    ...expected,
+    [task.file]: expected[task.file]
+      .replace('#include "x.h"\n', "")
+      .replace('#include "y.h"', '#include "y.h"\n#include "x.h"'),
+    "main.cpp": expected["main.cpp"].replace(
+      '#include "x.h"\n#include "y.h"',
+      '#include "y.h"\n#include "x.h"',
+    ),
+    "other.cpp": '#include "y.h"\n#include "x.h"\nint z;\n',
+  };
+  assert.equal((await assess(reordered)).status, "pass");
+  assert.equal(
+    (
+      await assess({
+        ...reordered,
+        "other.cpp": '#if X\n#include "x.h"\n#endif\n#include "y.h"\nint z;\n',
+      })
+    ).status,
+    "fail",
+  );
 });
 
 test("one-task assessment detects target, source, unrelated and inventory damage", async () => {

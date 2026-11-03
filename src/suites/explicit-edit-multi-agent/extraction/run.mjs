@@ -121,7 +121,12 @@ export async function runExtraction(
 /** Capture complete physical evidence after every participant has closed.
  * The same preservation checks apply to original and correction boundaries.
  */
-export async function captureExtractionState(plan, workspace, evidence, { signal } = {}) {
+export async function captureExtractionState(
+  plan,
+  workspace,
+  evidence,
+  { signal, gradeStrict = true } = {},
+) {
   const candidate = await captureCandidate(workspace, path.join(evidence, "candidate"), {
     signal,
     includeAllFiles: true,
@@ -146,17 +151,20 @@ export async function captureExtractionState(plan, workspace, evidence, { signal
   const physicalInventoryMatched =
     entries.length === expectedInventory.size &&
     entries.every(({ path, type }) => expectedInventory.get(path) === type);
-  const paired = [
-    "renderer-module-extraction-plan-v2",
-    "renderer-module-extraction-plan-v3",
-  ].includes(plan.version);
-  const checked = (paired ? gradeExtraction : gradeHeaderExtraction)(plan, completeTree);
-  const extraction = {
-    ...checked,
-    inventoryMatched: checked.inventoryMatched && physicalInventoryMatched,
-    invalidEntries: candidate.invalid,
-  };
-  if (candidate.invalid.length || !physicalInventoryMatched) extraction.status = "fail";
+  let extraction;
+  if (gradeStrict) {
+    const paired = [
+      "renderer-module-extraction-plan-v2",
+      "renderer-module-extraction-plan-v3",
+    ].includes(plan.version);
+    const checked = (paired ? gradeExtraction : gradeHeaderExtraction)(plan, completeTree);
+    extraction = {
+      ...checked,
+      inventoryMatched: checked.inventoryMatched && physicalInventoryMatched,
+      invalidEntries: candidate.invalid,
+    };
+    if (candidate.invalid.length || !physicalInventoryMatched) extraction.status = "fail";
+  }
   await assertCandidateUnchanged(workspace, candidate, { signal });
   // Ordinary regular-file inventory is already charged by structural assessment.
   // Keep physical-only entries visible even when regular files also differ.

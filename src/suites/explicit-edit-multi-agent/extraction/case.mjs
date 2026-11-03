@@ -343,7 +343,7 @@ export async function runModelIsolatedExtraction(
     },
   });
   assert.ok(
-    preflight.passed && preflight.tasks.every(({ extraction }) => extraction.status === "pass"),
+    preflight.passed && preflight.tasks.every(({ structure }) => structure.status === "pass"),
     "Independent reference preflight failed",
   );
   assert.deepEqual(await restoringSourceIdentity(), sourceIdentity);
@@ -356,6 +356,7 @@ export async function runModelIsolatedExtraction(
         workspace,
         publicAssignments: assignments,
         boundedProviderRetries: true,
+        sortedStructure: true,
       });
     },
   });
@@ -425,7 +426,13 @@ export function recoveryModelDrivers(
 export function modelExtractionDrivers(
   outputPath,
   config,
-  { workspace, publicAssignments, boundedProviderRetries = false, recoveryCooldownMs } = {},
+  {
+    workspace,
+    publicAssignments,
+    boundedProviderRetries = false,
+    recoveryCooldownMs,
+    sortedStructure = false,
+  } = {},
 ) {
   const output = path.resolve(outputPath);
   const project = workspace ?? path.join(output, "workspace");
@@ -435,7 +442,9 @@ export function modelExtractionDrivers(
     if (!symbolOnly) return moduleExtractionPrompt(task);
     const spec = publicAssignments.get(task.id);
     assert.ok(spec, "Missing public symbol assignment");
-    return Array.isArray(spec) ? moduleSymbolPrompt(task, spec) : moduleExplicitPrompt(task, spec);
+    return Array.isArray(spec)
+      ? moduleSymbolPrompt(task, spec)
+      : moduleExplicitPrompt(task, spec, { sorted: sortedStructure });
   };
   delete participantConfig.cppCorrectionCommand;
   const feedback = new Map();
