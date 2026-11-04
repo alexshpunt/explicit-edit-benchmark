@@ -122,7 +122,7 @@ export function moduleExplicitPrompt(
   return [
     ...(flat
       ? [
-          "Complete the extraction in this turn. A large inventory, scattered entities, or the risk of touching neighboring code is a reason to work carefully, not to leave the assignment unchanged. Locate complete entities in manageable groups, inspect their boundaries and neighboring code, then make and check the required edits. Use focused searches and smaller reads when output is long. Continue until every listed move and copy is addressed. If an entity remains genuinely ambiguous after investigation, preserve the uncertain source and report exactly what blocked it; complete the other unambiguous work.",
+          "Complete the extraction in this turn. A large inventory, scattered entities, or the risk of touching neighboring code is a reason to work carefully, not to leave the assignment unchanged. Locate complete entities in manageable groups, inspect their boundaries and neighboring code, then make and check the required edits. Use focused searches and smaller reads when output is long. Set a finite timeout for shell commands in seconds; for example, use 120 for two minutes. If a command times out or fails, inspect its result and correct the approach. Continue until every listed move and copy is addressed. If an entity remains genuinely ambiguous after investigation, preserve the uncertain source and report exactly what blocked it; complete the other unambiguous work.",
         ]
       : []),
     moduleSymbolPrompt(task, entities, { sorted }),
