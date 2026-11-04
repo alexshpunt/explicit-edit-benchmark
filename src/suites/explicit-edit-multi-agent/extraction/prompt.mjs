@@ -112,10 +112,19 @@ export function moduleSymbolPrompt(task, entities, { sorted = false } = {}) {
 }
 
 /** Deliver explicit file obligations and only the disambiguation hints selected for this task. */
-export function moduleExplicitPrompt(task, { entities, contract, hints }, { sorted = false } = {}) {
+export function moduleExplicitPrompt(
+  task,
+  { entities, contract, hints },
+  { sorted = false, flat = false } = {},
+) {
   assert.ok(Array.isArray(entities) && Array.isArray(hints));
   assert.ok(hints.every((hint) => typeof hint === "string"));
   return [
+    ...(flat
+      ? [
+          "Complete the extraction in this turn. A large inventory, scattered entities, or the risk of touching neighboring code is a reason to work carefully, not to leave the assignment unchanged. Locate complete entities in manageable groups, inspect their boundaries and neighboring code, then make and check the required edits. Use focused searches and smaller reads when output is long. Continue until every listed move and copy is addressed. If an entity remains genuinely ambiguous after investigation, preserve the uncertain source and report exactly what blocked it; complete the other unambiguous work.",
+        ]
+      : []),
     moduleSymbolPrompt(task, entities, { sorted }),
     explicitExtractionProse(task, { sorted }),
     ...(contract.preamble ? [preambleContractProse(contract.preamble, { sorted })] : []),

@@ -414,6 +414,7 @@ export async function runModelFlatSequence(
     publicAssignments: assignments,
     boundedProviderRetries: true,
     sortedStructure: true,
+    flatProfile: true,
   });
   try {
     const report = await runFlatSequential(anchored.plan, path.join(output, "run"), {
@@ -519,6 +520,7 @@ export async function runModelFlatExtraction(
         publicAssignments: assignments,
         boundedProviderRetries: true,
         sortedStructure: true,
+        flatProfile: true,
       });
       return {
         ...drivers,
@@ -603,6 +605,7 @@ export function modelExtractionDrivers(
     boundedProviderRetries = false,
     recoveryCooldownMs,
     sortedStructure = false,
+    flatProfile = false,
   } = {},
 ) {
   const output = path.resolve(outputPath);
@@ -615,7 +618,7 @@ export function modelExtractionDrivers(
     assert.ok(spec, "Missing public symbol assignment");
     return Array.isArray(spec)
       ? moduleSymbolPrompt(task, spec)
-      : moduleExplicitPrompt(task, spec, { sorted: sortedStructure });
+      : moduleExplicitPrompt(task, spec, { sorted: sortedStructure, flat: flatProfile });
   };
   delete participantConfig.cppCorrectionCommand;
   const feedback = new Map();
