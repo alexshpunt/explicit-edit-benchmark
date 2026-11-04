@@ -166,27 +166,25 @@ test("sorted assessment applies to destination, residual source and unrelated C+
     { ...plan, tasks: [task], expected },
     { sorted: true },
   );
-  const reordered = {
-    ...expected,
-    [task.file]: expected[task.file]
-      .replace('#include "x.h"\n', "")
-      .replace('#include "y.h"', '#include "y.h"\n#include "x.h"'),
-    "main.cpp": expected["main.cpp"].replace(
-      '#include "x.h"\n#include "y.h"',
-      '#include "y.h"\n#include "x.h"',
-    ),
-    "other.cpp": '#include "y.h"\n#include "x.h"\nint z;\n',
-  };
-  assert.equal((await assess(reordered)).status, "pass");
-  assert.equal(
-    (
-      await assess({
-        ...reordered,
-        "other.cpp": '#if X\n#include "x.h"\n#endif\n#include "y.h"\nint z;\n',
-      })
-    ).status,
-    "fail",
-  );
+  assert.equal((await assess(expected)).status, "pass");
+  for (const changed of [
+    {
+      ...expected,
+      [task.file]: expected[task.file]
+        .replace('#include "x.h"\n', "")
+        .replace('#include "y.h"', '#include "y.h"\n#include "x.h"'),
+    },
+    {
+      ...expected,
+      "main.cpp": expected["main.cpp"].replace(
+        '#include "x.h"\n#include "y.h"',
+        '#include "y.h"\n#include "x.h"',
+      ),
+    },
+    { ...expected, "other.cpp": '#include "y.h"\n#include "x.h"\nint z;\n' },
+    { ...expected, "other.cpp": '#if X\n#include "x.h"\n#endif\n#include "y.h"\nint z;\n' },
+  ])
+    assert.equal((await assess(changed)).status, "fail");
 });
 
 test("one-task assessment detects target, source, unrelated and inventory damage", async () => {

@@ -27,7 +27,7 @@ export async function runIsolatedExtraction(
   await mkdir(output, { mode: 0o700 });
   await mkdir(path.join(output, "tasks"), { mode: 0o700 });
   const report = {
-    version: "renderer-module-extraction-isolated-v2",
+    version: "renderer-module-extraction-isolated-v3",
     kind: "diagnostic",
     runId: randomUUID(),
     status: "running",

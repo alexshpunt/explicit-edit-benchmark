@@ -141,10 +141,11 @@ node scripts/module-extraction.mjs debug CASE NEW_DEBUG_RUN \
 The `preflight` and `model` directories contain separate diagnostic reports and
 snapshots. The only quality assessment compares the assigned destination, residual
 source, unrelated files and physical inventory against a one-task reference.
-C++ peer units, including includes, are sorted within their namespace and
-conditional branch; reopened plain named namespaces may be combined or empty.
-Multiplicity, full unit contents, class member structure and conditional ancestry
-remain significant. Non-C++ files are compared losslessly. This diagnostic
+C++ peer units are sorted within their namespace and conditional branch, between
+preprocessor barriers. Directives and conditional blocks retain their order, and
+units cannot cross them. Reopened plain named namespaces without preprocessing
+may be combined or empty within a segment. Multiplicity, full unit contents, class
+member structure and conditional ancestry remain significant. Non-C++ files are compared losslessly. This diagnostic
 comparison does not establish compiler bindings. A partial extraction may depend on files belonging to other
 assignments, so diagnostics do not build, render, run recovery or produce a
 benchmark score. They are not benchmark observations. The ordinary `run`

@@ -4,11 +4,11 @@ import assert from "node:assert/strict";
 export function explicitExtractionProse(task, { sorted = false } = {}) {
   if (sorted) {
     const source = task.replacement
-      ? `Remove the assigned source portions from main.cpp and add ${task.replacement.trim()} at global scope.`
+      ? `Remove the assigned source portions from main.cpp and insert ${task.replacement.trim()} at the first owned portion's global position, before its outermost enclosing namespace when needed. Preserve the surrounding preprocessing order.`
       : "Remove the assigned source portions from main.cpp without inserting a replacement include.";
     return [
       "Preserve each assigned declaration, definition, body, literal, macro replacement, conditional branch, namespace and required occurrence. Preserve the contents of unrelated project files and residual source. Do not introduce extra files. Ordinary formatting and comments do not affect structural comparison. Non-C++ project files are compared losslessly.",
-      "Structural comparison sorts peer units, including includes, within each namespace and conditional branch. Plain named namespaces may be reopened, combined or left empty. Preserve namespace and conditional membership, multiplicities, complete declarations and function bodies, macro payloads and class member structure. This comparison does not prove compiler binding equivalence.",
+      "Structural comparison sorts ordinary peer units only within each namespace and conditional branch between preprocessing barriers. Keep directives and conditional blocks in order, and do not move code across them. Plain named namespaces without preprocessing may be reopened, combined or left empty within a segment. Preserve namespace and conditional membership, multiplicities, complete declarations and function bodies, macro payloads and class member structure. This comparison does not prove compiler binding equivalence.",
       source,
     ].join("\n\n");
   }

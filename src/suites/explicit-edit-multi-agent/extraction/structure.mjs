@@ -311,7 +311,7 @@ export async function prepareExtractionStructure(plan, { sorted = false } = {}) 
       }
     return {
       version: sorted
-        ? "renderer-module-extraction-sorted-structure-v1"
+        ? "renderer-module-extraction-sorted-structure-v2"
         : "renderer-module-extraction-structure-v1",
       status:
         mainMatched && inventoryMatched && unrelatedMatched && !differenceIds.size

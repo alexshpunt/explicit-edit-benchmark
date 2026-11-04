@@ -36,17 +36,40 @@ function plainNamespace(node) {
 }
 
 function makeScope() {
-  return { units: [], namespaces: new Map() };
+  return { units: [], namespaces: new Map(), sequence: [] };
+}
+
+function flushScope(scope) {
+  const units = [...scope.units];
+  for (const [name, nested] of scope.namespaces) {
+    const contents = finishScope(nested);
+    if (contents.length) units.push(JSON.stringify(["namespace", name, contents]));
+  }
+  if (units.length) scope.sequence.push(["units", units.sort(order)]);
+  scope.units = [];
+  scope.namespaces = new Map();
+}
+
+function hasPreprocessor(node) {
+  return node.type.startsWith("preproc_") || node.children.some(hasPreprocessor);
 }
 
 function addNodes(scope, nodes, source) {
   for (const node of nodes) {
     const namespace = plainNamespace(node);
-    if (namespace) {
+    if (namespace && !hasPreprocessor(node)) {
       if (!scope.namespaces.has(namespace.name)) scope.namespaces.set(namespace.name, makeScope());
       addNodes(scope.namespaces.get(namespace.name), namespace.children, source);
-    } else if (conditions.has(node.type)) {
-      scope.units.push(JSON.stringify(conditional(node, source)));
+    } else if (namespace) {
+      flushScope(scope);
+      const nested = makeScope();
+      addNodes(nested, namespace.children, source);
+      scope.sequence.push(["namespace", namespace.name, finishScope(nested)]);
+    } else if (node.type.startsWith("preproc_")) {
+      flushScope(scope);
+      scope.sequence.push(
+        conditions.has(node.type) ? conditional(node, source) : [node.type, node.key],
+      );
     } else {
       scope.units.push(JSON.stringify([node.type, node.key]));
     }
@@ -54,12 +77,8 @@ function addNodes(scope, nodes, source) {
 }
 
 function finishScope(scope) {
-  const units = [...scope.units];
-  for (const [name, nested] of scope.namespaces) {
-    const contents = finishScope(nested);
-    if (contents.length) units.push(JSON.stringify(["namespace", name, contents]));
-  }
-  return units.sort(order);
+  flushScope(scope);
+  return scope.sequence;
 }
 
 function conditional(node, source) {
@@ -89,7 +108,7 @@ export async function sortedExtractionCpp(source, { macros } = {}) {
   if (!result.projection) return result.text;
   const scope = makeScope();
   addNodes(scope, result.projection.children, source);
-  return JSON.stringify(["sorted-extraction-cpp-v1", finishScope(scope)]) + "\n";
+  return JSON.stringify(["sorted-extraction-cpp-v2", finishScope(scope)]) + "\n";
 }
 
 /** Validate paths and preserve non-C++ bytes via the existing project codec. */

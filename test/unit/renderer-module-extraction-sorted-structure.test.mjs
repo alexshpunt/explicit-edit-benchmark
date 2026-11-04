@@ -10,17 +10,23 @@ const compare = async (left, right) =>
 const distinct = async (left, right) =>
   assert.notEqual(await sortedExtractionCpp(left), await sortedExtractionCpp(right));
 
-test("include placement and peer ordering are not structural differences", async () => {
+test("preprocessor directives and blocks bound independently sorted regions", async () => {
   await compare(
-    '#include "x.h"\nnamespace N { using std::array; }\n#include "y.h"\n',
-    'namespace N { using std::array; }\n#include "y.h"\n#include "x.h"\n',
+    "int b; int a;\n#define X 1\nint d; int c;\n",
+    "int a; int b;\n#define X 1\nint c; int d;\n",
   );
-  await compare(
-    'namespace N { int f(){return 1;} }\n#include "x.h"\nnamespace N { int g(){return 2;} }\n',
-    '#include "x.h"\nnamespace N { int g(){return 2;} int f(){return 1;} }\n',
+  await distinct('#define X 1\n#include "x.h"\n', '#include "x.h"\n#define X 1\n');
+  await distinct('#include "x.h"\n#include "y.h"\n', '#include "y.h"\n#include "x.h"\n');
+  await distinct("int a;\n#define X 1\nint b;\n", "int b;\n#define X 1\nint a;\n");
+  await distinct(
+    "#if A\nint a;\n#endif\n#if B\nint b;\n#endif\n",
+    "#if B\nint b;\n#endif\n#if A\nint a;\n#endif\n",
+  );
+  await distinct(
+    "namespace N {\nint a;\n#define X 1\nint b;\n}",
+    "namespace N {\nint b;\n#define X 1\nint a;\n}",
   );
   await compare("namespace N {}\nnamespace A { namespace B {} }\nint x;\n", "int x;\n");
-  await compare("namespace N {}", "");
 });
 
 test("include identity, multiplicity, scope, and branch remain significant", async () => {
@@ -32,7 +38,7 @@ test("include identity, multiplicity, scope, and branch remain significant", asy
     '#if X\n#include "y.h"\n#else\n#include "x.h"\n#endif\n',
   );
   await distinct('#if X\n#include "x.h"\n#endif\n', '#if Y\n#include "x.h"\n#endif\n');
-  await compare(
+  await distinct(
     '#if X\n#include "x.h"\n#include "y.h"\n#endif\n',
     '#if X\n#include "y.h"\n#include "x.h"\n#endif\n',
   );

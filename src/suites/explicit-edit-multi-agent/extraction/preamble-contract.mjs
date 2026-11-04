@@ -124,7 +124,7 @@ export function preambleContractProse(items, { sorted = false } = {}) {
   if (!items.length) return "No preamble directives are required.";
   return [
     sorted
-      ? "The destination requires these directives and their conditional nesting. Their peer order is not significant. Preserve original macro replacement text from the source; this inventory does not contain replacements:"
+      ? "The destination requires these directives in order and with their conditional nesting. Preserve original macro replacement text from the source; this inventory does not contain replacements:"
       : "The preamble requires the following directive barriers in order. Preserve original macro replacement text from the source; this inventory does not contain replacements:",
     ...items.map((item, index) => `${index + 1}. ${describe(item)}.`),
   ].join("\n");
