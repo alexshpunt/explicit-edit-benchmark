@@ -112,10 +112,32 @@ export async function prepareFlatBatchProse(plan, contracts) {
     }
   }
   return {
-    render(task, fragments, { currentSource, completed, projection } = {}) {
+    render(task, fragments, { currentSource, completed, projection, markers, sourceMarkers } = {}) {
       assert.ok(fragments.length > 0);
+      if (sourceMarkers) {
+        assert.ok(markers, "Source markers require destination markers");
+        for (const fragment of fragments) {
+          const marker = sourceMarkers.get(fragment.id);
+          assert.equal(typeof marker, "string");
+          if (currentSource !== undefined) {
+            const start = currentSource.indexOf(marker);
+            assert.ok(
+              start >= 0 && start === currentSource.lastIndexOf(marker),
+              "Source marker is missing or ambiguous",
+            );
+            assert.equal(
+              currentSource.slice(
+                start + marker.length,
+                start + marker.length + fragment.text.length,
+              ),
+              fragment.text,
+              "Source marker no longer identifies its unit",
+            );
+          }
+        }
+      }
       if (vendors.has(task.id)) {
-        if (currentSource !== undefined)
+        if (currentSource !== undefined && !sourceMarkers)
           for (const fragment of fragments) {
             const start = currentSource.indexOf(fragment.text);
             assert.ok(
@@ -123,36 +145,53 @@ export async function prepareFlatBatchProse(plan, contracts) {
               "Vendor unit is missing or ambiguous",
             );
           }
-        return { ...vendors.get(task.id).render(fragments), anchors: [], hints: [] };
+        return {
+          ...vendors.get(task.id).render(fragments, { markers, sourceMarkers }),
+          anchors: [],
+          hints: [],
+        };
       }
       const selected = fragments.map((fragment) => {
         const fact = facts.get(fragment.id);
         assert.ok(fact && fact.task === task && fact.fragment === fragment, "Unknown fragment");
         return fact;
       });
+      if (markers)
+        for (const fragment of fragments) assert.equal(typeof markers.get(fragment.id), "string");
       const first = fragments.some((fragment) => fragment.id === task.fragments[0].id);
       const lines = [
         `Move the following complete entities from main.cpp into ${task.file}.`,
         "Preserve their existing code and original ordering relative to preprocessing directives and other destination entities. Preserve unrelated source and existing destination contents.",
-        ...(first
+        ...(markers
           ? [
-              preambleContractProse(contracts.get(task.id).preamble, { sorted: true }),
-              ...(task.using ?? []).map(
-                (entry) => `Copy this import into the destination: ${entry.text}`,
-              ),
-              task.replacement
-                ? `Replace the first assigned source entity with ${task.replacement.trim()}.`
-                : "Remove the first assigned source entity without replacement.",
+              "The destination and its ordered markers already exist. Replace each assigned marker with its corresponding complete unit, then remove that unit from main.cpp. Leave all other markers intact.",
             ]
-          : ["Remove these assigned source entities without adding another replacement include."]),
-        ...selected.flatMap(({ entities }) =>
-          entities.map(
+          : first
+            ? [
+                preambleContractProse(contracts.get(task.id).preamble, { sorted: true }),
+                ...(task.using ?? []).map(
+                  (entry) => `Copy this import into the destination: ${entry.text}`,
+                ),
+                task.replacement
+                  ? `Replace the first assigned source entity with ${task.replacement.trim()}.`
+                  : "Remove the first assigned source entity without replacement.",
+              ]
+            : [
+                "Remove these assigned source entities without adding another replacement include.",
+              ]),
+        ...selected.flatMap(({ fragment, entities }) => [
+          ...(markers
+            ? [
+                `Replace ${markers.get(fragment.id)} with this unit${sourceMarkers ? ` from immediately after ${sourceMarkers.get(fragment.id)} in main.cpp; remove that source marker as well` : ""}:`,
+              ]
+            : []),
+          ...entities.map(
             ({ scope, kind, signature, members }) =>
               `${scope ? `In namespace ${scope}` : "In the global namespace"}, move the ${kind.replaceAll("-", " ")} ${signature}.${members?.length ? ` Its members include ${members.join(" ")}` : ""}`,
           ),
-        ),
+        ]),
       ];
-      let anchors = selected.flatMap(({ anchors }) => anchors);
+      let anchors = sourceMarkers ? [] : selected.flatMap(({ anchors }) => anchors);
       if (currentSource !== undefined) {
         assert.ok(completed instanceof Set);
         anchors = anchors.map((anchor) => {
@@ -177,8 +216,8 @@ export async function prepareFlatBatchProse(plan, contracts) {
         });
       }
       const macros = [
-        ...selected.flatMap(({ macros }) => macros),
-        ...(first ? copiedMacros.get(task.id) : []),
+        ...(sourceMarkers ? [] : selected.flatMap(({ macros }) => macros)),
+        ...(first && !markers ? copiedMacros.get(task.id) : []),
       ];
       const hints = [ambiguityAnchorsProse(anchors), macroAmbiguityAnchorsProse(macros)].filter(
         Boolean,

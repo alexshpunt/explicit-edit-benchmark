@@ -5,6 +5,20 @@ import {
   projectedSource,
 } from "../../src/suites/explicit-edit-multi-agent/extraction/flat-batch-live.mjs";
 
+test("preinserted replacement is not inserted a second time", () => {
+  const initial = '#include "x.h"\nint a;\n';
+  const start = initial.indexOf("int a;");
+  const task = {
+    preinsertedReplacement: true,
+    replacement: '#include "x.h"\n',
+    fragments: [{ id: "a", start, end: start + 6 }],
+  };
+  const projection = projectedSource(
+    { initial: { "main.cpp": initial }, tasks: [task] },
+    new Set(["a"]),
+  );
+  assert.equal(projection.source, '#include "x.h"\n\n');
+});
 test("updated context follows completed removals and rejects altered or duplicate context", () => {
   const initial = "start\nint a;\nint b;\nint b;\nend\n";
   const fa = {

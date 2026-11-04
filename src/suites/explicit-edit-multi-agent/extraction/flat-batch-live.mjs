@@ -9,7 +9,8 @@ export function projectedSource(plan, completed) {
         .map((f) => ({
           start: f.start,
           end: f.end,
-          text: f.id === task.fragments[0].id ? task.replacement : "",
+          text:
+            !task.preinsertedReplacement && f.id === task.fragments[0].id ? task.replacement : "",
         })),
     )
     .sort((a, b) => a.start - b.start);
@@ -30,7 +31,7 @@ export function currentBatchAnchors(initial, source, task, batch, completed, pro
     .map((f) => ({
       start: f.start,
       end: f.end,
-      text: f.id === task.fragments[0].id ? task.replacement : "",
+      text: !task.preinsertedReplacement && f.id === task.fragments[0].id ? task.replacement : "",
     }));
   return batch.fragments.map((f) => {
     if (!f.isolatedAnchor) return f;

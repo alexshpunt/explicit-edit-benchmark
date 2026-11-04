@@ -52,6 +52,52 @@ test("a batch exposes its own entities and revalidates ambiguous source context"
   );
 });
 
+test("scaffolded batch maps each unit to its marker without recreating the file", async () => {
+  const plan = fixture();
+  const task = plan.tasks[0];
+  const prepared = await prepareFlatBatchProse(
+    plan,
+    new Map([["t", { preamble: [{ kind: "pragma-once" }] }]]),
+  );
+  const markers = new Map([
+    ["f0", "// SLOT_0"],
+    ["f2", "// SLOT_2"],
+  ]);
+  const batch = prepared.render(task, [task.fragments[0], task.fragments[2]], { markers });
+  assert.ok(batch.prompt.includes("// SLOT_0"));
+  assert.ok(batch.prompt.includes("// SLOT_2"));
+  assert.ok(!batch.prompt.includes('#include "test.h"'));
+  assert.throws(() => prepared.render(task, [task.fragments[1]], { markers }));
+});
+test("source markers identify duplicate entities without depending on neighboring edits", async () => {
+  const plan = fixture();
+  const task = plan.tasks[0];
+  const marker = "/* FROM_0 */";
+  const source = marker + plan.initial["main.cpp"];
+  const prepared = await prepareFlatBatchProse(
+    plan,
+    new Map([["t", { preamble: [{ kind: "pragma-once" }] }]]),
+  );
+  const options = {
+    markers: new Map([["f0", "// TO_0"]]),
+    sourceMarkers: new Map([["f0", marker]]),
+    currentSource: source,
+    completed: new Set(),
+  };
+  const batch = prepared.render(task, [task.fragments[0]], options);
+  assert.ok(batch.prompt.includes(marker));
+  assert.ok(batch.prompt.includes("// TO_0"));
+  assert.deepEqual(batch.anchors, []);
+  assert.throws(() =>
+    prepared.render(task, [task.fragments[0]], {
+      ...options,
+      currentSource: source.replace("return 1", "return 4"),
+    }),
+  );
+  assert.throws(() =>
+    prepared.render(task, [task.fragments[0]], { ...options, currentSource: marker + source }),
+  );
+});
 test("a later ambiguous occurrence fails closed after its context is removed", async () => {
   const first = "int same() { return 1; }\n";
   const source = first + first;

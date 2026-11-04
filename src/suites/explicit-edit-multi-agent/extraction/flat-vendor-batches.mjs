@@ -98,7 +98,7 @@ export async function prepareFlatVendorBatches(task, contract) {
   );
   const byId = new Map(facts.map((fact, index) => [fact.fragment.id, { ...fact, index }]));
   return {
-    render(fragments) {
+    render(fragments, { markers, sourceMarkers } = {}) {
       assert.ok(Array.isArray(fragments) && fragments.length > 0);
       const selected = fragments.map((fragment) => {
         const fact = byId.get(fragment.id);
@@ -111,10 +111,17 @@ export async function prepareFlatVendorBatches(task, contract) {
           selected[index - 1].index + 1,
           "Vendor batch must be contiguous and source ordered",
         );
+      if (markers)
+        for (const fact of selected) assert.equal(typeof markers.get(fact.fragment.id), "string");
       const first = selected[0].index === 0;
       const directives = selected.flatMap((fact) => fact.directives);
       const entities = selected.flatMap((fact) => fact.entities);
       const contents = selected.flatMap((fact) => [
+        ...(markers
+          ? [
+              `Replace ${markers.get(fact.fragment.id)} in ${task.file} with this unit${sourceMarkers ? ` from immediately after ${sourceMarkers.get(fact.fragment.id)} in main.cpp; remove that source marker as well` : ""}:`,
+            ]
+          : []),
         ...fact.entities.map((entity) => `Move ${describeEntity(entity)}.`),
         ...fact.directives.map(
           (directive) =>
@@ -123,9 +130,11 @@ export async function prepareFlatVendorBatches(task, contract) {
       ]);
       const lines = [
         `Move the following complete assigned vendor units from main.cpp into ${task.file}, preserving their original code and their order.`,
-        first
-          ? `Create the destination beginning with ${describeDirective(preamble.directives[0])}. ${task.replacement ? `Replace the first assigned source unit with ${task.replacement.trim()}.` : "Remove the assigned source units without a replacement include."}`
-          : `Insert these units after ${identity(facts[selected[0].index - 1])} in the destination. This preceding unit is context, not part of this assignment. Remove the assigned units from main.cpp without adding an include.`,
+        markers
+          ? "The destination and its ordered markers already exist. Replace each assigned marker with its corresponding complete unit, then remove that unit from main.cpp. Leave all other markers intact."
+          : first
+            ? `Create the destination beginning with ${describeDirective(preamble.directives[0])}. ${task.replacement ? `Replace the first assigned source unit with ${task.replacement.trim()}.` : "Remove the assigned source units without a replacement include."}`
+            : `Insert these units after ${identity(facts[selected[0].index - 1])} in the destination. This preceding unit is context, not part of this assignment. Remove the assigned units from main.cpp without adding an include.`,
         "Preserve the remaining source and destination units. Keep nested directives inside their existing function and keep all directive and unit ordering.",
         ...contents,
       ];

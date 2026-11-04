@@ -77,6 +77,23 @@ test("implementation batches associate nested directives with their containing f
   assert.ok(!batch.prompt.includes("123456"));
 });
 
+test("scaffolded vendor units use fixed source and destination markers instead of preceding units", async () => {
+  const task = makeTask("implementation", [
+    "#define OUTER(x) (x)\n",
+    "int nested(int x) { return OUTER(x); }\n",
+  ]);
+  const contract = await flatVendorContract(task.destination, "implementation");
+  const prepared = await prepareFlatVendorBatches(task, contract);
+  const id = task.fragments[1].id;
+  const batch = prepared.render([task.fragments[1]], {
+    markers: new Map([[id, "// TO_1"]]),
+    sourceMarkers: new Map([[id, "/* FROM_1 */"]]),
+  });
+  assert.ok(batch.prompt.includes("// TO_1"));
+  assert.ok(batch.prompt.includes("/* FROM_1 */"));
+  assert.ok(!batch.prompt.includes("Insert these units after"));
+  assert.throws(() => prepared.render([task.fragments[1]], { markers: new Map() }));
+});
 test("vendor delivery rejects a missing or duplicated live unit", async () => {
   const task = makeTask("header", ["#define UNIQUE_VENDOR 7\n", "int vendor_item();\n"]);
   const source = task.fragments.map(({ text }) => text).join("");
