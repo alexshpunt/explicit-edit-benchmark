@@ -241,6 +241,9 @@ export function cppStructure(source, { expandNamespaceConditionals = false } = {
             index = conditional(index) - 1;
             continue;
           }
+          // Macro directives inside a body do not change its physical boundary.
+          // Includes may inject arbitrary tokens and must still fail closed.
+          if (braces > 0 && ["define", "undef"].includes(command(item))) continue;
           throw new Error("Directive interrupts a source unit");
         }
         if (item.kind === "literal") continue;

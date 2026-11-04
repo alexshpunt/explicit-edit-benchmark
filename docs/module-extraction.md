@@ -6,6 +6,45 @@ retains the generated names, declaration order, function mixing and vendor code.
 A selected module must have an original header and implementation; required
 header-only and vendor dependencies receive separate whole-file assignments.
 
+## Flat CPU diagnostic profile
+
+The separate `flat-prepare` profile derives an active CPU-only source from an
+existing version 5 paired case. It runs Clang in directives-only preprocessing
+mode and maps active lines back to their authenticated original owners without
+expanding macros. It removes supported `frond` namespace shells and qualifiers
+and qualifies supported `std::hash` specializations. Unsupported source layouts
+fail preparation. The active vendor declaration and implementation become
+separate assignments; historical cases and reports are unchanged.
+
+`flat-verify` rebuilds the parent ownership and compiler projection, checks each
+of the 19 reference assignments separately, and builds and renders both the
+monolith and complete extracted tree twice. Both scene hashes must match the
+parent. These fixed-scene comparisons do not prove general semantic equivalence.
+`flat-run` assigns the files to ten fixed participant contexts and starts only
+one participant process at a time. Each process handles its assigned files one
+at a time and closes before the next participant starts. After each delivery the
+controller assesses and freezes the shared candidate, then requires inspection
+of that exact snapshot before the next task.
+The final candidate is built and rendered only if the full structural check passes.
+`flat-debug` requires that proof, a private model configuration, explicit model
+call authorization, one task ID and inspection. Every invocation starts one
+participant on one task in a fresh workspace; it reports structural diagnostics,
+not a full benchmark score.
+
+```sh
+node scripts/module-extraction.mjs flat-prepare PARENT_CASE NEW_CASE
+node scripts/module-extraction.mjs flat-verify NEW_CASE NEW_REFERENCE
+node scripts/module-extraction.mjs flat-run NEW_CASE NEW_RUN \
+  --config PRIVATE_JSON --proof NEW_REFERENCE/verification.json --allow-model-calls
+node scripts/module-extraction.mjs flat-debug NEW_CASE NEW_RUN \
+  --config PRIVATE_JSON --proof NEW_REFERENCE/verification.json \
+  --allow-model-calls --task extract-001
+```
+
+Use a fresh ignored output directory for each command and hold the shared renderer
+lock for preparation and verification. Keep private configurations and raw
+results local.
+
 ## Header contract
 
 Fresh paired cases use `#pragma once` for the project's own headers. The final

@@ -16,6 +16,26 @@ import { restoreProjectGuards } from "../../src/suites/explicit-edit-multi-agent
 import { pairedExtractionFixture } from "../helpers/module-extraction-generation.mjs";
 const script = new URL("../../scripts/module-extraction.mjs", import.meta.url);
 
+test("flat debug requires one task before opening private configuration", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      script.pathname,
+      "flat-debug",
+      "case",
+      "run",
+      "--config",
+      "unopened",
+      "--proof",
+      "unopened",
+      "--allow-model-calls",
+    ],
+    { encoding: "utf8", timeout: 3000 },
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /flat-debug/);
+});
+
 for (const command of ["run", "recover"])
   test(
     `closed-run ${command} is refused before opening even an explicitly authorized configuration`,

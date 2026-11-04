@@ -8,6 +8,10 @@ const help = `Experimental paired-module extraction
   verify CASE NEW_RUN
   run CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/verification.json --allow-model-calls
   debug CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/verification.json --allow-model-calls [--task TASK_ID]
+  flat-prepare PARENT_CASE NEW_CASE
+  flat-verify FLAT_CASE NEW_RUN
+  flat-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/verification.json --allow-model-calls
+  flat-debug FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/verification.json --allow-model-calls --task TASK_ID
 
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
@@ -67,10 +71,24 @@ try {
   else {
     const [command, input, output] = positionals;
     assert.equal(positionals.length, 3, help);
-    assert.ok(["prepare", "verify", "run", "recover", "debug"].includes(command), help);
-    if (command !== "debug") assert.equal(values.task, undefined, help);
+    assert.ok(
+      [
+        "prepare",
+        "verify",
+        "run",
+        "recover",
+        "debug",
+        "flat-prepare",
+        "flat-verify",
+        "flat-run",
+        "flat-debug",
+      ].includes(command),
+      help,
+    );
+    if (!["debug", "flat-debug"].includes(command)) assert.equal(values.task, undefined, help);
+    if (command === "flat-debug") assert.equal(typeof values.task, "string", help);
     if (command !== "recover") assert.ok(!values["from-run"] && !values["source-receipt"], help);
-    if (!["run", "recover", "debug"].includes(command))
+    if (!["run", "recover", "debug", "flat-debug", "flat-run"].includes(command))
       assert.ok(!values.config && !values.proof && !values["allow-model-calls"], help);
     if (command !== "prepare")
       for (const option of ["modules", "generation", "agents"])
@@ -94,6 +112,24 @@ try {
           files: manifest.files,
           initial: manifest.initial,
         }),
+      );
+    } else if (command === "flat-prepare") {
+      const { prepareFlatCase } =
+        await import("../src/suites/explicit-edit-multi-agent/extraction/flat-case.mjs");
+      const manifest = await prepareFlatCase(input, output);
+      console.log(
+        JSON.stringify({
+          version: manifest.version,
+          files: manifest.files,
+          initial: manifest.initial,
+        }),
+      );
+    } else if (command === "flat-verify") {
+      const { verifyFlatCase } =
+        await import("../src/suites/explicit-edit-multi-agent/extraction/flat-proof.mjs");
+      const proof = await verifyFlatCase(input, output, { signal: controller.signal });
+      console.log(
+        JSON.stringify({ status: proof.status, cleanSource: proof.sourceIdentity.sourceClean }),
       );
     } else if (command === "verify") {
       const { verifyExtraction } =
@@ -123,28 +159,46 @@ try {
           { code: "EXTRACTION_LIVE_CONTEXT_REQUIRED" },
         );
       const config = JSON.parse(await readFile(values.config, "utf8"));
-      const { runModelExtraction, runModelIsolatedExtraction } =
-        await import("../src/suites/explicit-edit-multi-agent/extraction/case.mjs");
+      const {
+        runModelExtraction,
+        runModelIsolatedExtraction,
+        runModelFlatExtraction,
+        runModelFlatSequence,
+      } = await import("../src/suites/explicit-edit-multi-agent/extraction/case.mjs");
       const { createTerminalInspector } =
         await import("../src/suites/explicit-edit-multi-agent/extraction/terminal-inspection.mjs");
       const inspect = createTerminalInspector();
       let report;
       try {
-        report = await (command === "debug" ? runModelIsolatedExtraction : runModelExtraction)(
-          input,
-          output,
-          config,
-          {
-            proofPath: values.proof,
-            signal: controller.signal,
-            inspect,
-            ...(command === "debug" ? { taskId: values.task } : {}),
-          },
-        );
+        report = await (
+          command === "flat-run"
+            ? runModelFlatSequence
+            : command === "flat-debug"
+              ? runModelFlatExtraction
+              : command === "debug"
+                ? runModelIsolatedExtraction
+                : runModelExtraction
+        )(input, output, config, {
+          proofPath: values.proof,
+          signal: controller.signal,
+          inspect,
+          ...(["debug", "flat-debug"].includes(command) ? { taskId: values.task } : {}),
+        });
       } finally {
         inspect.close();
       }
-      if (command === "debug") {
+      if (command === "flat-run") {
+        console.log(
+          JSON.stringify({
+            status: report.status,
+            agents: report.agents,
+            rounds: report.rounds.map(({ id, structure }) => ({ id, status: structure.status })),
+            buildPassed: report.integration?.buildPassed ?? false,
+            resultMatched: report.integration?.resultMatched ?? false,
+          }),
+        );
+        if (!report.passed) process.exitCode = 1;
+      } else if (["debug", "flat-debug"].includes(command)) {
         console.log(
           JSON.stringify({
             status: report.status,

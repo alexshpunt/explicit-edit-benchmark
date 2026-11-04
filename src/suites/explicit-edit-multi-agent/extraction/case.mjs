@@ -378,6 +378,177 @@ export async function runModelIsolatedExtraction(
   return result;
 }
 
+/** Run the flat shared candidate with ten fixed participants and serialized deliveries. */
+export async function runModelFlatSequence(
+  prepared,
+  outputPath,
+  config,
+  { proofPath, inspect, signal } = {},
+) {
+  assert.equal(typeof inspect, "function", "Every completed task requires inspection");
+  assert.equal(typeof proofPath, "string");
+  const { loadFlatCase } = await import("./flat-case.mjs");
+  const { loadFlatProof } = await import("./flat-proof.mjs");
+  const { flatPublicAssignments } = await import("./flat-assignments.mjs");
+  const { isolatedAnchors } = await import("./isolated-anchors.mjs");
+  const { runFlatSequential } = await import("./flat-sequential.mjs");
+  const { revalidateFlatHints } = await import("./flat-live-hints.mjs");
+  const { manifest, plan } = await loadFlatCase(prepared);
+  assert.equal(plan.tasks.length, 19, "The flat run requires all 19 file assignments");
+  const proof = await loadFlatProof(manifest, proofPath);
+  const anchored = isolatedAnchors(plan);
+  const publicAssignments = await flatPublicAssignments(plan);
+  const assignments = new Map(
+    [...publicAssignments].map(([id, assignment]) => [
+      id,
+      {
+        ...assignment,
+        hints: [...assignment.hints, ...(anchored.hints.has(id) ? [anchored.hints.get(id)] : [])],
+      },
+    ]),
+  );
+  const output = path.resolve(outputPath);
+  await mkdir(output, { mode: 0o700 });
+  const drivers = modelExtractionDrivers(path.join(output, "driver"), config, {
+    workspace: path.join(output, "run", "workspace"),
+    publicAssignments: assignments,
+    boundedProviderRetries: true,
+    sortedStructure: true,
+  });
+  try {
+    const report = await runFlatSequential(anchored.plan, path.join(output, "run"), {
+      ...drivers,
+      agents: 10,
+      inspect,
+      expectedPixels: manifest.pixels,
+      signal,
+      async execute(driver, task, context) {
+        const assignment = assignments.get(task.id);
+        assert.ok(assignment);
+        await revalidateFlatHints(context.workspace, task, assignment.hints, {
+          signal: context.signal,
+        });
+        return drivers.execute(driver, task, context);
+      },
+    });
+    assert.deepEqual(await restoringSourceIdentity(), proof.sourceIdentity);
+    await writeFile(
+      path.join(output, "execution.json"),
+      JSON.stringify(
+        {
+          kind: "model",
+          mode: "flat-sequential",
+          sourceIdentity: proof.sourceIdentity,
+          planSha256: manifest.planSha256,
+          agents: 10,
+        },
+        null,
+        2,
+      ) + "\n",
+      { flag: "wx", mode: 0o600 },
+    );
+    return report;
+  } finally {
+    await drivers.cleanup();
+  }
+}
+/** Run one flat-profile assignment only, after a clean model-free proof. */
+export async function runModelFlatExtraction(
+  prepared,
+  outputPath,
+  config,
+  { proofPath, inspect, signal, taskId } = {},
+) {
+  assert.equal(typeof inspect, "function", "A model attempt requires inspection");
+  assert.equal(typeof taskId, "string", "Exactly one task must be selected");
+  assert.equal(typeof proofPath, "string");
+  const { loadFlatCase } = await import("./flat-case.mjs");
+  const { loadFlatProof } = await import("./flat-proof.mjs");
+  const { flatPublicAssignments } = await import("./flat-assignments.mjs");
+  const { isolatedAnchors } = await import("./isolated-anchors.mjs");
+  const { revalidateFlatHints } = await import("./flat-live-hints.mjs");
+  const { runIsolatedExtraction } = await import("./isolated.mjs");
+  const { manifest, plan } = await loadFlatCase(prepared);
+  assert.equal(plan.tasks.filter((task) => task.id === taskId).length, 1, "Unknown task");
+  const proof = await loadFlatProof(manifest, proofPath);
+  const anchored = isolatedAnchors(plan);
+  const publicAssignments = await flatPublicAssignments(plan);
+  const assignments = new Map(
+    [...publicAssignments].map(([id, assignment]) => [
+      id,
+      {
+        ...assignment,
+        hints: [...assignment.hints, ...(anchored.hints.has(id) ? [anchored.hints.get(id)] : [])],
+      },
+    ]),
+  );
+  const output = path.resolve(outputPath);
+  await mkdir(output, { mode: 0o700 });
+  const tools = path.join(output, "reference-tools");
+  await prepareExtractionReference(tools);
+  const preflight = await runIsolatedExtraction(anchored.plan, path.join(output, "preflight"), {
+    signal,
+    taskId,
+    async createDrivers({ workspace }) {
+      return {
+        createDriver: (_agent, _session, options) => extractionReference(workspace, tools, options),
+        execute: (driver, task) => driver.execute(task),
+        async cleanup() {},
+      };
+    },
+    async inspect(request) {
+      return {
+        runId: request.runId,
+        sequence: request.sequence,
+        candidateIdentity: request.candidateIdentity,
+      };
+    },
+  });
+  assert.ok(
+    preflight.passed && preflight.tasks.length === 1,
+    "Independent reference preflight failed",
+  );
+  assert.deepEqual(await restoringSourceIdentity(), proof.sourceIdentity);
+  const result = await runIsolatedExtraction(anchored.plan, path.join(output, "model"), {
+    signal,
+    taskId,
+    inspect,
+    async createDrivers({ workspace, directory }) {
+      const drivers = modelExtractionDrivers(path.join(directory, "driver"), config, {
+        workspace,
+        publicAssignments: assignments,
+        boundedProviderRetries: true,
+        sortedStructure: true,
+      });
+      return {
+        ...drivers,
+        async execute(driver, task, context) {
+          const assignment = assignments.get(task.id);
+          assert.ok(assignment);
+          await revalidateFlatHints(workspace, task, assignment.hints, { signal: context.signal });
+          return drivers.execute(driver, task, context);
+        },
+      };
+    },
+  });
+  assert.deepEqual(await restoringSourceIdentity(), proof.sourceIdentity);
+  await writeFile(
+    path.join(output, "execution.json"),
+    JSON.stringify(
+      {
+        kind: "model",
+        mode: "flat-isolated-diagnostic",
+        sourceIdentity: proof.sourceIdentity,
+        planSha256: manifest.planSha256,
+        taskId,
+      },
+      null,
+      2,
+    ) + "\n",
+    { flag: "wx", mode: 0o600 },
+  );
+  return result;
+}
 /** Structural recovery stays with its original live context; integration owns fresh participants. */
 export function recoveryModelDrivers(
   outputPath,

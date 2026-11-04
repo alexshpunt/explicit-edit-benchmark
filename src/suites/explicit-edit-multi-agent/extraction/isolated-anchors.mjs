@@ -12,7 +12,7 @@ export function isolatedAnchors(plan) {
   ];
   const hints = new Map();
   const tasks = plan.tasks.map((task) => {
-    if (task.kind !== "implementation") return task;
+    if (task.kind !== "implementation" && !(task.kind === "header" && !task.guard)) return task;
     const entries = [];
     const fragments = task.fragments.map((fragment) => {
       if (fragment.beforeFragment || fragment.afterFragment) return fragment;

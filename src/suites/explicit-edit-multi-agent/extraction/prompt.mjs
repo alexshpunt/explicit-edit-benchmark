@@ -3,6 +3,7 @@ import { conditionalContractsProse } from "./conditional-contract.mjs";
 import { explicitExtractionProse } from "./explicit-prose.mjs";
 import { preambleContractProse } from "./preamble-contract.mjs";
 import { vendorActivationInstructions, vendorPhaseInstructions } from "./vendor-contract.mjs";
+import { flatVendorInstructions } from "./flat-assignments.mjs";
 
 /** Recovery keeps the original public file goal, but starts from existing partial work. */
 export function moduleRecoveryPrompt(task, { assignmentsDirectory, initialDirectory } = {}) {
@@ -121,6 +122,7 @@ export function moduleExplicitPrompt(task, { entities, contract, hints }, { sort
     ...(contract.conditionals ? [conditionalContractsProse(contract.conditionals)] : []),
     ...(contract.vendor ? [vendorPhaseInstructions(contract.vendor)] : []),
     ...(contract.vendorActivation ? [vendorActivationInstructions(contract.vendorActivation)] : []),
+    ...(contract.flatVendor ? [flatVendorInstructions(contract.flatVendor)] : []),
     ...hints,
   ].join("\n\n");
 }

@@ -155,6 +155,30 @@ test("identical declarations in two owners use unique context and fail closed on
   }
 });
 
+test("flat headers use unique context for repeated declarations", () => {
+  const source = "int before();\nint same();\nint middle();\nint same();\nint after();\n";
+  const text = "int same();";
+  const start = source.indexOf(text);
+  const input = {
+    initial: { "main.cpp": source },
+    tasks: [
+      {
+        id: "header",
+        file: "header.h",
+        kind: "header",
+        fragments: [
+          { id: "one", text, start, end: start + text.length, scope: "", kind: "declaration" },
+        ],
+        destination: text,
+        replacement: '#include "header.h"\n',
+      },
+    ],
+  };
+  const result = isolatedAnchors(input);
+  assert.equal(result.hints.size, 1);
+  assert.ok(result.plan.tasks[0].fragments[0].isolatedAnchor);
+  assert.doesNotThrow(() => extractCurrentFile(input.initial, result.plan.tasks[0]));
+});
 test("sorted assessment applies to destination, residual source and unrelated C++ files", async () => {
   const plan = fixture();
   const task = plan.tasks[0];
