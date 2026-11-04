@@ -218,17 +218,17 @@ export function ambiguityAnchorsProse(entries) {
   assert.ok(Array.isArray(entries));
   if (!entries.length) return "";
   return [
-    "For the following ambiguous source portions, use the specified exact text to identify the assigned occurrence. The line numbers refer only to the original snapshot and may be stale. Under the shared workspace lock, re-read the current source and follow the checks for each portion. If any check fails, do not guess; report the ambiguity. Check these portions before moving their anchor entities. During recovery, apply these checks when locating source that still needs removal; do not recreate an already removed source portion merely to satisfy its old anchor.",
+    "For the following ambiguous source portions, use the specified exact text to identify the assigned occurrence. The line numbers refer only to the original snapshot and may be stale. Re-read the current source and follow the checks for each portion. If any check fails, do not guess; report the ambiguity. Check these portions before moving their anchor entities. During recovery, apply these checks when locating source that still needs removal; do not recreate an already removed source portion merely to satisfy its old anchor.",
     ...entries.map((entry) =>
       entry.targetSide === "context"
         ? [
             `The ambiguous portion was on snapshot lines ${entry.startLine} through ${entry.endLine}. Its unique context is shown below.`,
-            `Under the lock, find that context exactly once. The target starts ${entry.offset} JavaScript UTF-16 code units into it and has length ${entry.target.length} code units. If the context is missing or ambiguous, do not guess.`,
+            `Find that context exactly once. The target starts ${entry.offset} JavaScript UTF-16 code units into it and has length ${entry.target.length} code units. If the context is missing or ambiguous, do not guess.`,
             exactExcerpt("Exact unique context:", entry.anchor),
           ].join("\n")
         : [
             `The ambiguous portion was on snapshot lines ${entry.startLine} through ${entry.endLine}. It is ${entry.targetSide} the unique anchor.`,
-            "Under the lock, confirm the anchor occurs exactly once, choose the nearest exact target on the stated side, and verify that the UTF-8 SHA-256 of the exact intervening text matches the digest below.",
+            "Confirm the anchor occurs exactly once, choose the nearest exact target on the stated side, and verify that the UTF-8 SHA-256 of the exact intervening text matches the digest below.",
             exactExcerpt("Exact ambiguous portion:", entry.target),
             exactExcerpt("Unique anchor excerpt:", entry.anchor),
             `SHA-256 of the original intervening text encoded as UTF-8: ${entry.gapSha256}.`,

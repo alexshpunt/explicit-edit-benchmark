@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-
-const exec = promisify(execFile);
 
 /** Verify the context excerpts actually shown to the agent, without guessing. */
 export function assertFlatHintContexts(source, task, hints) {
@@ -36,15 +33,9 @@ export function assertFlatHintContexts(source, task, hints) {
   }
 }
 
-/** Read under the same directory flock that every participant must hold. */
+/** Check the current source without coordinating participant edits. */
 export async function revalidateFlatHints(workspace, task, hints, { signal } = {}) {
   if (!hints.length && !task.fragments.some((fragment) => fragment.isolatedAnchor)) return;
-  const source = (
-    await exec(
-      "/usr/bin/flock",
-      ["--exclusive", workspace, "/bin/cat", path.join(workspace, "main.cpp")],
-      { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, signal },
-    )
-  ).stdout;
+  const source = await readFile(path.join(workspace, "main.cpp"), { encoding: "utf8", signal });
   assertFlatHintContexts(source, task, hints);
 }

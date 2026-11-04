@@ -63,8 +63,7 @@ that file's transfer obligation; they do not create a new scoring stage.
 
 Generation replay tracks each source unit back to its original file. Header
 ownership therefore does not depend on guard envelopes in the current source.
-Participants locate complete current units under the shared lock, not by old
-snapshot offsets. They retain shared namespace shells and import context.
+Participants locate complete current units, not old snapshot offsets. They retain shared namespace shells and import context.
 Insert each extracted project-header include at its first owned unit's current
 global position, before the outermost containing namespace opener when needed.
 Leave preceding source and imports in place; do not hoist or sort the includes.
@@ -110,7 +109,7 @@ assigned by guesswork.
 When ownership or a macro definition is ambiguous, assignments include exact source anchors and
 snapshot line numbers. Each displayed exact excerpt has a length, ending and digest so its boundary,
 including any final newline, can be verified independently of the code fence. Coordinates are hints,
-not edit positions. Participants must re-find and verify anchors under the shared lock and report
+not edit positions. Participants must re-find and verify anchors in the current source and report
 unresolved ambiguity rather than guessing.
 The same requirements and selected anchors are available during recovery. A scripted reference
 uses private ownership data; passing it does not by itself prove that a model can solve the task.

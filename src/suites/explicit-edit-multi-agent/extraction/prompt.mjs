@@ -15,7 +15,7 @@ export function moduleRecoveryPrompt(task, { assignmentsDirectory, initialDirect
       : integration
         ? task.prompt
         : `Repair the complete extraction obligation for ${task.file}. Inspect both its existing destination and main.cpp before editing. Some or all assigned fragments may already have moved; do not duplicate or reinsert them. Correct the destination and finish removal/replacement in the shared source. The original public goal below describes the required result, not an instruction to blindly create an existing file again.`,
-    "This is one bounded recovery delivery, not a new original attempt. Preserve current identifiers, prototypes, inactive branches, comments, namespace context, file payload order and every vendor copy. Do not rename or unshuffle the program. Never replace the workspace with baseline input. Hold flock -x /workspace across every fresh read and write of shared main.cpp; /tmp is private to this participant.",
+    "This is one bounded recovery delivery, not a new original attempt. Preserve current identifiers, prototypes, inactive branches, comments, namespace context, file payload order and every vendor copy. Do not rename or unshuffle the program. Never replace the workspace with baseline input. /tmp is private to this participant.",
     ...(assignmentsDirectory
       ? [
           "The following original public file assignments describe the extraction obligations. Read the relevant specifications in full as needed; they are not a private expected project tree:",
@@ -27,13 +27,13 @@ export function moduleRecoveryPrompt(task, { assignmentsDirectory, initialDirect
       ? [
           task.recovery.verified.sourceMatched
             ? "Source removal and replacement already pass. Repair only the destination; do not edit main.cpp."
-            : "Source removal or replacement still fails. Locate the current complete owned units again under the shared lock.",
+            : "Source removal or replacement still fails. Locate the current complete owned units again.",
           task.recovery.verified.targetMatched
             ? "The destination already passes. Preserve that file while repairing the source obligation."
             : "The destination still fails. Check it against the original public assignment without undoing peer work.",
         ]
       : []),
-    "Diagnostic positions describe the recorded candidate snapshot, not live edit selectors. Re-read shared source under flock and identify complete current owned units before each edit; preceding or concurrent repairs may have shifted positions.",
+    "Diagnostic positions describe the recorded candidate snapshot, not live edit selectors. Re-read shared source and identify complete current owned units before each edit; preceding or concurrent repairs may have shifted positions.",
     ...(task.recovery.candidateIdentity
       ? [`Diagnostic candidate identity: ${task.recovery.candidateIdentity}`]
       : []),
@@ -106,7 +106,7 @@ export function moduleSymbolPrompt(task, entities, { sorted = false } = {}) {
           "Keep the shared program using the extracted header without changing preceding preprocessing context.",
         ]
       : []),
-    "Preserve the project and its build behavior. Hold an exclusive flock on /workspace across each shared-source read and write. Keep the directory inode unchanged; /tmp is private to this participant. Do not compile or render in this turn.",
+    "Preserve the project and its build behavior. /tmp is private to this participant. Do not compile or render in this turn.",
     ...inventory,
   ].join("\n\n");
 }
@@ -146,7 +146,7 @@ export function moduleSymbolRecoveryPrompt(task, assignmentsDirectory) {
         : "Repair the reported project-preservation or integration failure.";
   return [
     scope,
-    "Inspect the current shared project and preserve unrelated changes. Do not assume assigned entities still occupy their original positions. Hold an exclusive flock on /workspace across each shared-source read and write.",
+    "Inspect the current shared project and preserve unrelated changes. Do not assume assigned entities still occupy their original positions.",
     ...(assignmentsDirectory
       ? [`Read the public assignment specifications under ${assignmentsDirectory}.`]
       : []),
@@ -233,7 +233,7 @@ function fileAssignment(task) {
       : task.replacement
         ? `Replace the first removed source fragment in main.cpp with:\n\n${task.replacement}`
         : "Remove the assigned source fragments from main.cpp without inserting another include.",
-    "Retain shared namespace shells, standard-library imports and include context in main.cpp where peer fragments still need them. Preserve every unassigned fragment. Hold an exclusive flock on the shared /workspace directory while re-reading and updating main.cpp; use flock -x /workspace around the whole read-modify-write command. Keep the directory inode unchanged. Use this same shared lock for every participant; /tmp is private to each participant.",
+    "Retain shared namespace shells, standard-library imports and include context in main.cpp where peer fragments still need them. Preserve every unassigned fragment. Re-read current source before editing. /tmp is private to each participant.",
     "Complete this one whole-file assignment and return control. Do not rename, reorder, clean up, compile or render. Shared verification starts after every original file queue finishes; your live context may then receive one bounded repair for a failed obligation.",
     ...task.fragments.map(
       ({ id, text, scope, beforeFragment, afterFragment }, index) =>
@@ -262,7 +262,7 @@ export function moduleExtractionPrompt(task) {
     "Move only the complete owned fragments below. Keep every current identifier, declaration, definition, comment, literal and preprocessor condition unchanged. Preserve all intervening fragments owned by other modules, including nested guards.",
     `Assemble ${task.file} from these fragments in their listed order. Insert the following direct project includes immediately after #define ${task.guard}; retain existing standard-library includes and the complete guard and namespace scaffolding:\n\n${includes}`,
     replacement,
-    "Treat main.cpp as shared source. Hold an exclusive flock on the shared /workspace directory while re-reading and updating main.cpp; use flock -x /workspace around the whole read-modify-write command. Keep the directory inode unchanged. Use this same shared lock for every participant; /tmp is private to each participant. Preserve peer changes and leave unrelated source and blank boundary layout alone. Do not rename, reorder or cosmetically clean up code.",
+    "Treat main.cpp as shared source. Re-read current source before editing. /tmp is private to each participant. Preserve peer changes and leave unrelated source and blank boundary layout alone. Do not rename, reorder or cosmetically clean up code.",
     "Complete this one module assignment and return control. Do not compile or render. Shared verification starts after all original file queues finish; your live context may then receive one bounded repair for a failed obligation.",
     ...task.fragments.map(
       ({ id, text }, index) => `Source fragment ${index + 1} (${id}):\n\n${codeBlock(text)}`,

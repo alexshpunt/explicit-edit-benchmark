@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +16,7 @@ test("live context checks reject stale and ambiguous hints", () => {
       { text: "int x;", isolatedAnchor: { context: "before\nint x;\nafter\n", offset: 7 } },
     ],
   };
-  const hint = "Under the lock, find context exactly once:\n```\nbefore\nint x;\nafter\n```";
+  const hint = "Find context exactly once:\n```\nbefore\nint x;\nafter\n```";
   assert.doesNotThrow(() => assertFlatHintContexts("before\nint x;\nafter\n", task, [hint]));
   assert.throws(() => assertFlatHintContexts("changed", task, [hint]), /context/i);
   assert.throws(
@@ -23,7 +25,30 @@ test("live context checks reject stale and ambiguous hints", () => {
   );
 });
 
-test("revalidation reads the live workspace under flock", async () => {
+test("live hint validation does not wait for a workspace lock", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "flat-hints-lock-"));
+  const task = {
+    fragments: [{ text: "int x;", isolatedAnchor: { context: "int x;\n", offset: 0 } }],
+  };
+  let holder;
+  try {
+    await writeFile(path.join(workspace, "main.cpp"), "int x;\n");
+    holder = spawn(
+      "/usr/bin/flock",
+      ["-x", workspace, "/bin/sh", "-c", "echo ready; cat >/dev/null"],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    await once(holder.stdout, "data");
+    await revalidateFlatHints(workspace, task, [], { signal: AbortSignal.timeout(1000) });
+  } finally {
+    if (holder) {
+      holder.stdin.end();
+      await once(holder, "close");
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+test("revalidation reads the current source", async () => {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "flat-hints-"));
   const task = {
     fragments: [{ text: "int x;", isolatedAnchor: { context: "int x;\n", offset: 0 } }],

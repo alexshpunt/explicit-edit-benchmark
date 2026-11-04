@@ -36,7 +36,6 @@ test("different replacement texts for one public macro require the owned exact s
   assert.match(prose, /snapshot line 3/);
   assert.match(prose, /#define FLAG 22/);
   assert.ok(prose.includes(createHash("sha256").update(anchors[0].text).digest("hex")));
-  assert.match(prose, /shared workspace lock/);
 });
 
 test("identical duplicate macro text gets unique nearby context when a competing payload exists", async () => {

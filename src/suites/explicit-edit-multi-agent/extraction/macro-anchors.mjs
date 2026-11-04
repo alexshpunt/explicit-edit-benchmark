@@ -90,7 +90,7 @@ function uniqueExcerpt(source, definition) {
 
 /** Expose exact source context only for owned macros with competing payloads.
  * Preamble macros are copied; fragments are moved. A caller must revalidate all
- * locations and context after taking the shared-source lock.
+ * locations and context in the current source.
  */
 export async function macroAmbiguityAnchors(source, task) {
   assert.equal(typeof source, "string");
@@ -149,7 +149,7 @@ export function macroAmbiguityAnchorsProse(entries) {
   assert.ok(Array.isArray(entries));
   if (!entries.length) return "";
   return [
-    "The following macros have competing source definitions. Their line numbers refer only to the original snapshot and may be stale. Under the shared workspace lock, re-read main.cpp and confirm that the exact context occurs once before acting. If it is missing or ambiguous, do not guess; report the ambiguity.",
+    "The following macros have competing source definitions. Their line numbers refer only to the original snapshot and may be stale. Re-read main.cpp and confirm that the exact context occurs once before acting. If it is missing or ambiguous, do not guess; report the ambiguity.",
     ...entries.map(({ signature, action, line, contextLine, text, offset, length: extent }) => {
       let length = 3;
       for (const [run] of text.matchAll(/`+/g)) length = Math.max(length, run.length + 1);

@@ -168,7 +168,7 @@ async function definitionAnchors(source, tasks, neighbourAnchors) {
       hints
         .get(task.id)
         .push(
-          `An assigned definition has a competing public signature. It was on snapshot lines ${start} through ${end}. Under the shared workspace lock, re-read main.cpp and proceed only if the following exact context occurs once. The assigned fragment starts ${fragment.start - left} JavaScript UTF-16 code units into that context and has length ${fragment.text.length} code units. If the context is missing or ambiguous, report the ambiguity. Snapshot lines may be stale.\n${mark}\n${context}${context.endsWith("\n") ? "" : "\n"}${mark}`,
+          `An assigned definition has a competing public signature. It was on snapshot lines ${start} through ${end}. Re-read main.cpp and proceed only if the following exact context occurs once. The assigned fragment starts ${fragment.start - left} JavaScript UTF-16 code units into that context and has length ${fragment.text.length} code units. If the context is missing or ambiguous, report the ambiguity. Snapshot lines may be stale.\n${mark}\n${context}${context.endsWith("\n") ? "" : "\n"}${mark}`,
         );
     }
     disambiguated.add(key);
