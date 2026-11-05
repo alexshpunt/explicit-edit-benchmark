@@ -207,29 +207,30 @@ keeps the same session and retries at most three times per delivery, with a
 60-second cooldown before each retry. Billing, quota and authentication errors
 stop the run.
 
-For a chunked team run, the non-math team finishes and closes before a fresh
-math team starts. After that team also closes, the controller measures the
-shared candidate. If structural differences remain, a separate fresh team
-performs one correction wave; no error is attributed to an original participant.
-Repairs are serialized and checked against fresh candidate evidence.
-A correction can introduce new differences, which are scored but do not start
-another structural wave. Build and image corrections have separate fresh
-contexts and are attempted only when the corresponding check requires them.
-The report must retain the original and final measurements, correction
-attempts and the shared team Score; an interrupted run has no final Score.
-Structural feedback identifies public entities when possible, but may report
-only that a destination or shared preservation check failed. It does not
-always localize the defect.
-The fresh-team recovery policy has its own version and retains the earlier
-build and image factors. Results from different recovery policies describe
-different execution conditions and must not be treated as directly comparable.
+For a chunked team run, both original teams finish and close before the
+controller captures the initial structural differences. A separate fresh team
+receives all of those differences in one repair wave. Repairs are serialized,
+but structure is not verified again until the final check.
 
-The single-penalty score policy charges each initially observed difference once.
-A difference that remains after structural correction has no second charge. A
-resolved initial difference returns half its penalty, while each newly introduced
-difference incurs one penalty. Later integration corrections can introduce new
-penalties but do not refund structural penalties. Existing canonical score v1
-and saved reports retain their original meaning.
+After structural repair, the controller checks the build and, if it succeeds,
+both images. A failed build receives one build correction. A failing image check
+or a build that remains broken receives one final result-recovery attempt. The
+controller then checks structure, build and images one final time. No further
+attempt is allowed. When the final build fails, images are unavailable and both
+integration factors are 0.5.
+
+The structural Score starts with one point per planned file. Each initial
+difference costs one point; an initial difference absent at the final check
+returns half a point. Each final difference absent initially costs one point.
+Normalize this balance to the file count and clamp it between zero and one.
+Multiply it by the build and image factors: 1 for first-pass success, 0.75 for
+success after correction, and 0.5 for final failure or an unavailable result.
+
+Initial and final evidence, correction attempts and the shared team Score are
+retained separately. An interrupted run has no final Score. Structural feedback
+uses public information and may fail to localize a defect. The new final-snapshot
+policy is versioned independently; prior scoring policies and saved reports
+retain their original meaning.
 
 A completed single-snapshot team experiment can report its unassisted Score with
 `scoreExtractionSnapshot`. The calculation uses the existing extraction policy,
