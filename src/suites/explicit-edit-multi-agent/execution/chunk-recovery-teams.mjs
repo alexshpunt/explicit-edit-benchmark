@@ -37,7 +37,23 @@ export async function runChunkRecoveryTeams({
           const recoverySignal = AbortSignal.any([first.signal, second.signal]);
           recovery = await runChunkRecovery({
             totalFiles,
-            capture,
+            async capture(context) {
+              recoverySignal.throwIfAborted();
+              const cancelled = Promise.withResolvers();
+              const abort = () => cancelled.reject(recoverySignal.reason);
+              recoverySignal.addEventListener("abort", abort, { once: true });
+              if (recoverySignal.aborted) abort();
+              try {
+                await Promise.race([
+                  Promise.all(participants.map(({ driver }) => driver.assertIdle())),
+                  cancelled.promise,
+                ]);
+              } finally {
+                recoverySignal.removeEventListener("abort", abort);
+              }
+              recoverySignal.throwIfAborted();
+              return capture(context);
+            },
             onUpdate,
             signal: recoverySignal,
             repairIntegration,

@@ -28,6 +28,35 @@ function team(phase, log) {
   };
 }
 
+test("a participant lost before verification prevents a successful recovery", async () => {
+  const log = [];
+  const other = team("other", log);
+  const create = other.createDriver;
+  other.createDriver = async (...args) => {
+    const driver = await create(...args);
+    let calls = 0;
+    const idle = driver.assertIdle;
+    driver.assertIdle = async function () {
+      if (++calls > 1) throw Error("participant lost");
+      return idle.call(this);
+    };
+    return driver;
+  };
+  await assert.rejects(
+    runChunkRecoveryTeams({
+      otherTasks: [{ id: "one", batches: [{ id: "first" }] }],
+      mathTasks: [{ id: "math", batches: [{ id: "second" }] }],
+      other,
+      math: team("math", log),
+      totalFiles: 2,
+      capture: async () => assert.fail("Dead participants must prevent capture"),
+      repairStructural: async () => {},
+      repairIntegration: async () => {},
+    }),
+    /participant lost/,
+  );
+  assert.equal(log.filter((x) => x.startsWith("close:")).length, 4);
+});
 test("a failed structural correction closes both teams and propagates the failure", async () => {
   const log = [];
   await assert.rejects(
