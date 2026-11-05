@@ -72,13 +72,19 @@ export async function runFinalChunkRecovery({
     await onUpdate({ stages, attempts });
   }
   const initial = await snapshot("original", true, false);
-  if (initial.structure.differenceIds.length) {
+  const repairIds = initial.structure.fileDifferenceIds ?? initial.structure.differenceIds;
+  assert.ok(
+    Array.isArray(repairIds) && repairIds.every((id) => typeof id === "string" && id.length),
+  );
+  assert.equal(new Set(repairIds).size, repairIds.length);
+  assert.equal(repairIds.length === 0, initial.structure.differenceIds.length === 0);
+  if (repairIds.length) {
     let started = false,
       completed = false;
     await structuralWave(async () => {
       assert.equal(started, false);
       started = true;
-      for (const id of initial.structure.differenceIds)
+      for (const id of repairIds)
         await repair("structural-correction", id, repairStructural, initial);
       completed = true;
     });
@@ -101,6 +107,8 @@ export async function runFinalChunkRecovery({
     totalFiles,
     initialDifferences: initial.structure.differenceIds,
     finalDifferences: final.structure.differenceIds,
+    initial: initial.structure,
+    final: final.structure,
     buildFirstPassed,
     preRecoveryBuildPassed,
     firstImageMatched,

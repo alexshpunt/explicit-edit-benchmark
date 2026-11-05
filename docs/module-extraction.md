@@ -219,10 +219,15 @@ controller then checks structure, build and images one final time. No further
 attempt is allowed. When the final build fails, images are unavailable and both
 integration factors are 0.5.
 
-The structural Score starts with one point per planned file. Each initial
-difference costs one point; an initial difference absent at the final check
-returns half a point. Each final difference absent initially costs one point.
-Normalize this balance to the file count and clamp it between zero and one.
+The structural Score starts with one point per assigned fragment. A fragment
+fails when its source or destination obligation fails. Identical copies are
+counted by multiplicity rather than individually attributed. Preservation
+failures remain separate differences. Each initial difference costs one point;
+an initial difference absent at the final check returns half a point. Each
+final difference absent initially costs one point. Normalize this balance to
+the fragment count and clamp it between zero and one. If the checker cannot
+attribute a discrepancy reliably, it reports unavailable instead of inventing
+a precise score.
 Multiply it by the build and image factors: 1 for first-pass success, 0.75 for
 success after correction, and 0.5 for final failure or an unavailable result.
 

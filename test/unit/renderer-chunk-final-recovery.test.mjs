@@ -40,6 +40,25 @@ function setup({ initial = ["a", "b"], checks, final = [] }) {
   return { options, events, attempts, snapshots };
 }
 
+test("file-level repairs are distinct from the fragment-level scoring differences", async () => {
+  const f = setup({ checks: [integration(true, true), integration(true, true)] });
+  f.options.capture = async ({ stage, assessStructure, measureIntegration }) => ({
+    ...(assessStructure
+      ? {
+          structure: {
+            differenceIds: stage === "original" ? ["fragment:a", "fragment:b"] : [],
+            fileDifferenceIds: stage === "original" ? ["file"] : [],
+          },
+        }
+      : {}),
+    ...(measureIntegration ? { integration: integration(true, true) } : {}),
+  });
+  const result = await runFinalChunkRecovery(f.options);
+  assert.deepEqual(f.events, ["wave", "repair:file"]);
+  assert.deepEqual(result.score.initialDifferences, ["fragment:a", "fragment:b"]);
+  assert.deepEqual(result.score.initial.differenceIds, ["fragment:a", "fragment:b"]);
+  assert.deepEqual(result.score.final.differenceIds, []);
+});
 test("structural assignments use one initial snapshot and no intermediate verification", async () => {
   const f = setup({ checks: [integration(true, true), integration(true, true)] });
   const result = await runFinalChunkRecovery(f.options);
