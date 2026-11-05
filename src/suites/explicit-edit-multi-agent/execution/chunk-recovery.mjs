@@ -10,11 +10,12 @@ export async function runChunkRecovery({
   totalFiles,
   capture,
   repairStructural,
+  structuralWave = async (run) => run(),
   repairIntegration,
   onUpdate = async () => {},
   signal,
 }) {
-  for (const callback of [capture, repairStructural, repairIntegration, onUpdate])
+  for (const callback of [capture, repairStructural, structuralWave, repairIntegration, onUpdate])
     assert.equal(typeof callback, "function");
   assert.ok(Number.isSafeInteger(totalFiles) && totalFiles > 0);
   const stages = [];
@@ -54,16 +55,24 @@ export async function runChunkRecovery({
   let state = await snapshot("original", true);
   const pending = [...state.structure.differenceIds];
   if (pending.length) {
-    for (const id of pending) {
-      check();
-      if (!state.structure.differenceIds.includes(id)) {
-        attempts.push({ stage: "structural-correction", id, status: "skipped" });
-        await onUpdate({ stages, attempts });
-        continue;
+    let waveStarted = false;
+    let waveCompleted = false;
+    await structuralWave(async () => {
+      assert.equal(waveStarted, false, "Structural wave can run only once");
+      waveStarted = true;
+      for (const id of pending) {
+        check();
+        if (!state.structure.differenceIds.includes(id)) {
+          attempts.push({ stage: "structural-correction", id, status: "skipped" });
+          await onUpdate({ stages, attempts });
+          continue;
+        }
+        await repair("structural-correction", id, repairStructural, state);
+        state = await snapshot("structural-correction", false);
       }
-      await repair("structural-correction", id, repairStructural, state);
-      state = await snapshot("structural-correction", false);
-    }
+      waveCompleted = true;
+    });
+    assert.ok(waveCompleted, "Structural wave did not complete");
     state = await snapshot("structural-correction", true);
   }
   if (!state.integration.buildPassed) {

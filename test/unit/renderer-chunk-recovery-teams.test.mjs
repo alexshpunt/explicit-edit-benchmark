@@ -6,7 +6,8 @@ function team(phase, log) {
   return {
     agents: 2,
     async createDriver(agent) {
-      const driver = {
+      log.push(`start:${phase}:${agent}`);
+      return {
         closed: false,
         phase,
         agent,
@@ -19,90 +20,91 @@ function team(phase, log) {
           log.push(`close:${phase}:${agent}`);
         },
       };
-      return driver;
     },
-    async execute(driver, batch) {
+    async execute(driver) {
       assert.equal(driver.closed, false);
-      log.push(`original:${phase}:${batch.id}`);
     },
   };
 }
-
-test("a participant lost before verification prevents a successful recovery", async () => {
-  const log = [];
-  const other = team("other", log);
-  const create = other.createDriver;
-  other.createDriver = async (...args) => {
-    const driver = await create(...args);
-    let calls = 0;
-    const idle = driver.assertIdle;
-    driver.assertIdle = async function () {
-      if (++calls > 1) throw Error("participant lost");
-      return idle.call(this);
-    };
-    return driver;
+function input(log, capture) {
+  return {
+    otherTasks: [{ id: "one", batches: [1] }],
+    mathTasks: [{ id: "math", batches: [2] }],
+    other: team("other", log),
+    math: team("math", log),
+    repairTeam: team("repair", log),
+    totalFiles: 2,
+    capture,
+    repairIntegration: async () => assert.fail("Unexpected integration repair"),
   };
-  await assert.rejects(
-    runChunkRecoveryTeams({
-      otherTasks: [{ id: "one", batches: [{ id: "first" }] }],
-      mathTasks: [{ id: "math", batches: [{ id: "second" }] }],
-      other,
-      math: team("math", log),
-      totalFiles: 2,
-      capture: async () => assert.fail("Dead participants must prevent capture"),
-      repairStructural: async () => {},
-      repairIntegration: async () => {},
-    }),
-    /participant lost/,
-  );
-  assert.equal(log.filter((x) => x.startsWith("close:")).length, 4);
-});
-test("a failed structural correction closes both teams and propagates the failure", async () => {
-  const log = [];
-  await assert.rejects(
-    runChunkRecoveryTeams({
-      otherTasks: [{ id: "one", batches: [{ id: "first" }] }],
-      mathTasks: [{ id: "math", batches: [{ id: "second" }] }],
-      other: team("other", log),
-      math: team("math", log),
-      totalFiles: 2,
-      capture: async () => ({
-        structure: { differenceIds: ["preservation:main.cpp"] },
-        integration: { buildPassed: true, resultMatched: true },
-      }),
-      repairStructural: async ({ participant }) => {
-        assert.equal(participant.driver.phase, "other");
-        throw Error("repair failure");
-      },
-      repairIntegration: async () => {},
-    }),
-    /repair failure/,
-  );
-  assert.equal(log.filter((x) => x.startsWith("close:")).length, 4);
-});
-test("both original teams remain live for the shared structural recovery", async () => {
+}
+function snapshot(ids) {
+  return {
+    structure: { differenceIds: ids },
+    integration: { buildPassed: true, resultMatched: true },
+  };
+}
+
+test("a fresh repair team starts only after both original teams closed", async () => {
   const log = [];
   let fixed = false;
   const result = await runChunkRecoveryTeams({
-    otherTasks: [{ id: "one", batches: [{ id: "one-batch" }] }],
-    mathTasks: [{ id: "math", batches: [{ id: "math-batch" }] }],
-    other: team("other", log),
-    math: team("math", log),
-    totalFiles: 2,
-    capture: async () => ({
-      structure: { differenceIds: fixed ? [] : ["one"] },
-      integration: { buildPassed: true, resultMatched: true },
+    ...input(log, async () => {
+      if (!fixed) assert.equal(log.filter((x) => x.startsWith("close:")).length, 4);
+      return snapshot(fixed ? [] : ["one"]);
     }),
-    repairStructural: async ({ participant, id, participants }) => {
+    async repairStructural({ participant, participants, id }) {
       assert.equal(id, "one");
-      assert.equal(participant.driver.phase, "other");
-      assert.ok(participants.every(({ driver }) => !driver.closed));
-      log.push("repair");
+      assert.equal(participant.driver.phase, "repair");
+      assert.ok(participants.every((p) => !p.driver.closed));
       fixed = true;
     },
-    repairIntegration: async () => assert.fail("Integration passed"),
   });
   assert.equal(result.recovery.score.score, 75);
-  assert.equal(log.filter((x) => x.startsWith("close:")).length, 4);
-  assert.ok(log.indexOf("repair") < log.findIndex((x) => x.startsWith("close:")));
+  assert.equal(result.recovery.score.policy.structuralParticipants, "fresh-team");
+  assert.notEqual(result.recovery.score.policy.version, "renderer-module-extraction-recovery-v2");
+  assert.equal(log.filter((x) => x.startsWith("close:")).length, 6);
+  assert.ok(
+    log.findIndex((x) => x.startsWith("start:repair")) >
+      log.findLastIndex((x) => x.startsWith("close:math")),
+  );
+});
+
+test("a passing original candidate does not start a repair team", async () => {
+  const log = [];
+  await runChunkRecoveryTeams({
+    ...input(log, async () => snapshot([])),
+    repairStructural: async () => assert.fail("No repair"),
+  });
+  assert.ok(!log.some((x) => x.startsWith("start:repair")));
+});
+
+test("cancelling a correction closes the fresh team and produces no score", async () => {
+  const log = [];
+  const controller = new AbortController();
+  await assert.rejects(
+    runChunkRecoveryTeams({
+      ...input(log, async () => snapshot(["one"])),
+      signal: controller.signal,
+      repairStructural: async ({ signal }) => {
+        controller.abort(Error("cancelled"));
+        signal.throwIfAborted();
+      },
+    }),
+    /cancelled/,
+  );
+  assert.equal(log.filter((x) => x.startsWith("close:")).length, 6);
+});
+test("a repair failure closes the independent team and leaves no final score", async () => {
+  const log = [];
+  await assert.rejects(
+    runChunkRecoveryTeams({
+      ...input(log, async () => snapshot(["one"])),
+      repairStructural: async () => {
+        throw Error("repair failed");
+      },
+    }),
+    /repair failed/,
+  );
+  assert.equal(log.filter((x) => x.startsWith("close:")).length, 6);
 });
