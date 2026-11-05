@@ -70,6 +70,16 @@ test("a fresh repair team starts only after both original teams closed", async (
   );
 });
 
+test("an unchanged error retains its initial penalty after a fresh-team attempt", async () => {
+  const log = [];
+  const result = await runChunkRecoveryTeams({
+    ...input(log, async () => snapshot(["one"])),
+    repairStructural: async () => {},
+  });
+  assert.equal(result.recovery.score.first.score, 50);
+  assert.equal(result.recovery.score.score, 50);
+  assert.equal(result.recovery.score.structural.version, "renderer-canonical-score-v2");
+});
 test("a passing original candidate does not start a repair team", async () => {
   const log = [];
   await runChunkRecoveryTeams({

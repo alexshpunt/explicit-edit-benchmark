@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { extractionScore } from "../extraction/score.mjs";
+import { extractionScore, EXTRACTION_RECOVERY_POLICY } from "../extraction/score.mjs";
 
 /** Run bounded recovery against a shared candidate. Callers own participant
  * lifetimes, private evidence, feedback construction, and serialized persistence.
@@ -8,6 +8,7 @@ import { extractionScore } from "../extraction/score.mjs";
  */
 export async function runChunkRecovery({
   totalFiles,
+  policy = EXTRACTION_RECOVERY_POLICY,
   capture,
   repairStructural,
   structuralWave = async (run) => run(),
@@ -86,6 +87,7 @@ export async function runChunkRecovery({
   check();
   const score = extractionScore({
     totalFiles,
+    policy,
     stages: stages.map(({ stage, structure, integration }) => ({
       stage,
       differenceIds: structure.differenceIds,

@@ -39,9 +39,9 @@ export function scoreExtractionSnapshot({ structure, integration }) {
 /** Score actual measured checkpoints without adding recovery work to the denominator.
  * A build-failed checkpoint has no image observation. Its first later rendered
  * result can therefore pass unassisted, while the recovered build keeps its cost.
- * @param {{totalFiles: number, stages: {stage: string, differenceIds: string[], integration: {buildPassed: boolean, resultMatched: boolean}}[]}} input
+ * @param {{totalFiles: number, stages: {stage: string, differenceIds: string[], integration: {buildPassed: boolean, resultMatched: boolean}}[], policy?: typeof EXTRACTION_RECOVERY_POLICY}} input
  */
-export function extractionScore({ totalFiles, stages }) {
+export function extractionScore({ totalFiles, stages, policy = EXTRACTION_RECOVERY_POLICY }) {
   assert.ok(Array.isArray(stages) && stages.length > 0, "Missing measured extraction stages");
   let previous = -1;
   for (const [index, checkpoint] of stages.entries()) {
@@ -85,6 +85,7 @@ export function extractionScore({ totalFiles, stages }) {
   const correction = stages.find(({ stage }) => stage === "structural-correction");
   const structural = canonicalStructuralScore({
     totalHunks: totalFiles,
+    policy: policy.scorePolicy,
     initialDifferences: original.differenceIds,
     correctionDifferences: correction?.differenceIds ?? null,
     laterDifferences: stages
@@ -124,7 +125,7 @@ export function extractionScore({ totalFiles, stages }) {
   const normalized = structural.final.normalized * buildFactor * imageFactor;
   return {
     version: "renderer-module-extraction-score-v1",
-    policy: EXTRACTION_RECOVERY_POLICY,
+    policy,
     structural,
     build: { ...build, factor: buildFactor },
     images: { ...images, factor: imageFactor },

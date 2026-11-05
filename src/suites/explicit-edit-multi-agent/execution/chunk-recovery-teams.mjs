@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { runChunkTeam } from "./chunk-team.mjs";
 import { runChunkRecovery } from "./chunk-recovery.mjs";
 import { EXTRACTION_RECOVERY_POLICY } from "../extraction/score.mjs";
+import { SINGLE_PENALTY_SCORE_POLICY } from "../grading/canonical-score.mjs";
 
 export const FRESH_CHUNK_RECOVERY_POLICY = Object.freeze({
   ...EXTRACTION_RECOVERY_POLICY,
-  version: "renderer-chunk-extraction-recovery-v1",
+  version: "renderer-chunk-extraction-recovery-v2",
   structuralParticipants: "fresh-team",
+  scorePolicy: SINGLE_PENALTY_SCORE_POLICY,
 });
 
 /** Close the original teams before measuring, then use a fresh team for repair. */
@@ -37,6 +39,7 @@ export async function runChunkRecoveryTeams({
     waveSignal && signal ? AbortSignal.any([waveSignal, signal]) : (waveSignal ?? signal);
   const recovery = await runChunkRecovery({
     totalFiles,
+    policy: FRESH_CHUNK_RECOVERY_POLICY,
     signal,
     onUpdate,
     repairIntegration,
@@ -87,6 +90,5 @@ export async function runChunkRecoveryTeams({
       await repairStructural({ ...context, participant, participants, signal: currentSignal });
     },
   });
-  recovery.score = { ...recovery.score, policy: FRESH_CHUNK_RECOVERY_POLICY };
   return { other: otherResult, math: mathResult, repair: repairResults.at(-1) ?? null, recovery };
 }

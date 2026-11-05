@@ -220,9 +220,17 @@ attempts and the shared team Score; an interrupted run has no final Score.
 Structural feedback identifies public entities when possible, but may report
 only that a destination or shared preservation check failed. It does not
 always localize the defect.
-The fresh-team recovery policy has its own version. It keeps the earlier score
-weights, but results from different recovery policies describe different
-execution conditions and must not be treated as directly comparable.
+The fresh-team recovery policy has its own version and retains the earlier
+build and image factors. Results from different recovery policies describe
+different execution conditions and must not be treated as directly comparable.
+
+The single-penalty score policy charges each initially observed difference once.
+A difference that remains after structural correction has no second charge. A
+resolved initial difference returns half its penalty, while each newly introduced
+difference incurs one penalty. Later integration corrections can introduce new
+penalties but do not refund structural penalties. Existing canonical score v1
+and saved reports retain their original meaning.
+
 A completed single-snapshot team experiment can report its unassisted Score with
 `scoreExtractionSnapshot`. The calculation uses the existing extraction policy,
 including preservation differences and build/image factors. It describes the

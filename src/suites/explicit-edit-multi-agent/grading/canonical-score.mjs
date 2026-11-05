@@ -8,6 +8,11 @@ export const CANONICAL_SCORE_POLICY = Object.freeze({
   integration: Object.freeze({ unassisted: 1, corrected: 0.75, failed: 0.5 }),
 });
 
+export const SINGLE_PENALTY_SCORE_POLICY = Object.freeze({
+  ...CANONICAL_SCORE_POLICY,
+  version: "renderer-canonical-score-v2",
+  unresolvedCorrectionPenalty: 0,
+});
 const order = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 const integrationStages = ["build-correction", "image-correction"];
 
@@ -41,14 +46,19 @@ function balance(ticks, totalHunks) {
 /** Count canonical mismatch IDs, independent of original tasks and their executors.
  * laterDifferences contains chronological {stage, differences} checkpoints for
  * actual build/image correction waves, not repeated read-only observations.
- * @param {{totalHunks: number, initialDifferences: string[], correctionDifferences?: string[] | null, laterDifferences?: unknown[]}} input
+ * @param {{totalHunks: number, initialDifferences: string[], correctionDifferences?: string[] | null, laterDifferences?: unknown[], policy?: typeof CANONICAL_SCORE_POLICY | typeof SINGLE_PENALTY_SCORE_POLICY}} input
  */
 export function canonicalStructuralScore({
   totalHunks,
   initialDifferences,
   correctionDifferences = null,
   laterDifferences = [],
+  policy = CANONICAL_SCORE_POLICY,
 }) {
+  assert.ok(
+    policy === CANONICAL_SCORE_POLICY || policy === SINGLE_PENALTY_SCORE_POLICY,
+    "Unknown score policy",
+  );
   assert.ok(
     Number.isSafeInteger(totalHunks) &&
       totalHunks > 0 &&
@@ -101,9 +111,9 @@ export function canonicalStructuralScore({
   if (correction !== null) {
     const delta = comparison(initial, correction);
     const change =
-      CANONICAL_SCORE_POLICY.correctionCredit * delta.resolved.length -
-      CANONICAL_SCORE_POLICY.unresolvedCorrectionPenalty * delta.unresolved.length -
-      CANONICAL_SCORE_POLICY.newDifferencePenalty * delta.introduced.length;
+      policy.correctionCredit * delta.resolved.length -
+      policy.unresolvedCorrectionPenalty * delta.unresolved.length -
+      policy.newDifferencePenalty * delta.introduced.length;
     ticks += 2 * change;
     ledger.push({
       stage: "structural-correction",
@@ -119,13 +129,13 @@ export function canonicalStructuralScore({
     const delta = comparison(current, checkpoint.differences);
     // The structural refund budget is exhausted. Disappearing differences in an
     // integration repair do not restore credit; fresh regressions still cost it.
-    const change = 0 - CANONICAL_SCORE_POLICY.newDifferencePenalty * delta.introduced.length;
+    const change = 0 - policy.newDifferencePenalty * delta.introduced.length;
     ticks += 2 * change;
     ledger.push({ ...checkpoint, ...delta, change, ...balance(ticks, totalHunks) });
     current = checkpoint.differences;
   }
   return {
-    version: CANONICAL_SCORE_POLICY.version,
+    version: policy.version,
     totalHunks,
     initialDifferences: initial,
     correctionDifferences: correction,
