@@ -6,6 +6,48 @@ import {
   extractionScore,
 } from "../../src/suites/explicit-edit-multi-agent/extraction/score.mjs";
 
+test("a single measured extraction reports the existing Score without inventing corrections", async () => {
+  const { scoreExtractionSnapshot } =
+    await import("../../src/suites/explicit-edit-multi-agent/extraction/score.mjs");
+  const result = scoreExtractionSnapshot({
+    structure: {
+      status: "fail",
+      files: [{ id: "one" }, { id: "two" }],
+      differenceIds: ["two"],
+    },
+    integration: { buildPassed: false, resultMatched: false },
+  });
+  assert.equal(result.score, 12.5);
+  assert.equal(result.structural.first.score, 50);
+  assert.equal(result.build.factor, 0.5);
+  assert.equal(result.images.available, false);
+  assert.equal(result.structural.correctionComplete, false);
+});
+
+test("a preservation difference reduces the shared extraction Score", async () => {
+  const { scoreExtractionSnapshot } =
+    await import("../../src/suites/explicit-edit-multi-agent/extraction/score.mjs");
+  const result = scoreExtractionSnapshot({
+    structure: {
+      status: "fail",
+      files: [{ id: "one" }, { id: "two" }],
+      differenceIds: ["two", "preservation:main.cpp"],
+    },
+    integration: { buildPassed: false, resultMatched: false },
+  });
+  assert.equal(result.score, 0);
+  assert.equal(result.structural.first.score, 0);
+});
+test("a single extraction score rejects inconsistent structural evidence", async () => {
+  const { scoreExtractionSnapshot } =
+    await import("../../src/suites/explicit-edit-multi-agent/extraction/score.mjs");
+  assert.throws(() =>
+    scoreExtractionSnapshot({
+      structure: { status: "fail", files: [{ id: "one" }], differenceIds: [] },
+      integration: { buildPassed: true, resultMatched: true },
+    }),
+  );
+});
 const stage = (stage, differenceIds = [], buildPassed = true, resultMatched = true) => ({
   stage,
   differenceIds,

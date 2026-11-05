@@ -21,6 +21,21 @@ export const EXTRACTION_RECOVERY_POLICY = Object.freeze({
 const stageOrder = ["original", "structural-correction", "build-correction", "image-correction"];
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
+/** Score one measured shared extraction using the existing extraction policy. */
+export function scoreExtractionSnapshot({ structure, integration }) {
+  assert.ok(record(structure) && Array.isArray(structure.files));
+  assert.ok(Array.isArray(structure.differenceIds));
+  assert.ok(["pass", "fail"].includes(structure.status));
+  assert.equal(
+    structure.status === "pass",
+    structure.differenceIds.length === 0,
+    "Structural status and differences disagree",
+  );
+  return extractionScore({
+    totalFiles: structure.files.length,
+    stages: [{ stage: "original", differenceIds: structure.differenceIds, integration }],
+  });
+}
 /** Score actual measured checkpoints without adding recovery work to the denominator.
  * A build-failed checkpoint has no image observation. Its first later rendered
  * result can therefore pass unassisted, while the recovered build keeps its cost.

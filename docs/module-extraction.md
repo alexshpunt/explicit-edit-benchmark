@@ -207,6 +207,14 @@ keeps the same session and retries at most three times per delivery, with a
 60-second cooldown before each retry. Billing, quota and authentication errors
 stop the run.
 
+A completed single-snapshot team experiment can report its unassisted Score with
+`scoreExtractionSnapshot`. The calculation uses the existing extraction policy,
+including preservation differences and build/image factors. It describes the
+shared candidate, not individual participants. When correction has not run,
+`structural.correctionComplete` remains false; the score does not imply that the
+recovery budget was used. The report retains the structural and integration
+components alongside the numerical Score.
+
 The canonical structural credit and build/image factors are unchanged. Header
 protection is part of the existing file-transfer check. A matching render alone
 does not establish source preservation or a correct header. Model calls require
