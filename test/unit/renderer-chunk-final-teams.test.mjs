@@ -24,6 +24,72 @@ function team(name, events) {
   };
 }
 
+test("a completed original team is reported before the next team starts", async () => {
+  const events = [];
+  const other = team("other", events);
+  const math = team("math", events);
+  math.createDriver = async () => {
+    throw Error("cannot start math");
+  };
+  await assert.rejects(
+    runFinalChunkTeams({
+      otherTasks: [{ id: "other", batches: [1] }],
+      mathTasks: [{ id: "math", batches: [2] }],
+      other,
+      math,
+      repairTeam: team("repair", events),
+      totalFiles: 2,
+      async capture() {
+        assert.fail("No capture expected");
+      },
+      async repairStructural() {},
+      async repairIntegration() {},
+      async onTeamCompleted(name, result) {
+        events.push(`record:${name}:${result.status}`);
+      },
+    }),
+    /cannot start math/,
+  );
+  assert.ok(events.includes("record:other:drained"));
+});
+test("timed-out repair workers retire and remaining repairs become unissued when exhausted", async () => {
+  const events = [];
+  const result = await runFinalChunkTeams({
+    otherTasks: [{ id: "other", batches: [1] }],
+    mathTasks: [{ id: "math", batches: [2] }],
+    other: team("other", events),
+    math: team("math", events),
+    repairTeam: team("repair", events),
+    totalFiles: 3,
+    async capture({ assessStructure, measureIntegration }) {
+      return {
+        ...(assessStructure ? { structure: { differenceIds: ["a", "b", "c"] } } : {}),
+        ...(measureIntegration ? { integration: { buildPassed: true, resultMatched: true } } : {}),
+      };
+    },
+    async repairStructural({ participant }) {
+      await participant.retire();
+      return { timedOut: true };
+    },
+    async repairIntegration() {
+      assert.fail("No correction");
+    },
+  });
+  assert.deepEqual(
+    result.recovery.attempts.map((x) => x.status),
+    ["timed-out", "timed-out", "unissued"],
+  );
+  assert.equal(result.repair.status, "partial");
+  assert.deepEqual(
+    result.repair.timeouts.map((x) => x.task),
+    ["a", "b"],
+  );
+  assert.deepEqual(
+    result.repair.unissued.map((x) => x.task),
+    ["c"],
+  );
+  assert.equal(events.filter((x) => x === "close:repair").length, 2);
+});
 test("default team score uses the initial and final snapshots", async () => {
   const events = [];
   const result = await runFinalChunkTeams({

@@ -115,6 +115,53 @@ test("a failed image check invokes exactly one result correction", async () => {
   assert.equal(result.score.firstImageMatched, false);
 });
 
+test("a timed-out structural repair is recorded and remaining repairs continue", async () => {
+  const f = setup({ checks: [integration(true, true), integration(true, true)] });
+  f.options.repairStructural = async ({ id }) => {
+    f.events.push(`repair:${id}`);
+    return id === "a" ? { timedOut: true } : undefined;
+  };
+  const result = await runFinalChunkRecovery(f.options);
+  assert.deepEqual(
+    result.attempts.map(({ status }) => status),
+    ["timed-out", "settled"],
+  );
+  assert.deepEqual(f.events, [
+    "capture:original",
+    "wave",
+    "repair:a",
+    "repair:b",
+    "capture:build-check",
+    "capture:final",
+  ]);
+});
+
+test("a timed-out build repair retains partial edits and advances to verification", async () => {
+  const f = setup({
+    initial: [],
+    checks: [integration(false, false), integration(false, false), integration(true, true)],
+  });
+  f.options.repairIntegration = async ({ stage }) => {
+    f.events.push(`repair:${stage}`);
+    return stage === "build-correction" ? { timedOut: true } : undefined;
+  };
+  const result = await runFinalChunkRecovery(f.options);
+  assert.deepEqual(
+    result.attempts.map(({ status }) => status),
+    ["timed-out", "settled"],
+  );
+  assert.equal(result.score.finalBuildPassed, true);
+});
+
+test("unissued repairs from an exhausted team are not marked successful", async () => {
+  const f = setup({ checks: [integration(true, true), integration(true, true)] });
+  f.options.repairStructural = async () => ({ unissued: true });
+  const result = await runFinalChunkRecovery(f.options);
+  assert.deepEqual(
+    result.attempts.map(({ status }) => status),
+    ["unissued", "unissued"],
+  );
+});
 test("a cancelled repair never computes final score", async () => {
   const f = setup({ checks: [] });
   const controller = new AbortController();

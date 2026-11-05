@@ -232,6 +232,13 @@ uses public information and may fail to localize a defect. The new final-snapsho
 policy is versioned independently; prior scoring policies and saved reports
 retain their original meaning.
 
+Each chunk or repair delivery has a 120-second execution deadline. A timed-out
+participant is stopped and its process boundary is drained before it is retired;
+partial edits remain in the shared project. The delivery is recorded
+as timed out and is not retried. Surviving participants continue the queue; if
+none remain, unissued work is recorded and the controller proceeds to verification.
+External cancellation and infrastructure failures are not successful deliveries.
+
 A completed single-snapshot team experiment can report its unassisted Score with
 `scoreExtractionSnapshot`. The calculation uses the existing extraction policy,
 including preservation differences and build/image factors. It describes the

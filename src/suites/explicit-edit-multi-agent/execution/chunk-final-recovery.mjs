@@ -60,9 +60,10 @@ export async function runFinalChunkRecovery({
     attempts.push(attempt);
     await onUpdate({ stages, attempts });
     try {
-      await operation({ stage, id, state, signal });
+      const outcome = await operation({ stage, id, state, signal });
       check();
-      attempt.status = "settled";
+      assert.ok(!(outcome?.timedOut && outcome?.unissued));
+      attempt.status = outcome?.timedOut ? "timed-out" : outcome?.unissued ? "unissued" : "settled";
     } catch (error) {
       attempt.status = "error";
       await onUpdate({ stages, attempts });
