@@ -225,11 +225,14 @@ counted by multiplicity rather than individually attributed. Preservation
 failures remain separate differences. Each initial difference costs one point;
 an initial difference absent at the final check returns half a point. Each
 final difference absent initially costs one point. Normalize this balance to
-the fragment count and clamp it between zero and one. If the checker cannot
-attribute a discrepancy reliably, it reports unavailable instead of inventing
-a precise score.
+the fragment count and clamp it between zero and one.
 Multiply it by the build and image factors: 1 for first-pass success, 0.75 for
 success after correction, and 0.5 for final failure or an unavailable result.
+
+The checker always returns a result for any candidate. A changed unit of the
+same kind as a failed fragment counts as that fragment's damaged copy. Other
+unattributed code, unreadable files and lost unrelated code are preservation
+differences.
 
 Initial and final evidence, correction attempts and the shared team Score are
 retained separately. An interrupted run has no final Score. Structural feedback

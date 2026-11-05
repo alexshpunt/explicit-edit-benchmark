@@ -133,10 +133,13 @@ test("identical fragments sent to different files retain distinct final deficits
   assert.equal(first.failedFragments, 1);
   assert.equal(second.failedFragments, 1);
   assert.notDeepEqual(first.differenceIds, second.differenceIds);
-  await assert.rejects(
-    assess({ "main.cpp": `${unit}\n${keep}`, "a.cpp": `${unit}\n`, "b.cpp": "" }),
-    { code: "FRAGMENT_ATTRIBUTION_UNAVAILABLE" },
-  );
+  const retained = await assess({
+    "main.cpp": `${unit}\n${keep}`,
+    "a.cpp": `${unit}\n`,
+    "b.cpp": "",
+  });
+  assert.equal(retained.failedFragments, 1);
+  assert.deepEqual(retained.preservationIds, []);
 });
 test("a modified source residue is not mistaken for a successful removal", async () => {
   const p = fixture(),
@@ -148,13 +151,17 @@ test("a modified source residue is not mistaken for a successful removal", async
   assert.equal(result.failedFragments, 1);
   assert.deepEqual(result.preservationIds, []);
 });
-test("an unidentifiable source unit cannot silently count as a successful removal", async () => {
+test("an unidentifiable source unit is charged as a preservation difference", async () => {
   const p = fixture(),
     assess = await prepareFragmentStructure(p);
-  await assert.rejects(
-    assess({ ...p.expected, "main.cpp": `int unknown(){return 9;}\n${p.expected["main.cpp"]}` }),
-    { code: "FRAGMENT_ATTRIBUTION_UNAVAILABLE" },
-  );
+  const result = await assess({
+    ...p.expected,
+    "main.cpp": `int unknown(){return 9;}\n${p.expected["main.cpp"]}`,
+  });
+  assert.equal(result.status, "fail");
+  assert.equal(result.failedFragments, 0);
+  assert.deepEqual(result.preservationIds, ["preservation:main.cpp"]);
+  assert.ok(result.fileDifferenceIds.length > 0, "a failed snapshot always has repair targets");
 });
 test("a damaged residual source is a separate preservation difference", async () => {
   const p = fixture(),
@@ -162,15 +169,35 @@ test("a damaged residual source is a separate preservation difference", async ()
   const result = await assess({ ...p.expected, "main.cpp": "int main(){return 7;}\n" });
   assert.equal(result.failedFragments, 0);
   assert.deepEqual(result.preservationIds, ["preservation:main.cpp"]);
+  assert.ok(result.fileDifferenceIds.length > 0, "a failed snapshot always has repair targets");
 });
 
-test("an unattributable changed target plus missing fragment refuses a precise score", async () => {
+test("a renamed target fragment fails once without a separate preservation charge", async () => {
   const p = fixture(),
     assess = await prepareFragmentStructure(p);
-  await assert.rejects(
-    assess({ ...p.expected, "a.cpp": "int unknown(){return 0;}\nint b(){return 2;}\n" }),
-    { code: "FRAGMENT_ATTRIBUTION_UNAVAILABLE" },
-  );
+  const result = await assess({
+    ...p.expected,
+    "a.cpp": "int unknown(){return 1;}\nint b(){return 2;}\n",
+  });
+  assert.equal(result.failedFragments, 1);
+  assert.deepEqual(result.preservationIds, []);
+});
+test("a renamed target fragment and a stray empty statement are both charged", async () => {
+  const p = fixture(),
+    assess = await prepareFragmentStructure(p);
+  const result = await assess({
+    ...p.expected,
+    "a.cpp": "int unknown(){return 1;}\nint b(){return 2;};\n",
+  });
+  assert.equal(result.failedFragments, 1);
+  assert.deepEqual(result.preservationIds, ["preservation:a.cpp"]);
+});
+test("a destination that is not valid UTF-8 fails its fragments and preservation", async () => {
+  const p = fixture(),
+    assess = await prepareFragmentStructure(p);
+  const result = await assess({ ...p.expected, "a.cpp": Buffer.from([0xff, 0xfe, 0x0a]) });
+  assert.equal(result.failedFragments, 2);
+  assert.deepEqual(result.preservationIds, ["preservation:a.cpp"]);
 });
 test("a missing function and an unrelated empty statement have separate penalties", async () => {
   const p = fixture(),

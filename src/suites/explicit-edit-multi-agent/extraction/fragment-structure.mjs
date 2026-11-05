@@ -46,7 +46,9 @@ function matcher(patterns) {
   }
   return first;
 }
-function scan(current, patterns) {
+// Preparation is strict about the trusted plan. Candidate scans never refuse:
+// the longest pattern wins and an overlapping later match stays unexplained.
+function scan(current, patterns, { strict = true } = {}) {
   const keys = current.map(nodeKey),
     result = [],
     used = new Set();
@@ -54,16 +56,31 @@ function scan(current, patterns) {
     const matches = (patterns.get(keys[i]) ?? []).filter((p) =>
       p.keys.every((key, j) => keys[i + j] === key),
     );
-    if (matches.length > 1) throw unavailable("Overlapping fragment identities");
+    if (strict && matches.length > 1) throw unavailable("Overlapping fragment identities");
     if (!matches.length) continue;
-    const match = matches[0];
-    for (let j = i; j < i + match.keys.length; j++) {
-      if (used.has(j)) throw unavailable("Overlapping fragment occurrences");
-      used.add(j);
+    const match = matches.reduce((a, b) => (b.keys.length > a.keys.length ? b : a));
+    const indices = match.keys.map((_, j) => i + j);
+    if (indices.some((j) => used.has(j))) {
+      if (strict) throw unavailable("Overlapping fragment occurrences");
+      continue;
     }
-    result.push({ pattern: match, indices: match.keys.map((_, j) => i + j) });
+    for (const j of indices) used.add(j);
+    result.push({ pattern: match, indices });
   }
   return result;
+}
+/** Read one candidate file. Invalid text or a missing projection is ordinary
+ * candidate damage: the file contributes no fragments and fails preservation. */
+async function candidateNodes(value, macros) {
+  if (value === undefined) return { source: "", nodes: await nodes("", macros), damaged: false };
+  let source;
+  try {
+    source = text(value);
+    return { source, nodes: await nodes(source, macros), damaged: false };
+  } catch (error) {
+    if (error?.code !== "FRAGMENT_ATTRIBUTION_UNAVAILABLE") throw error;
+    return { source: "", nodes: await nodes("", macros), damaged: true };
+  }
 }
 function strip(source, nodes, indices) {
   let cursor = 0,
@@ -92,8 +109,9 @@ function allocate(matches, limits) {
 
 /** Prepare the flat, top-level-only extraction inventory. Source and target
  * occurrences with identical source structure are one fungible group. A group
- * emits numbered deficit slots, never claims which identical copy failed, and
- * declines to score when unknown candidate code prevents safe attribution.
+ * emits numbered deficit slots and never claims which identical copy failed.
+ * Assessment always returns a result for any candidate. Code that cannot be
+ * attributed to a failed fragment is charged as a preservation difference.
  */
 export async function prepareFragmentStructure(plan, { signal } = {}) {
   signal?.throwIfAborted();
@@ -169,9 +187,6 @@ export async function prepareFragmentStructure(plan, { signal } = {}) {
     sourceIdentities.get(group.sourcePrimary).add(group);
   }
   const residualIdentities = new Set(expectedSourceNodes.map(nodeIdentity).filter(Boolean));
-  const sourcePrimaryTypes = new Set(
-    [...groups.values()].map((group) => JSON.parse(group.sourceKeys[0])[0]),
-  );
   for (const [file, info] of files) {
     signal?.throwIfAborted();
     const patterns = new Map(),
@@ -231,25 +246,18 @@ export async function prepareFragmentStructure(plan, { signal } = {}) {
   return async function assess(tree, { signal } = {}) {
     signal?.throwIfAborted();
     assert.ok(tree && typeof tree === "object");
-    const source = text(tree["main.cpp"]),
-      sourceNodes = await nodes(source, macros);
-    const sourceMatches = scan(sourceNodes, sourceMatcher);
+    const sourceFile = await candidateNodes(tree["main.cpp"], macros),
+      source = sourceFile.source,
+      sourceNodes = sourceFile.nodes;
+    const sourceMatches = scan(sourceNodes, sourceMatcher, { strict: false });
     const sourceFound = allocate(sourceMatches, sourceLimits);
-    const overflow = new Map();
-    for (const match of sourceMatches) {
-      if (match.indices.some((index) => sourceFound.used.has(index))) continue;
-      for (const index of match.indices) {
-        const key = nodeKey(sourceNodes[index]);
-        overflow.set(key, (overflow.get(key) ?? 0) + 1);
-      }
-    }
     for (let i = 0; i < sourceNodes.length; i++) {
       if (sourceFound.used.has(i)) continue;
       const identity = nodeIdentity(sourceNodes[i]);
       const choices = sourceIdentities.get(identity);
       if (!identity || !choices?.size) continue;
-      if (choices.size !== 1 || residualIdentities.has(identity))
-        throw unavailable("Changed source identity is ambiguous");
+      // An ambiguous changed unit stays in the residual and fails preservation.
+      if (choices.size !== 1 || residualIdentities.has(identity)) continue;
       const [group] = choices;
       if ((sourceFound.counts.get(group.id) ?? 0) >= group.total) continue;
       const suffix = group.sourceKeys.slice(1);
@@ -261,7 +269,7 @@ export async function prepareFragmentStructure(plan, { signal } = {}) {
             !sourceFound.used.has(i + j + 1),
         )
       )
-        throw unavailable("Changed source unit is incomplete");
+        continue;
       sourceFound.counts.set(group.id, (sourceFound.counts.get(group.id) ?? 0) + 1);
       for (let j = i; j < i + group.sourceKeys.length; j++) sourceFound.used.add(j);
     }
@@ -274,36 +282,14 @@ export async function prepareFragmentStructure(plan, { signal } = {}) {
         preservation.add(id);
     const remainingSource = strip(source, sourceNodes, sourceFound.used);
     const residualSource = await sortedExtractionCpp(remainingSource, { macros });
-    if (residualSource !== expectedResidual) {
-      const remainingNodes = await nodes(remainingSource, macros);
-      const known = new Map();
-      for (const node of expectedSourceNodes)
-        known.set(nodeKey(node), (known.get(nodeKey(node)) ?? 0) + 1);
-      for (const node of remainingNodes) {
-        const key = nodeKey(node),
-          count = known.get(key) ?? 0;
-        if (count) known.set(key, count - 1);
-        else if ((overflow.get(key) ?? 0) > 0) overflow.set(key, overflow.get(key) - 1);
-        else {
-          const identity = nodeIdentity(node);
-          if (identity && residualIdentities.has(identity) && !sourceIdentities.has(identity))
-            continue;
-          if (
-            sourcePrimaryTypes.has(node.type) ||
-            node.type === "ERROR" ||
-            node.type === "namespace_definition" ||
-            node.type.startsWith("preproc_")
-          )
-            throw unavailable("Source damage cannot be separated from retained fragments");
-        }
-      }
+    if (sourceFile.damaged || residualSource !== expectedResidual)
       preservation.add("preservation:main.cpp");
-    }
     for (const [file, info] of files) {
       signal?.throwIfAborted();
-      const current = Object.hasOwn(tree, file) ? text(tree[file]) : "";
-      const currentNodes = await nodes(current, macros);
-      const found = allocate(scan(currentNodes, info.patterns), info.limits);
+      const target = await candidateNodes(tree[file], macros),
+        current = target.source,
+        currentNodes = target.nodes;
+      const found = allocate(scan(currentNodes, info.patterns, { strict: false }), info.limits);
       for (const [id, n] of found.counts) targetFound.set(id, (targetFound.get(id) ?? 0) + n);
       // Attribute changed complete units only when their public syntax identity
       // names one expected group and its exact form is missing.
@@ -328,37 +314,39 @@ export async function prepareFragmentStructure(plan, { signal } = {}) {
         found.counts.set(id, (found.counts.get(id) ?? 0) + 1);
         for (let j = i; j < i + pattern.keys.length; j++) found.used.add(j);
       }
+      if (target.damaged) {
+        preservation.add(`preservation:${file}`);
+        continue;
+      }
       const remaining = strip(current, currentNodes, found.used);
       const residual = await sortedExtractionCpp(remaining, { macros });
-      if (residual !== info.residual) {
-        const unresolvedTypes = new Set();
-        for (const [id, count] of info.limits) {
-          if ((found.counts.get(id) ?? 0) < count)
-            unresolvedTypes.add(JSON.parse(info.patternById.get(id).keys[0])[0]);
-        }
-        if (unresolvedTypes.size && Object.hasOwn(tree, file)) {
-          const expectedNodes = await nodes(info.residualSource, macros);
-          const actualNodes = await nodes(remaining, macros);
-          const known = new Map();
-          for (const node of expectedNodes)
-            known.set(nodeKey(node), (known.get(nodeKey(node)) ?? 0) + 1);
-          for (const node of actualNodes) {
-            const key = nodeKey(node),
-              count = known.get(key) ?? 0;
-            if (count) known.set(key, count - 1);
-            else if (
-              unresolvedTypes.has(node.type) ||
-              node.type === "ERROR" ||
-              node.type === "namespace_definition" ||
-              node.type.startsWith("preproc_")
-            )
-              throw unavailable(
-                `Target damage in ${file} cannot be separated from missing fragments`,
-              );
-          }
-        }
-        preservation.add(`preservation:${file}`);
+      if (residual === info.residual) continue;
+      // Changed units of a missing fragment's kind, up to that kind's deficit,
+      // are the damaged copies of fragments that already fail. Anything else,
+      // including lost unrelated code, is a separate preservation difference.
+      const deficits = new Map();
+      for (const [id, count] of info.limits) {
+        const missing = count - (found.counts.get(id) ?? 0);
+        if (missing <= 0) continue;
+        const type = JSON.parse(info.patternById.get(id).keys[0])[0];
+        deficits.set(type, (deficits.get(type) ?? 0) + missing);
       }
+      const known = new Map();
+      for (const node of await nodes(info.residualSource, macros))
+        known.set(nodeKey(node), (known.get(nodeKey(node)) ?? 0) + 1);
+      let explained = true,
+        attributed = 0;
+      for (const node of await nodes(remaining, macros)) {
+        const key = nodeKey(node),
+          count = known.get(key) ?? 0;
+        if (count) known.set(key, count - 1);
+        else if ((deficits.get(node.type) ?? 0) > 0) {
+          deficits.set(node.type, deficits.get(node.type) - 1);
+          attributed++;
+        } else explained = false;
+      }
+      if (!explained || !attributed || [...known.values()].some((count) => count > 0))
+        preservation.add(`preservation:${file}`);
     }
     const differences = [],
       failures = [];
@@ -369,21 +357,15 @@ export async function prepareFragmentStructure(plan, { signal } = {}) {
       const missing = destinations.map(
         (destination) => destination.count - (targetFound.get(destination.id) ?? 0),
       );
-      if (
-        destinations.length > 1 &&
-        retained > 0 &&
-        retained < group.total &&
-        missing.reduce((sum, count) => sum + count, 0) < group.total
-      )
-        throw unavailable("Retained identical source fragments have ambiguous destinations");
+      // Identical copies are fungible. The group fails max(retained, missing)
+      // copies; source copies beyond the target deficits are assigned to the
+      // destinations in plan order, which leaves the count independent of order.
+      let extra = Math.max(0, retained - missing.reduce((sum, count) => sum + count, 0));
       for (let index = 0; index < destinations.length; index++) {
         const destination = destinations[index];
-        const count =
-          destinations.length === 1
-            ? Math.max(retained, missing[index])
-            : retained === group.total
-              ? destination.count
-              : missing[index];
+        const take = Math.min(extra, destination.count - missing[index]);
+        extra -= take;
+        const count = missing[index] + take;
         failed += count;
         for (let i = 1; i <= count; i++) {
           const id = `fragment:${destination.id}:${i}`;
@@ -393,10 +375,22 @@ export async function prepareFragmentStructure(plan, { signal } = {}) {
       }
     }
     signal?.throwIfAborted();
+    // A whole-file failure that the fragment view does not localize still counts.
+    if (legacyResult.status !== "pass" && !differences.length && !preservation.size)
+      for (const id of legacyResult.differenceIds) {
+        const task = plan.tasks.find((item) => item.id === id);
+        preservation.add(task ? `preservation:${task.file}` : id);
+      }
     const preservationIds = [...preservation].sort();
     const differenceIds = [...differences, ...preservationIds].sort();
-    if ((legacyResult.status === "pass") !== (differenceIds.length === 0))
-      throw unavailable("Fragment and whole-project verification disagree");
+    // Repair targets are never empty while a difference remains: failed fragments
+    // name their tasks, and preservation-only failures fall back to their own IDs.
+    const repairs = new Set([
+      ...legacyResult.differenceIds,
+      ...failures.map((failure) => failure.taskId),
+    ]);
+    if (!repairs.size) for (const id of preservationIds) repairs.add(id);
+    const fileDifferenceIds = [...repairs].sort();
     return {
       version: "renderer-fragment-structure-v1",
       planIdentity,
@@ -407,7 +401,7 @@ export async function prepareFragmentStructure(plan, { signal } = {}) {
       preservationIds,
       failures,
       files: legacyResult.files,
-      fileDifferenceIds: legacyResult.differenceIds,
+      fileDifferenceIds,
       diagnostics: legacyResult.diagnostics,
     };
   };
