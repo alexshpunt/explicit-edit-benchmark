@@ -62,6 +62,143 @@ test("first-free workers share only one task until all its batches settle", asyn
   for (let i = 0; i < tasks.length; i++) assert.equal(finished[i].size, tasks[i].batches.length);
 });
 
+test("two teams remain live through the shared recovery barrier", async () => {
+  const first = fakeDrivers();
+  const second = fakeDrivers();
+  const tasks = [{ id: "non-math", batches: [1, 2, 3] }];
+  const math = [{ id: "math", batches: [4, 5] }];
+  let barrierCalls = 0;
+  const result = await runChunkTeam(tasks, {
+    ...first,
+    agents: 3,
+    async execute(driver, _batch) {
+      driver.edits = (driver.edits ?? 0) + 1;
+    },
+    async onDrained({ participants, signal }) {
+      barrierCalls++;
+      assert.equal(participants.length, 3);
+      assert.equal(first.closed, 0);
+      assert.ok(participants.every((p) => !p.driver.closed));
+      const original = participants.find((p) => p.tasks.includes("non-math"));
+      assert.ok(original.driver.edits > 0);
+      await runChunkTeam(math, {
+        ...second,
+        agents: 2,
+        signal,
+        async execute(driver) {
+          driver.math = true;
+        },
+        async onDrained({ participants: mathParticipants }) {
+          assert.equal(first.closed, 0);
+          assert.equal(second.closed, 0);
+          assert.ok(mathParticipants.some((p) => p.driver.math));
+          assert.equal(original.driver.closed, false);
+          original.driver.corrected = true;
+        },
+      });
+      assert.equal(second.closed, 2);
+      assert.equal(original.driver.corrected, true);
+    },
+  });
+  assert.equal(barrierCalls, 1);
+  assert.equal(first.closed, 3);
+  assert.equal(result.records.length, 3);
+});
+
+test("a failed shared recovery barrier closes both teams", async () => {
+  const first = fakeDrivers();
+  const second = fakeDrivers();
+  await assert.rejects(
+    runChunkTeam([{ id: "first", batches: [1] }], {
+      ...first,
+      agents: 2,
+      async execute() {},
+      async onDrained({ signal }) {
+        await runChunkTeam([{ id: "math", batches: [2] }], {
+          ...second,
+          agents: 2,
+          signal,
+          async execute() {},
+          async onDrained() {
+            throw Error("repair failed");
+          },
+        });
+      },
+    }),
+    /repair failed/,
+  );
+  assert.equal(first.closed, first.started);
+  assert.equal(second.closed, second.started);
+});
+
+test("a failed participant start wakes barrier waiters and closes started participants", async () => {
+  const drivers = fakeDrivers();
+  let started = 0;
+  await assert.rejects(
+    runChunkTeam([{ id: "one", batches: [1] }], {
+      ...drivers,
+      agents: 2,
+      signal: AbortSignal.timeout(3000),
+      async createDriver(agent, session, context) {
+        if (agent === 1) {
+          await sleep(20);
+          throw Error("startup failed");
+        }
+        started++;
+        return drivers.createDriver(agent, session, context);
+      },
+      async execute() {},
+      async onDrained() {
+        assert.fail("A failed team cannot reach recovery");
+      },
+    }),
+    /startup failed/,
+  );
+  assert.equal(started, 1);
+  assert.equal(drivers.closed, 1);
+});
+test("cancellation waits for an active recovery callback before closing drivers", async () => {
+  const drivers = fakeDrivers();
+  const controller = new AbortController();
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const run = runChunkTeam([{ id: "one", batches: [1] }], {
+    ...drivers,
+    agents: 2,
+    signal: controller.signal,
+    async execute() {},
+    async onDrained() {
+      entered.resolve();
+      await release.promise;
+    },
+  });
+  await entered.promise;
+  controller.abort(Error("stop"));
+  await sleep(10);
+  assert.equal(drivers.closed, 0);
+  release.resolve();
+  await assert.rejects(run);
+  assert.equal(drivers.closed, 2);
+});
+test("cancellation at the recovery barrier closes all participants", async () => {
+  const drivers = fakeDrivers();
+  const controller = new AbortController();
+  const ready = Promise.withResolvers();
+  const run = runChunkTeam([{ id: "one", batches: [1] }], {
+    ...drivers,
+    agents: 2,
+    signal: controller.signal,
+    async execute() {},
+    async onDrained({ signal }) {
+      ready.resolve();
+      await sleep(10000, undefined, { signal });
+    },
+  });
+  await ready.promise;
+  controller.abort(Error("stop"));
+  await assert.rejects(run);
+  assert.equal(drivers.closed, drivers.started);
+});
 test("cancellation wakes idle workers and closes participants", async () => {
   const drivers = fakeDrivers();
   const controller = new AbortController();

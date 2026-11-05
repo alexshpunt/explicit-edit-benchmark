@@ -207,6 +207,20 @@ keeps the same session and retries at most three times per delivery, with a
 60-second cooldown before each retry. Billing, quota and authentication errors
 stop the run.
 
+For a chunked team run, the non-math team stays live while a fresh math team
+works. Both teams remain live through the shared structural verification and
+one correction wave. A failed task is assigned to a participant who received
+one of its batches; this does not establish which participant caused the
+failure. Shared preservation failures are also handled in a live participant
+context. Repairs are serialized and checked against fresh candidate evidence.
+A correction can introduce new differences, which are scored but do not start
+another structural wave. Build and image corrections have separate fresh
+contexts and are attempted only when the corresponding check requires them.
+The report must retain the original and final measurements, correction
+attempts and the shared team Score; an interrupted run has no final Score.
+Structural feedback identifies public entities when possible, but may report
+only that a destination or shared preservation check failed. It does not
+always localize the defect.
 A completed single-snapshot team experiment can report its unassisted Score with
 `scoreExtractionSnapshot`. The calculation uses the existing extraction policy,
 including preservation differences and build/image factors. It describes the
