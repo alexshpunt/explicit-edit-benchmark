@@ -24,11 +24,12 @@ const actions = Object.freeze({
 /** Index units by content identity. Ordered units keep their sequence within a scope;
  * sortable definitions are a multiset because their placement is not scored.
  */
-export async function structuralUnitInventory(tree) {
+export async function structuralUnitInventory(tree, { extraUnits = [] } = {}) {
   const project = await canonicalProjectUnits(tree);
+  const units = [...project.units, ...extraUnits];
   const catalog = new Map(),
     scopes = new Map();
-  for (const unit of project.units) {
+  for (const unit of units) {
     const id = hash(JSON.stringify([unit.file, unit.scope, unit.kind, unit.ordered, unit.text]));
     if (!catalog.has(id))
       catalog.set(
@@ -62,6 +63,7 @@ export async function structuralUnitInventory(tree) {
     version: project.version,
     canonicalizer: project.canonicalizer,
     identity,
+    files: new Set(units.map(({ file }) => file)),
     catalog,
     scopes,
   };
@@ -170,6 +172,10 @@ export function compareStructuralInventory(prepared, candidate) {
   };
 }
 
-export async function compareStructuralUnits(prepared, candidateTree) {
-  return compareStructuralInventory(prepared, await structuralUnitInventory(candidateTree));
+/** Physical entries other than regular files can be supplied as extra candidate units. */
+export async function compareStructuralUnits(prepared, candidateTree, options) {
+  return compareStructuralInventory(
+    prepared,
+    await structuralUnitInventory(candidateTree, options),
+  );
 }

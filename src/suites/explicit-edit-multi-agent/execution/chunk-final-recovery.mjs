@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { runCorrectionSchedule } from "./correction-schedule.mjs";
 
 /** Run one structural wave, one build correction and one final result repair.
  * Structural evidence is collected only before and after all editing stages.
@@ -23,99 +24,31 @@ export async function runFinalChunkRecovery({
     onUpdate,
   ])
     assert.equal(typeof callback, "function");
-  const stages = [];
-  const attempts = [];
-  let index = 0;
-  const check = () => signal?.throwIfAborted();
-  async function snapshot(stage, assessStructure, measureIntegration) {
-    check();
-    const state = await capture({
-      stage,
-      assessStructure,
-      measureIntegration,
-      index: index++,
-      signal,
-    });
-    check();
-    if (assessStructure) {
-      assert.ok(Array.isArray(state.structure?.differenceIds));
-      assert.ok(state.structure.differenceIds.every((id) => typeof id === "string" && id.length));
-      assert.equal(
-        new Set(state.structure.differenceIds).size,
-        state.structure.differenceIds.length,
+  return runCorrectionSchedule({
+    capture,
+    onUpdate,
+    signal,
+    async score(input) {
+      return score({ totalFiles, ...input });
+    },
+    async correctStructure({ state: initial, attempt }) {
+      const repairIds = initial.structure.fileDifferenceIds ?? initial.structure.differenceIds;
+      assert.ok(
+        Array.isArray(repairIds) && repairIds.every((id) => typeof id === "string" && id.length),
       );
-    }
-    if (measureIntegration) {
-      assert.equal(typeof state.integration?.buildPassed, "boolean");
-      assert.equal(typeof state.integration?.resultMatched, "boolean");
-      assert.ok(state.integration.buildPassed || !state.integration.resultMatched);
-    }
-    stages.push({ stage, ...state });
-    await onUpdate({ stages, attempts });
-    return state;
-  }
-  async function repair(stage, id, operation, state) {
-    check();
-    const attempt = { stage, id, status: "running" };
-    attempts.push(attempt);
-    await onUpdate({ stages, attempts });
-    try {
-      const outcome = await operation({ stage, id, state, signal });
-      check();
-      assert.ok(!(outcome?.timedOut && outcome?.unissued));
-      attempt.status = outcome?.timedOut ? "timed-out" : outcome?.unissued ? "unissued" : "settled";
-    } catch (error) {
-      attempt.status = "error";
-      await onUpdate({ stages, attempts });
-      throw error;
-    }
-    await onUpdate({ stages, attempts });
-  }
-  const initial = await snapshot("original", true, false);
-  const repairIds = initial.structure.fileDifferenceIds ?? initial.structure.differenceIds;
-  assert.ok(
-    Array.isArray(repairIds) && repairIds.every((id) => typeof id === "string" && id.length),
-  );
-  assert.equal(new Set(repairIds).size, repairIds.length);
-  assert.equal(repairIds.length === 0, initial.structure.differenceIds.length === 0);
-  if (repairIds.length) {
-    let started = false,
-      completed = false;
-    await structuralWave(async () => {
-      assert.equal(started, false);
-      started = true;
-      for (const id of repairIds)
-        await repair("structural-correction", id, repairStructural, initial);
-      completed = true;
-    });
-    assert.ok(completed, "Structural wave did not complete");
-  }
-  let current = await snapshot("build-check", false, true);
-  const buildFirstPassed = current.integration.buildPassed;
-  if (!buildFirstPassed) {
-    await repair("build-correction", "build", repairIntegration, current);
-    current = await snapshot("build-recheck", false, true);
-  }
-  const preRecoveryBuildPassed = current.integration.buildPassed;
-  const firstImageMatched = preRecoveryBuildPassed ? current.integration.resultMatched : null;
-  const resultRecoveryAttempted = !preRecoveryBuildPassed || firstImageMatched === false;
-  if (resultRecoveryAttempted)
-    await repair("image-correction", "images", repairIntegration, current);
-  const final = await snapshot("final", true, true);
-  check();
-  const result = await score({
-    totalFiles,
-    initialDifferences: initial.structure.differenceIds,
-    finalDifferences: final.structure.differenceIds,
-    initial: initial.structure,
-    final: final.structure,
-    buildFirstPassed,
-    preRecoveryBuildPassed,
-    firstImageMatched,
-    resultRecoveryAttempted,
-    finalBuildPassed: final.integration.buildPassed,
-    finalImageMatched: final.integration.buildPassed ? final.integration.resultMatched : null,
+      assert.equal(new Set(repairIds).size, repairIds.length);
+      assert.ok(repairIds.length > 0, "Structural differences have no repair assignment");
+      let started = false,
+        completed = false;
+      await structuralWave(async () => {
+        assert.equal(started, false);
+        started = true;
+        for (const id of repairIds)
+          await attempt(id, (context) => repairStructural({ ...context, state: initial }));
+        completed = true;
+      });
+      assert.ok(completed, "Structural wave did not complete");
+    },
+    correctIntegration: repairIntegration,
   });
-  check();
-  return { stages, attempts, score: result };
 }

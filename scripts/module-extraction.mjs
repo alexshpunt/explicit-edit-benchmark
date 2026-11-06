@@ -12,6 +12,10 @@ const help = `Experimental paired-module extraction
   flat-verify FLAT_CASE NEW_RUN
   flat-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/verification.json --allow-model-calls
   flat-debug FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/verification.json --allow-model-calls --task TASK_ID
+  chunk-verify FLAT_CASE NEW_RUN
+  chunk-smoke NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls
+  chunk-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls
+  chunk-rescore FLAT_CASE SAVED_RUN NEW_OUTPUT
 
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
@@ -36,9 +40,72 @@ structural assessments are diagnostic only: no benchmark score, build or render.
 Inspect each completed debug task before starting the next.
 Before each delivery batch, inspect the displayed snapshot and report. Enter
 'approve <inspection number> <candidate hash>' to proceed, or interrupt to stop.
+Chunk commands run ten-agent teams over small fragment assignments with a
+120-second limit per delivery, then at most one structural, one build and one
+result correction. Score counts structural unit differences from the trusted
+start; see docs/module-extraction.md. chunk-verify is the scripted reference and
+must report Score 100 from clean committed source. chunk-smoke spends one small
+model delivery. chunk-rescore recomputes a saved run without participants.
 Use fresh ignored output directories and the shared renderer lock on a capable worker.
 See docs/multi-agent.md for shared renderer prerequisites.
 `;
+
+async function chunkCommand(values, positionals) {
+  const [command, ...paths] = positionals;
+  const modelCommand = ["chunk-smoke", "chunk-run"].includes(command);
+  const count = { "chunk-verify": 2, "chunk-smoke": 1, "chunk-run": 2, "chunk-rescore": 3 }[
+    command
+  ];
+  assert.ok(count !== undefined && paths.length === count, help);
+  for (const option of ["modules", "generation", "agents", "task", "from-run", "source-receipt"])
+    assert.equal(values[option], undefined, help);
+  if (modelCommand) {
+    assert.equal(
+      values["allow-model-calls"],
+      true,
+      "Model calls require explicit --allow-model-calls",
+    );
+    assert.equal(typeof values.config, "string", help);
+  } else assert.ok(!values.config && !values["allow-model-calls"], help);
+  assert.equal(typeof values.proof === "string", command === "chunk-run", help);
+  const chunk = await import("../src/suites/explicit-edit-multi-agent/extraction/chunk-run.mjs");
+  const config = modelCommand ? JSON.parse(await readFile(values.config, "utf8")) : null;
+  const signal = controller.signal;
+  if (command === "chunk-verify") {
+    const summary = await chunk.verifyChunkCase(paths[0], paths[1], { signal });
+    console.log(JSON.stringify(summary));
+    if (summary.status !== "pass") process.exitCode = 1;
+  } else if (command === "chunk-smoke") {
+    console.log(JSON.stringify(await chunk.chunkModelSmoke(paths[0], config)));
+  } else if (command === "chunk-run") {
+    const report = await chunk.runChunkModel(paths[0], paths[1], config, {
+      proofPath: values.proof,
+      signal,
+    });
+    console.log(
+      JSON.stringify({
+        status: report.status,
+        totalUnits: report.totalUnits,
+        initialDifferences: report.score.structural.initialDifferences.length,
+        finalDifferences: report.score.structural.finalDifferences.length,
+        score: report.score.score,
+      }),
+    );
+  } else {
+    const result = await chunk.rescoreChunkRun(paths[0], paths[1], paths[2], { signal });
+    console.log(
+      JSON.stringify({
+        totalUnits: result.score.structural.totalUnits,
+        initialDifferences: result.score.structural.initialDifferences.length,
+        finalDifferences: result.score.structural.finalDifferences.length,
+        rawBalance: result.score.structural.rawBalance,
+        buildFactor: result.score.build.factor,
+        imageFactor: result.score.images.factor,
+        score: result.score.score,
+      }),
+    );
+  }
+}
 
 const controller = new AbortController();
 const stop = (signal) => {
@@ -68,6 +135,7 @@ try {
     },
   });
   if (values.help) console.log(help);
+  else if (positionals[0]?.startsWith("chunk-")) await chunkCommand(values, positionals);
   else {
     const [command, input, output] = positionals;
     assert.equal(positionals.length, 3, help);

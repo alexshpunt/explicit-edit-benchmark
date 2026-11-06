@@ -836,10 +836,10 @@ function collectUnits(container, scope, units, macros) {
       continue;
     }
     if (conditionalScopes.has(node.type)) {
-      let branch = node,
-        chain = [];
+      const chain = [];
+      let branch = node;
       while (branch) {
-        chain = [...chain, directiveHead(branch, macros)];
+        chain.push(directiveHead(branch, macros));
         nested(branch, [...here, chain.join("; ")]);
         branch = branch.childForFieldName("alternative");
       }
