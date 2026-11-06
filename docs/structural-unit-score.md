@@ -1,7 +1,8 @@
 # Structural unit score
 
-Restoring (`run-canonical`, run version `renderer-canonical-run-v2`) and chunk
-extraction (`chunk-run`) measure a round the same way. Earlier policies keep their
+Restoring (`run-canonical`, run version `renderer-canonical-run-v2`), chunk
+extraction (`chunk-run`) and two-phase assembly (`assembly-run`) measure a round
+the same way. Earlier policies keep their
 meaning: version 1 canonical runs use text hunks, and earlier extraction runs use
 per-file or per-fragment checks. Those reports are not rescored in place.
 
@@ -16,8 +17,11 @@ structural scope:
 - a namespace-level or global declaration;
 - a preprocessor directive.
 
-Namespaces, classes, structs, unions, linkage blocks, access sections and
-conditional branches are scopes, not units. The scope path is part of a unit's
+Namespaces, classes, structs, unions, linkage blocks, access sections,
+conditional branches and matched `#pragma region` … `#pragma endregion` blocks
+are scopes, not units. A region line without its partner stays an ordinary
+directive unit. Unit version 2 added region scopes; sources without regions
+produce the same units as version 1. The scope path is part of a unit's
 identity, so moving a member to another class or file changes it. A unit's text
 is its canonical token rendering: comments, spacing and line breaks do not count.
 
@@ -101,6 +105,8 @@ node scripts/module-extraction.mjs chunk-verify FLAT_CASE NEW_REFERENCE
 node scripts/module-extraction.mjs chunk-smoke NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls
 node scripts/module-extraction.mjs chunk-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --allow-model-calls
 node scripts/module-extraction.mjs chunk-rescore FLAT_CASE SAVED_RUN NEW_OUTPUT
+node scripts/module-extraction.mjs assembly-verify FLAT_CASE NEW_REFERENCE
+node scripts/module-extraction.mjs assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --allow-model-calls
 ```
 
 Restoring, from a canonical preparation:
@@ -122,4 +128,5 @@ participants.
 
 Every model session receives the same general instructions,
 `src/suites/explicit-edit-multi-agent/prompts/general.txt`, before its first
-assignment. The file is identical for all models.
+assignment. The file is identical for all models. Assembly sessions hold one
+assignment each, so the instructions precede every assignment there.

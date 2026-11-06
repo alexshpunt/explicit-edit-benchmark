@@ -169,6 +169,27 @@ test("conditional branches and namespaces are distinct scopes", async () => {
   );
 });
 
+test("a matched pragma region is a scope and an unmatched region line stays a unit", async () => {
+  const units = await canonicalCppUnits(
+    "#pragma region a.h\nint f();\n#pragma region inner\nint g();\n#pragma endregion\n#pragma endregion\nint h();\n#pragma region open\nint k();\n",
+  );
+  assert.deepEqual(
+    units.map(({ scope, kind, text }) => [scope.join(" / "), kind, text]),
+    [
+      ["region a.h", "declaration", "int f ( ) ;"],
+      ["region a.h / region inner", "declaration", "int g ( ) ;"],
+      ["", "declaration", "int h ( ) ;"],
+      ["", "declaration", "#pragma region open"],
+      ["", "declaration", "int k ( ) ;"],
+    ],
+  );
+  const prepared = await prepareStructuralUnits(
+    { "main.cpp": "#pragma region a.h\n#pragma endregion\nint f();\n" },
+    { "main.cpp": "#pragma region a.h\nint f();\n#pragma endregion\n" },
+  );
+  assert.equal(prepared.totalUnits, 3);
+});
+
 test("malformed, non-UTF-8, non-C++ and missing files are scored without throwing", async () => {
   const prepared = await prepareStructuralUnits(start, reference);
   const result = await compareStructuralUnits(prepared, {

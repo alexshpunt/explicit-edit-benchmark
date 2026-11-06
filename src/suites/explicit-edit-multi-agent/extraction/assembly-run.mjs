@@ -18,6 +18,7 @@ import {
 } from "../grading/structural-unit-score.mjs";
 import {
   assertCandidateUnchanged,
+  captureCandidate,
   releaseCandidateWorkspace,
 } from "../execution/candidate-evidence.mjs";
 import { CHUNK_DELIVERY_DEADLINE_MS } from "../execution/chunk-delivery-deadline.mjs";
@@ -465,6 +466,22 @@ export async function verifyAssemblyCase(casePath, outputPath, { signal } = {}) 
     signal,
   });
   const stats = pools.stats();
+  // The end of assembly, every file still in its region, must build on its own.
+  const assembledDirectory = path.join(output, "assembled-reference");
+  await mkdir(assembledDirectory, { mode: 0o700 });
+  await writeTree(path.join(assembledDirectory, "source"), setup.trees.assembled);
+  const assembledCandidate = await captureCandidate(
+    path.join(assembledDirectory, "source"),
+    path.join(assembledDirectory, "candidate"),
+    { signal, includeAllFiles: true },
+  );
+  const assembled = await measureExtractionCandidate(
+    assembledCandidate.source,
+    path.join(assembledDirectory, "integration"),
+    assembledCandidate.tree,
+    { expectedPixels: setup.manifest.pixels, signal, completeInventory: true },
+  );
+  releaseCandidateWorkspace(path.join(assembledDirectory, "source"));
   assert.deepEqual(await assemblyRunIdentity(setup, general), identity);
   const final = report.stages.at(-1);
   const summary = {
@@ -477,7 +494,9 @@ export async function verifyAssemblyCase(casePath, outputPath, { signal } = {}) 
       stats.extracted === setup.regions.length &&
       stats.maxActive === ASSEMBLY_AGENTS &&
       report.remainingMarkers === 0 &&
-      report.attempts.length === 0
+      report.attempts.length === 0 &&
+      assembled.buildPassed &&
+      assembled.resultMatched
         ? "pass"
         : "fail",
     totalUnits: report.totalUnits,
@@ -492,6 +511,8 @@ export async function verifyAssemblyCase(casePath, outputPath, { signal } = {}) 
     finalDifferences: final.structure.differenceIds.length,
     buildPassed: final.integration.buildPassed,
     resultMatched: final.integration.resultMatched,
+    assembledBuildPassed: assembled.buildPassed,
+    assembledResultMatched: assembled.resultMatched,
   };
   await writeFile(path.join(output, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
     flag: "wx",

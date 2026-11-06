@@ -14,7 +14,73 @@ delivery has a 120-second limit. Structural, build and result corrections follow
 the common schedule, and the round is scored by structural unit differences from
 the marker-free scaffold to the trusted endpoint. Commands, the scripted reference
 and the Score are described in [Structural unit score](structural-unit-score.md).
-The sections below describe the earlier whole-file and per-file protocols.
+Chunk runs are not repeated; the two-phase assembly below replaces them. Their
+reports keep their meaning. The sections after it describe the earlier
+whole-file and per-file protocols.
+
+## Two-phase assembly
+
+The `assembly-*` commands run a flat case in two phases on one `main.cpp`,
+followed by the common correction schedule and one structural unit score.
+
+1. **Assembly.** The scaffold inserts one `#pragma region FILE` …
+   `#pragma endregion` block per future project file, in unity-build order:
+   headers after the project headers they include, then implementation files.
+   Each region holds the file's system includes and copied `using` lines and one
+   placeholder comment line per assignment item, in reference order. The
+   original units stay where they are and carry no markers. Twenty agents move
+   items into their regions concurrently, all editing the same `main.cpp`.
+2. **Extraction.** One assignment per region moves the whole region into its
+   file: header files start with `#pragma once`, every file then gets the
+   project includes of its reference preamble, and a header region is replaced
+   in `main.cpp` by its include line. Agents work on the `main.cpp` that
+   assembly left, not on a trusted copy.
+3. One structural correction, one build correction and one result correction.
+   There is no correction between the phases.
+
+Assignment items never contain the text of a named unit. A function, function
+declaration, class, struct, union or enum is named by kind, signature with
+collapsed spacing, and namespace; the agent finds it and its boundaries. When
+`main.cpp` holds several copies that differ only in spacing, the assignment says
+so and asks for one. Adjacent units without such a name (variables, aliases,
+directives) form one block when only whitespace separates them in the source and
+in the destination. A block assignment gives its first and last line, its
+complete text, and the nearest named units before and after it, stated as their
+position in the original `main.cpp`. Preparation rejects a named description
+that matches different code and a block that its text and neighbours do not
+identify.
+
+Assembly deliveries hold at most ten items and about 2 kB, as before. They form
+one queue that interleaves regions: the first delivery of every region, then
+every second delivery, and so on. A free slot takes the next delivery. Every
+delivery in every phase and correction starts a new agent with an empty context;
+the general instructions precede its assignment, startup does not count toward
+the 120-second limit, and the agent is closed when its delivery ends. The
+controller never repairs source, regions or placeholders and never rewrites an
+assignment. Placeholders still present after extraction are removed before the
+first capture and counted in the report.
+
+`N` runs from the scaffold without placeholders to the final reference: the
+assembled regions moved into their files, with `main.cpp` keeping one include
+line per header where the regions were. Structural units treat a matched region
+as a scope, so a unit moved inside `main.cpp` still counts. The scripted
+reference also builds the assembled unity build, all files still in their
+regions; it and the final files must render the expected images.
+
+```sh
+node scripts/module-extraction.mjs assembly-verify FLAT_CASE NEW_REFERENCE
+node scripts/module-extraction.mjs assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --allow-model-calls
+node scripts/module-extraction.mjs assembly-probe FLAT_CASE NEW_PROBE --deliveries 40 --config PRIVATE_JSON --allow-model-calls
+node scripts/module-extraction.mjs assembly-probe FLAT_CASE NEW_PROBE --regions frond_noise.h,frond_bvh.cpp --scripted
+```
+
+`assembly-verify` is the scripted reference: it applies every assignment exactly
+with twenty concurrent scripted participants and must report Score 100 from
+clean committed source. `assembly-probe` is a diagnostic. It runs the first
+deliveries of the assembly queue, the extraction of chosen regions, or both;
+extraction alone starts from the assembled reference. It compares the result with
+the scripted outcome of the same assignments and reports disagreements without
+corrections, build or Score.
 
 ## Flat CPU diagnostic profile
 
