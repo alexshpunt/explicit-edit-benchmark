@@ -74,7 +74,7 @@ test("units are named by problem and place; only lost text is quoted", () => {
   assert.match(header, /An extra copy of the block of 2 lines from `using Real = float;`/);
   assert.match(
     header,
-    /no longer exists anywhere in the project\. It belongs after the line `#include <cmath>` and before the struct `struct Pair` in the global namespace\. Its changed version is around line 4 of a\.h, from the line ` {2}return x \+ x;` to the line ` {2}return x \+ x;`; replace those lines/,
+    /no longer exists anywhere in the project\. It belongs after the line `#include <cmath>` and before the struct `struct Pair` in the global namespace\. Its changed version is around line 4 of a\.h, the line ` {2}return x \+ x;`; replace that line with exactly these lines/,
   );
   assert.equal(header.match(/^\d+\. /gm).length, 3, "The changed version has no separate item");
   assert.ok(header.includes("  return x * 2.0f;"), "Lost text is given in full");
