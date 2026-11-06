@@ -408,7 +408,10 @@ function referencePools(workspace, setup) {
         };
       },
       async execute(_driver, _prompt, { item, index }) {
-        assert.ok(["assembly", "extraction"].includes(phase), "The reference received a correction");
+        assert.ok(
+          ["assembly", "extraction"].includes(phase),
+          "The reference received a correction",
+        );
         active++;
         maxActive = Math.max(active, maxActive);
         try {

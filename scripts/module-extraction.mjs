@@ -124,8 +124,7 @@ async function assemblyCommand(values, positionals) {
   for (const option of ["modules", "generation", "agents", "task", "from-run", "source-receipt"])
     assert.equal(values[option], undefined, help);
   const probe = command === "assembly-probe";
-  if (!probe)
-    assert.ok(!values.deliveries && !values.regions && !values.scripted, help);
+  if (!probe) assert.ok(!values.deliveries && !values.regions && !values.scripted, help);
   const modelCommand = command === "assembly-run" || (probe && !values.scripted);
   if (modelCommand) {
     assert.equal(

@@ -20,7 +20,8 @@ export async function runFreshAgentQueue(
 ) {
   assert.ok(Array.isArray(items));
   assert.ok(Number.isSafeInteger(maxAgents) && maxAgents > 0);
-  for (const callback of [createDriver, execute, onClosed]) assert.equal(typeof callback, "function");
+  for (const callback of [createDriver, execute, onClosed])
+    assert.equal(typeof callback, "function");
   const results = Array.from({ length: items.length }, () => null);
   let next = 0,
     session = 0,

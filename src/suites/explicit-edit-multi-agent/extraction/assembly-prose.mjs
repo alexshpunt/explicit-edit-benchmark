@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 
 /** Collapse layout so a signature names a unit without reproducing its source text. */
 export function publicSignature(signature) {
-  return signature
-    .replace(/\s+/g, " ")
-    .replace(/\(\s/g, "(")
-    .replace(/\s\)/g, ")")
-    .trim();
+  return signature.replace(/\s+/g, " ").replace(/\(\s/g, "(").replace(/\s\)/g, ")").trim();
 }
 
 const code = (text) => {

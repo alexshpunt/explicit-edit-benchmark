@@ -248,9 +248,12 @@ export async function prepareAssemblyPlan(plan) {
   }
   tail += source.slice(position);
 
-  const scaffold = { "main.cpp": prefix + regionText((region) => region.body) + source.slice(lineStart) };
+  const scaffold = {
+    "main.cpp": prefix + regionText((region) => region.body) + source.slice(lineStart),
+  };
   const markerFree = {
-    "main.cpp": prefix + regionText((region) => removeMarkers(region.body, items)) + source.slice(lineStart),
+    "main.cpp":
+      prefix + regionText((region) => removeMarkers(region.body, items)) + source.slice(lineStart),
   };
   const assembled = { "main.cpp": prefix + regionText(fill) + tail };
   const final = {
@@ -360,11 +363,14 @@ export function cleanupAssemblyMarkers(tree, markers) {
       cleaned[file] = content;
       continue;
     }
-    cleaned[file] = content.replace(/^[ \t]*(\/\/ __EXPLICIT_EDIT_SLOT_\d+_\d+__)[ \t]*\n/gm, (whole, marker) => {
-      if (!issued.has(marker)) return whole;
-      remaining++;
-      return "";
-    });
+    cleaned[file] = content.replace(
+      /^[ \t]*(\/\/ __EXPLICIT_EDIT_SLOT_\d+_\d+__)[ \t]*\n/gm,
+      (whole, marker) => {
+        if (!issued.has(marker)) return whole;
+        remaining++;
+        return "";
+      },
+    );
   }
   return { tree: cleaned, remaining };
 }
