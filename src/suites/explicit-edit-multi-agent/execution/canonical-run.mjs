@@ -164,6 +164,7 @@ export async function runCanonical(
     batchSize = 10,
     fromRound = 1,
     referenceProofPath,
+    deliveryTimeoutMs = CHUNK_DELIVERY_DEADLINE_MS,
     allowModelCalls = false,
     signal: externalSignal,
     log = console.log,
@@ -181,6 +182,10 @@ export async function runCanonical(
   externalSignal?.throwIfAborted();
   const source = await restoringSourceIdentity();
   assert.equal(source.sourceClean, true, "Canonical execution requires clean committed source");
+  assert.ok(
+    deliveryTimeoutMs === CHUNK_DELIVERY_DEADLINE_MS || (createDriver && !configPath),
+    "Only scripted participants may use another delivery limit",
+  );
   if (configPath) {
     assert.ok(referenceProofPath, "Model execution requires a scripted reference proof");
     const proof = JSON.parse(await readFile(referenceProofPath, "utf8"));
@@ -261,6 +266,7 @@ export async function runCanonical(
       agents: loaded.agents,
       maxConcurrentAgents: cap,
       batchSize,
+      deliveryTimeoutMs,
       agentLifecycle: "round-ready-pool",
       model: configPath ? config.model : null,
       thinking: configPath ? config.thinking : null,
@@ -487,7 +493,7 @@ export async function runCanonical(
               const delivery = await executeChunkDelivery(
                 driver,
                 canonicalAssignmentPrompt(packet),
-                { signal: deliverySignal },
+                { signal: deliverySignal, timeoutMs: deliveryTimeoutMs },
               );
               return delivery.status === "timed-out" ? { timedOut: true } : delivery.receipt;
             },

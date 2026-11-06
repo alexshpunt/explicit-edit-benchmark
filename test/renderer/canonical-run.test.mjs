@@ -7,7 +7,11 @@ import {
   prepareCanonical,
   loadCanonicalPreparation,
 } from "../../src/suites/explicit-edit-multi-agent/execution/canonical-preparation.mjs";
-import { runCanonical } from "../../src/suites/explicit-edit-multi-agent/execution/canonical-run.mjs";
+import {
+  runCanonical,
+  verifyCanonical,
+} from "../../src/suites/explicit-edit-multi-agent/execution/canonical-run.mjs";
+
 import { startPiParticipant } from "../../src/suites/explicit-edit-multi-agent/execution/pi-baseline.mjs";
 import { coherentTaskPrompt } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-tasks.mjs";
 import { providerFixture } from "./provider-fixture.mjs";
@@ -85,6 +89,20 @@ const preparation = process.env.RENDERER_CANONICAL_PREPARATION;
 const proofPath = process.env.RENDERER_CANONICAL_PROOF;
 const runtime = process.env.RENDERER_CANONICAL_RUNTIME ?? process.env.RENDERER_PI_IDE_RUNTIME;
 const harness = process.env.RENDERER_CANONICAL_HARNESS ?? "pi-agent-ide-codemode";
+/** Model-path runs need a passing scripted reference from the same source. */
+async function referenceProof(root, cache, signal) {
+  const output = path.join(root, "reference");
+  const summary = await verifyCanonical(preparation, output, {
+    canonicalPath: cache,
+    agents: 2,
+    maxConcurrentAgents: 2,
+    signal,
+    log: () => {},
+  });
+  assert.equal(summary.status, "pass");
+  assert.equal(summary.score, 100);
+  return path.join(output, "summary.json");
+}
 
 async function nativeProvider(t, root, respond) {
   const provider = await providerFixture(root, respond);
@@ -117,11 +135,14 @@ for (const scenario of [
   "long-feedback",
   "four-waves",
   "transient-first",
+  "timeout-first",
 ]) {
   const missedFirst = scenario === "missed-first";
   const longFeedback = scenario === "long-feedback";
   const wrongFirst = scenario === "wrong-first" || longFeedback;
-  const structuralCorrection = missedFirst || wrongFirst;
+  // The first delivery outlives the delivery limit; its packet is not retried.
+  const timeoutFirst = scenario === "timeout-first";
+  const structuralCorrection = missedFirst || wrongFirst || timeoutFirst;
   const fourWaves = scenario === "four-waves";
   const transientFirst = scenario === "transient-first";
   test(
@@ -178,6 +199,7 @@ for (const scenario of [
       const report = await runCanonical(preparation, path.join(root, "run"), {
         canonicalPath: cache,
         agents: 2,
+        ...(timeoutFirst ? { deliveryTimeoutMs: 8000 } : {}),
         maxConcurrentAgents: 2,
         batchSize: 10,
         signal: t.signal,
@@ -213,7 +235,8 @@ for (const scenario of [
             }
             const damageOriginal = first && wrongFirst;
             let command;
-            if (first && missedFirst) command = "true";
+            if (first && timeoutFirst) command = "sleep 30";
+            else if (first && missedFirst) command = "true";
             else if (fourWaves && stage === "structural-correction") command = "true";
             else if (fourWaves && stage === "build-correction")
               command = replacePixels("pixels[i] = float(;", "pixels[i] = float(1 + ");
@@ -322,6 +345,12 @@ for (const scenario of [
         (100 * (total - structural.initialDifferences.length / 2) * factors) / total;
       assert.ok(Math.abs(firstRound.score.score - expectedScore) < 1e-9);
       if (missedFirst) assert.equal(structural.initialDifferences.length, total);
+      if (timeoutFirst) {
+        const timedOut = report.executions.filter(({ status }) => status === "timed-out");
+        assert.equal(timedOut.length, 1);
+        assert.equal(timedOut[0].stage, "original");
+        assert.equal(report.configuration.deliveryTimeoutMs, 8000);
+      } else assert.ok(report.executions.every(({ status }) => status !== "timed-out"));
       if (structuralCorrection || fourWaves) assert.ok(structural.initialDifferences.length > 0);
       else assert.equal(firstRound.score.score, 100);
       assert.deepEqual(
@@ -382,6 +411,7 @@ test(
       agents: 2,
       maxConcurrentAgents: 2,
       configPath,
+      referenceProofPath: await referenceProof(root, cache, t.signal),
       allowModelCalls: true,
       signal: t.signal,
       onCase: ({ kind, participant }) => {
@@ -481,6 +511,7 @@ test(
       agents: 2,
       maxConcurrentAgents: 2,
       configPath,
+      referenceProofPath: await referenceProof(root, cache, t.signal),
       allowModelCalls: true,
       signal: AbortSignal.any([t.signal, cancellation.signal]),
       onCase: async ({ kind, participant }) => {
