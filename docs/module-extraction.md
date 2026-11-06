@@ -35,7 +35,8 @@ followed by the common correction schedule and one line difference score.
    file: header files start with `#pragma once`, every file then gets the
    project includes of its reference preamble, and a header region is replaced
    in `main.cpp` by its include line. Agents work on the `main.cpp` that
-   assembly left, not on a trusted copy.
+   assembly left, not on a trusted copy. With `--renames`, a rename phase runs
+   between assembly and extraction (see below).
 3. One structural correction, one build correction and one result correction.
    There is no correction between the phases.
 
@@ -45,7 +46,10 @@ and last line. One assignment per file lists its problems:
 
 - a unit, or a run of consecutive units, that belongs at another place or in
   another file: where it is now, where it belongs (between which units or
-  lines), and that it moves unchanged;
+  lines), and that it moves unchanged. A neighbour that occurs more than once
+  in the file gets its copy number, and a neighbour already in place gets the
+  current number of its adjacent line, so a similar declaration, such as a
+  redeclaration with other parameter names, is not taken for it;
 - an extra copy of a unit, with where its required copy is;
 - a unit that is missing although an identical copy exists elsewhere, which
   stays where it is.

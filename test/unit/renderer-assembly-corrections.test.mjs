@@ -74,7 +74,7 @@ test("units are named by problem and place; only lost text is quoted", () => {
   assert.match(header, /An extra copy of the block of 2 lines from `using Real = float;`/);
   assert.match(
     header,
-    /no longer exists anywhere in the project\. It belongs after the line `#include <cmath>` and before the struct `struct Pair` in the global namespace\. Its changed version is around line 4 of a\.h, the line ` {2}return x \+ x;`; replace that line with exactly these lines/,
+    /no longer exists anywhere in the project\. It belongs after the line `#include <cmath>` \(now at line 2\) and before the struct `struct Pair` in the global namespace\. Its changed version is around line 4 of a\.h, the line ` {2}return x \+ x;`; replace that line with exactly these lines/,
   );
   assert.equal(header.match(/^\d+\. /gm).length, 3, "The changed version has no separate item");
   assert.ok(header.includes("  return x * 2.0f;"), "Lost text is given in full");
@@ -96,7 +96,7 @@ test("an extra file gives its units back before it is deleted, a missing file is
   assert.deepEqual(Object.keys(byFile).sort(), ["a.hpp", "b.cpp"]);
   assert.match(
     byFile["a.hpp"],
-    /1\. The struct `struct Pair`[^\n]*belongs in a\.h after the function `float twice\(float x\)` in the global namespace and before the block of 2 lines/,
+    /1\. The struct `struct Pair`[^\n]*belongs in a\.h after the function `float twice\(float x\)` in the global namespace \(its last line is now line 5\) and before the block of 2 lines[^\n]*\(its first line is now line 7\)\./,
   );
   assert.match(byFile["a.hpp"], /2\. After moving these units, delete the file a\.hpp\./);
   const created = byFile["b.cpp"];
@@ -121,7 +121,7 @@ test("units that moved together are described as one run", () => {
   assert.equal(rest.length, 0);
   assert.match(
     prompt,
-    /1\. These 2 consecutive units belong in a\.h, in this order, after the line `#include <cmath>` and before the block of 2 lines[^\n]*\. They are currently together and in the same order in b\.cpp, from around line 2, after the line `#include "a\.h"`, to around line 9\.[^\n]*\n- the function `float twice\(float x\)`[^\n]*\n- the struct `struct Pair`/,
+    /1\. These 2 consecutive units belong in a\.h, in this order, after the line `#include <cmath>` \(now at line 2\) and before the block of 2 lines[^\n]*\(its first line is now line 3\)\. They are currently together and in the same order in b\.cpp, from around line 2, after the line `#include "a\.h"`, to around line 9\.[^\n]*\n- the function `float twice\(float x\)`[^\n]*\n- the struct `struct Pair`/,
   );
   assert.equal(prompt.match(/^\d+\. /gm).length, 1);
 });
@@ -172,7 +172,7 @@ test("a neighbour with several copies in the file is named with its copy number"
   );
   assert.match(
     prompt,
-    /belongs in c\.h after the function declaration `inline float half\(float x\)` in the global namespace \(copy 2 of the 2 in c\.h, counted from the top\) and at the end of the file\./,
+    /belongs in c\.h after the function declaration `inline float half\(float x\)` in the global namespace \(copy 2 of the 2 in c\.h, counted from the top; now at line 7\) and at the end of the file\./,
   );
 });
 
