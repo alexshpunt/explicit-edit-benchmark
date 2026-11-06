@@ -169,4 +169,20 @@ export function compareLineDifferences(prepared, candidateTree, { extraUnits = [
   return comparison(prepared, normalizeTree(candidateTree), extraUnits);
 }
 
+/** Reference files that a comparison found exact: no line difference and no
+ * unexpected entry in that file. Extra files do not count as reference files.
+ * This is reported next to the Score and does not change it.
+ */
+export function fileExactness(prepared, structure) {
+  const reference = [...prepared.reference.files.keys()];
+  // Files of every difference, unexpected entries included.
+  const differing = new Set(structure.files);
+  return {
+    referenceFiles: reference.length,
+    exactFiles: reference.filter((file) => !differing.has(file)).length,
+    differingFiles: reference.filter((file) => differing.has(file)),
+    extraFiles: [...differing].filter((file) => !prepared.reference.files.has(file)).sort(order),
+  };
+}
+
 export const LINE_PRESENCE = PRESENCE;

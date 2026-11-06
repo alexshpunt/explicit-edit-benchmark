@@ -79,7 +79,12 @@ first capture and counted in the report.
 assembled regions moved into their files, with `main.cpp` keeping one include
 line per header where the regions were. Version 1 assembly runs counted
 structural units; version 2 counts line differences, so a lost brace costs only
-the lines that differ. The scripted
+the lines that differ. Every assessed stage of the report also records file
+exactness: how many reference files have no line difference, which reference
+files differ and which extra files exist. The command summary prints it for the
+first and the final capture, such as `12/20`. It stands next to the Score and
+does not change it: a run can lose few lines and still leave many files
+inexact. The scripted
 reference also builds the assembled unity build, all files still in their
 regions; it and the final files must render the expected images.
 

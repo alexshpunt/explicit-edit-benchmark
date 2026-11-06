@@ -165,6 +165,9 @@ async function assemblyCommand(values, positionals) {
         signal,
       });
   const final = report.stages.at(-1);
+  const assessed = report.stages.filter((stage) => stage.exactness);
+  const exactFiles = (stage) =>
+    stage ? `${stage.exactness.exactFiles}/${stage.exactness.referenceFiles}` : null;
   console.log(
     JSON.stringify({
       status: report.status,
@@ -176,6 +179,8 @@ async function assemblyCommand(values, positionals) {
       remainingMarkers: report.remainingMarkers,
       differences: final.structure.differenceIds.length,
       score: report.score?.score ?? null,
+      firstExactFiles: exactFiles(assessed[0]),
+      finalExactFiles: exactFiles(assessed.at(-1)),
     }),
   );
 }

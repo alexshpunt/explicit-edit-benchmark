@@ -10,6 +10,7 @@ import { compilerDiagnostics } from "../grading/repair-diagnostics.mjs";
 import {
   LINE_DIFFERENCE_POLICY,
   compareLineDifferences,
+  fileExactness,
   prepareLineDifferences,
 } from "../grading/line-differences.mjs";
 import {
@@ -360,6 +361,7 @@ async function runAssemblyObservation({
               stage,
               // Hunks repeat the differing lines; the differences keep them once.
               structure: structure && { ...structure, hunks: structure.hunks.length },
+              exactness: structure ? fileExactness(prepared, structure) : null,
               integration,
               directory,
               candidateIdentity,
@@ -402,7 +404,11 @@ async function runAssemblyObservation({
         signal,
       });
       report.stages = [
-        { stage: "probe", structure: { ...state.structure, hunks: state.structure.hunks.length } },
+        {
+          stage: "probe",
+          structure: { ...state.structure, hunks: state.structure.hunks.length },
+          exactness: fileExactness(prepared, state.structure),
+        },
       ];
       report.passed = state.structure.differenceIds.length === 0;
     }
@@ -559,6 +565,8 @@ export async function verifyAssemblyCase(
     remainingMarkers: report.remainingMarkers,
     score: report.score.score,
     finalDifferences: final.structure.differenceIds.length,
+    finalExactFiles: final.exactness.exactFiles,
+    referenceFiles: final.exactness.referenceFiles,
     buildPassed: final.integration.buildPassed,
     resultMatched: final.integration.resultMatched,
     assembledBuildPassed: assembled.buildPassed,

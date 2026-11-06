@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   compareLineDifferences,
+  fileExactness,
   prepareLineDifferences,
 } from "../../src/suites/explicit-edit-multi-agent/grading/line-differences.mjs";
 import { structuralUnitScore } from "../../src/suites/explicit-edit-multi-agent/grading/structural-unit-score.mjs";
@@ -66,6 +67,24 @@ test("missing, extra and non-UTF-8 files are differences, order matters", () => 
   assert.ok(kinds.includes("extra-line tool.py file"));
   assert.ok(kinds.includes("extra-line bad.h bytes"));
   assert.equal(kinds.filter((kind) => kind.includes("main.cpp")).length, 2);
+});
+
+test("file exactness counts reference files without differences, extra files apart", () => {
+  const prepared = prepareLineDifferences(
+    { "main.cpp": "int a;\n" },
+    { "main.cpp": "int b;\n", "a.h": "#pragma once\n", "b.h": "#pragma once\nint c;\n" },
+  );
+  const result = compareLineDifferences(
+    prepared,
+    { "main.cpp": "int b;\n", "a.h": "#pragma once\n\n", "b.h": "#pragma once\n", "x.py": "1\n" },
+    { extraUnits: [{ file: "fifo", kind: "physical-entry", text: "fifo" }] },
+  );
+  assert.deepEqual(fileExactness(prepared, result), {
+    referenceFiles: 3,
+    exactFiles: 2,
+    differingFiles: ["b.h"],
+    extraFiles: ["fifo", "x.py"],
+  });
 });
 
 test("corrections describe each hunk in prose with its surrounding lines", () => {
