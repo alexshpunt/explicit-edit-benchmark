@@ -384,11 +384,11 @@ export async function startPiParticipant(
       !Array.isArray(record.tools) ||
       (profile.baseline
         ? JSON.stringify(record.tools) !== '["bash"]' || record.systemEmpty === false
-        : missingProfileTools(record.tools).length > 0 ||
+        : missingProfileTools(record.tools, profile.harness.id).length > 0 ||
           (record.event === "context" &&
             (record.systemEmpty !== false ||
               !Array.isArray(record.declaredTools) ||
-              missingProfileTools(record.declaredTools).length > 0)))
+              missingProfileTools(record.declaredTools, profile.harness.id).length > 0)))
     )
       throw new ExecutionFailure(
         "driver_exit",

@@ -19,6 +19,8 @@ const help = `Experimental paired-module extraction
   assembly-verify FLAT_CASE NEW_RUN [--agent-lifecycle LIFECYCLE] [--traps LEVEL] [--renames PERCENT [--rename-agents N]]
   assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--agent-lifecycle LIFECYCLE] [--traps LEVEL] [--renames PERCENT [--rename-agents N]]
   assembly-probe FLAT_CASE NEW_RUN [--deliveries N] [--regions FILE[,FILE]] [--agent-lifecycle LIFECYCLE] [--traps LEVEL] (--scripted | --config PRIVATE_JSON --allow-model-calls)
+  mixed-verify FLAT_CASE NEW_RUN [--deliveries N]
+  mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--deliveries N]
 
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
@@ -70,6 +72,12 @@ assembly-verify is the scripted reference and must report Score 100 from clean
 committed source. assembly-probe runs the first assembly deliveries of the queue
 and/or the extraction of chosen regions, compares the result with the scripted
 outcome of the same assignments and reports no observation score.
+Mixed commands run one phase on main.cpp with twenty agents and no corrections:
+the first N assembly deliveries (default 80) interleaved with renames of uniquely
+spelled symbols, of one field or overload among same-named symbols and of one
+function's parameter. Every move and rename is one check; the summary adds build
+and render, tokens, cost and wall time. The harness comes from the private
+config, so one proof serves every harness. mixed-verify is the model-free proof.
 Use fresh ignored output directories and the shared renderer lock on a capable worker.
 See docs/multi-agent.md for shared renderer prerequisites.
 `;
@@ -129,6 +137,40 @@ async function chunkCommand(values, positionals) {
       }),
     );
   }
+}
+
+async function mixedCommand(values, positionals) {
+  const [command, ...paths] = positionals;
+  assert.ok(["mixed-verify", "mixed-run"].includes(command) && paths.length === 2, help);
+  for (const option of ["modules", "generation", "agents", "task", "from-run", "source-receipt"])
+    assert.equal(values[option], undefined, help);
+  assert.ok(!values.regions && !values.scripted, help);
+  const run = command === "mixed-run";
+  if (run) {
+    assert.equal(
+      values["allow-model-calls"],
+      true,
+      "Model calls require explicit --allow-model-calls",
+    );
+    assert.equal(typeof values.config, "string", help);
+    assert.equal(typeof values.proof, "string", help);
+  } else assert.ok(!values.config && !values["allow-model-calls"] && !values.proof, help);
+  const counts = values.deliveries === undefined ? {} : { moves: Number(values.deliveries) };
+  assert.ok(counts.moves === undefined || Number.isSafeInteger(counts.moves), help);
+  const assembly =
+    await import("../src/suites/explicit-edit-multi-agent/extraction/assembly-run.mjs");
+  const signal = controller.signal;
+  const summary = run
+    ? await assembly.runMixedProbe(
+        paths[0],
+        paths[1],
+        JSON.parse(await readFile(values.config, "utf8")),
+        { proofPath: values.proof, counts, signal },
+      )
+    : await assembly.verifyMixedProbe(paths[0], paths[1], { counts, signal });
+  const { identity: _identity, ...rest } = summary;
+  console.log(JSON.stringify(rest));
+  if (!run && summary.status !== "pass") process.exitCode = 1;
 }
 
 async function assemblyCommand(values, positionals) {
@@ -258,6 +300,7 @@ try {
   if (values.help) console.log(help);
   else if (positionals[0]?.startsWith("chunk-")) await chunkCommand(values, positionals);
   else if (positionals[0]?.startsWith("assembly-")) await assemblyCommand(values, positionals);
+  else if (positionals[0]?.startsWith("mixed-")) await mixedCommand(values, positionals);
   else {
     const [command, input, output] = positionals;
     assert.equal(positionals.length, 3, help);

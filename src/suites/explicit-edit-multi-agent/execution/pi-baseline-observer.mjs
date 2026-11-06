@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import * as piAI from "@earendil-works/pi-ai";
-import { declaredToolNames } from "./pi-codemode-profile.mjs";
+import { IDE_HARNESS_TOOLS, declaredToolNames } from "./pi-codemode-profile.mjs";
 
 const lifetime = randomUUID();
-const baseline = process.env.RENDERER_PI_HARNESS !== "pi-agent-ide-codemode";
+const baseline = !Object.hasOwn(IDE_HARNESS_TOOLS, process.env.RENDERER_PI_HARNESS ?? "");
 
 /** Observe native identity and loadout; only the Baseline removes system instructions. */
 export default function baselineObserver(pi) {

@@ -43,6 +43,7 @@ import { ASSEMBLY_CORRECTION_POLICY, assemblyCorrections } from "./assembly-corr
 import { ASSEMBLY_RENAME_VERSION, renameLeftovers } from "./assembly-renames.mjs";
 import { integrationPrompt, loadGeneralPrompt, physicalUnits } from "./chunk-run.mjs";
 import { captureExtractionState } from "./run.mjs";
+import { MIXED_PROBE_VERSION, gradeMixedProbe, prepareMixedProbe } from "./mixed-probe.mjs";
 
 export const ASSEMBLY_RUN_VERSION = "renderer-assembly-run-v3";
 export const ASSEMBLY_AGENTS = 20;
@@ -748,4 +749,155 @@ export async function probeAssembly(
     lifecycle,
     signal,
   });
+}
+
+/** The mixed probe's identity: clean source, its tasks and the general prompt. */
+async function mixedProbeIdentity(probe, general, harness) {
+  const source = await restoringSourceIdentity();
+  assert.equal(source.sourceClean, true, "Mixed probes require clean committed source");
+  return {
+    version: MIXED_PROBE_VERSION,
+    source,
+    planSha256: probe.setup.manifest.planSha256,
+    counts: probe.counts,
+    identities: probe.identities,
+    generalSha256: hash(general),
+    agents: ASSEMBLY_AGENTS,
+    deadlineSeconds: ASSEMBLY_DELIVERY_DEADLINE_MS / 1000,
+    harness,
+  };
+}
+
+/** Build one main.cpp and render both scenes. */
+async function measureMain(directory, main, expectedPixels, signal) {
+  await writeTree(path.join(directory, "source"), { "main.cpp": main });
+  const candidate = await captureCandidate(
+    path.join(directory, "source"),
+    path.join(directory, "candidate"),
+    { signal, includeAllFiles: true },
+  );
+  try {
+    return await measureExtractionCandidate(
+      candidate.source,
+      path.join(directory, "integration"),
+      candidate.tree,
+      { expectedPixels, signal, completeInventory: true },
+    );
+  } finally {
+    releaseCandidateWorkspace(path.join(directory, "source"));
+  }
+}
+
+/** Model-free proof of a mixed probe: the reference passes every check, the start
+ * fails every check, and the reference main.cpp builds and renders the images.
+ */
+export async function verifyMixedProbe(casePath, outputPath, { counts = {}, signal } = {}) {
+  const output = path.resolve(outputPath);
+  await mkdir(output, { mode: 0o700 });
+  const probe = await prepareMixedProbe(casePath, counts);
+  const general = await loadGeneralPrompt();
+  const identity = await mixedProbeIdentity(probe, general, null);
+  const reference = gradeMixedProbe(probe, probe.expected["main.cpp"]);
+  const start = gradeMixedProbe(probe, probe.start["main.cpp"]);
+  const build = await measureMain(
+    path.join(output, "reference"),
+    probe.expected["main.cpp"],
+    probe.setup.manifest.pixels,
+    signal,
+  );
+  const summary = {
+    version: MIXED_PROBE_VERSION,
+    identity,
+    status:
+      reference.all.passed === reference.all.total &&
+      reference.exact &&
+      start.all.passed === 0 &&
+      build.buildPassed &&
+      build.resultMatched
+        ? "pass"
+        : "fail",
+    deliveries: probe.queue.length,
+    checks: { reference: reference.all, start: start.all },
+    renames: probe.renames.map(({ kind, role, name, newName, edits }) => ({
+      kind,
+      role,
+      name,
+      newName,
+      edits,
+    })),
+    buildPassed: build.buildPassed,
+    resultMatched: build.resultMatched,
+  };
+  await writeFile(path.join(output, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return summary;
+}
+
+/** One mixed observation: twenty agents work through the interleaved queue once,
+ * without corrections. The summary reports the checks, file integrity, build and
+ * render, tokens, cost and wall time.
+ */
+export async function runMixedProbe(
+  casePath,
+  outputPath,
+  config,
+  { proofPath, counts = {}, signal } = {},
+) {
+  const output = path.resolve(outputPath);
+  const probe = await prepareMixedProbe(casePath, counts);
+  const general = await loadGeneralPrompt();
+  const proof = JSON.parse(await readFile(proofPath, "utf8"));
+  assert.equal(proof.status, "pass", "The reference proof did not pass");
+  assert.deepEqual(
+    proof.identity,
+    await mixedProbeIdentity(probe, general, null),
+    "The reference proof belongs to other source or tasks",
+  );
+  const identity = await mixedProbeIdentity(probe, general, config.harness ?? "baseline-agent");
+  const started = Date.now();
+  const report = await runAssemblyObservation({
+    setup: probe.setup,
+    output,
+    pools: modelPools(output, config, general),
+    identity,
+    general,
+    phases: [{ name: "mixed", entries: probe.queue, prompt: (entry) => entry.prompt }],
+    start: probe.start,
+    reference: probe.expected,
+    corrections: false,
+    signal,
+  });
+  const minutes = (Date.now() - started) / 60000;
+  const main = await readFile(path.join(output, "workspace", "main.cpp"), "utf8");
+  const grade = gradeMixedProbe(probe, main);
+  const build = await measureMain(
+    path.join(output, "final-build"),
+    cleanupAssemblyMarkers({ "main.cpp": main }, probe.setup.markers).tree["main.cpp"],
+    probe.setup.manifest.pixels,
+    signal,
+  );
+  const usage = { input: 0, output: 0, cacheRead: 0, cost: 0 };
+  for (const { usage: session } of report.sessions)
+    for (const key of Object.keys(usage)) usage[key] += session?.[key] ?? 0;
+  const rows = report.deliveries;
+  const summary = {
+    version: MIXED_PROBE_VERSION,
+    identity,
+    status: report.status,
+    minutes: Number(minutes.toFixed(2)),
+    deliveries: rows.length,
+    timedOut: rows.filter((row) => row.status === "timed-out").length,
+    checks: grade,
+    differences: report.stages.at(-1).structure.differenceIds.length,
+    buildPassed: build.buildPassed,
+    resultMatched: build.resultMatched,
+    usage,
+  };
+  await writeFile(path.join(output, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return summary;
 }

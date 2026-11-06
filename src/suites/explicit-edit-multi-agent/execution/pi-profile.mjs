@@ -3,6 +3,14 @@ import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { resolveIdePackage } from "../../../../scripts/prepare-benchmark.mjs";
 
+/** Additive tool selections of the IDE harnesses: Codemode joins Pi's default
+ * tools, and the variant without Bash also removes Bash.
+ */
+const IDE_TOOL_ARGS = Object.freeze({
+  "pi-agent-ide-codemode": ["--tools", "+codemode"],
+  "pi-agent-ide-codemode-no-bash": ["--tools", "+codemode,-bash"],
+});
+
 /** Resolve an isolated native participant without starting a process or reading credentials. */
 export async function resolvePiParticipantProfile(config) {
   const keys = new Set([
@@ -30,7 +38,7 @@ export async function resolvePiParticipantProfile(config) {
   );
   const harness = config.harness === undefined ? "baseline-agent" : config.harness;
   assert.ok(
-    ["baseline-agent", "pi-agent-ide-codemode"].includes(harness),
+    harness === "baseline-agent" || Object.hasOwn(IDE_TOOL_ARGS, harness),
     "Unsupported native Pi harness",
   );
   const runtime = await realpath(config.runtime);
@@ -78,7 +86,7 @@ export async function resolvePiParticipantProfile(config) {
     ...base,
     baseline: false,
     harness: { id: harness, kind: harness, version },
-    toolArgs: ["--tools", "+codemode"],
+    toolArgs: IDE_TOOL_ARGS[harness],
     extensionArgs: [
       "--extension",
       "builtin:codemode",

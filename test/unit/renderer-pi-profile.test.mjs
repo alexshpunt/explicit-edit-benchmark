@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { resolvePiParticipantProfile } from "../../src/suites/explicit-edit-multi-agent/execution/pi-profile.mjs";
+import { missingProfileTools } from "../../scripts/pi-codemode-profile.mjs";
 import { restoringFixture } from "../helpers/restoring-result-fixture.mjs";
 import {
   restoringMultiAgentResult,
@@ -98,6 +99,26 @@ test("Codemode participants bind the installed IDE source and additive main prof
     "/observer/pi-codemode-profile.mjs",
   ]);
   assert.deepEqual(profile.settings, { codemode: { mode: "on" } });
+});
+
+test("the IDE variant without Bash removes Bash and must not declare it", async (t) => {
+  const { config } = await fixture(t);
+  const profile = await resolvePiParticipantProfile({
+    ...config,
+    harness: "pi-agent-ide-codemode-no-bash",
+  });
+  assert.equal(profile.baseline, false);
+  assert.equal(profile.harness.id, "pi-agent-ide-codemode-no-bash");
+  assert.deepEqual(profile.toolArgs, ["--tools", "+codemode,-bash"]);
+  assert.deepEqual(profile.settings, { codemode: { mode: "on" } });
+  const ide = ["codemode", "read", "write", "search", "diff", "replace", "insert"];
+  const editing = [...ide, "delete", "copy", "move", "undo"];
+  assert.deepEqual(missingProfileTools(editing, "pi-agent-ide-codemode-no-bash"), []);
+  assert.deepEqual(missingProfileTools([...editing, "bash"], "pi-agent-ide-codemode-no-bash"), [
+    "-bash",
+  ]);
+  assert.deepEqual(missingProfileTools(editing, "pi-agent-ide-codemode"), ["bash"]);
+  assert.deepEqual(missingProfileTools(editing, "other"), ["unknown harness other"]);
 });
 
 test("a package's declared compiled entry is resolved instead of a hand-picked module", async (t) => {

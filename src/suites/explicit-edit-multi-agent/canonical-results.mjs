@@ -193,7 +193,10 @@ function validateConfiguration(value) {
       ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value.thinking),
   );
   assert.ok(
-    value.harness === null || ["baseline-agent", "pi-agent-ide-codemode"].includes(value.harness),
+    value.harness === null ||
+      ["baseline-agent", "pi-agent-ide-codemode", "pi-agent-ide-codemode-no-bash"].includes(
+        value.harness,
+      ),
   );
   if (value.harnessVersion !== null) {
     label(value.harnessVersion);

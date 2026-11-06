@@ -1,9 +1,8 @@
 import { writeFileSync, writeSync } from "node:fs";
 
-const requiredTools = [
+const ideTools = [
   "codemode",
   "read",
-  "bash",
   "write",
   "search",
   "diff",
@@ -15,10 +14,23 @@ const requiredTools = [
   "undo",
 ];
 
-/** Return the required Codemode/standalone tools absent from an observed loadout. */
-export function missingProfileTools(tools) {
+/** Tools each IDE harness must and must not declare. The variant without Bash
+ * leaves editing and commands to the IDE tools and Codemode.
+ */
+export const IDE_HARNESS_TOOLS = Object.freeze({
+  "pi-agent-ide-codemode": { required: [...ideTools, "bash"], forbidden: [] },
+  "pi-agent-ide-codemode-no-bash": { required: ideTools, forbidden: ["bash"] },
+});
+
+/** Return the required tools absent from an observed loadout, and any forbidden tool present. */
+export function missingProfileTools(tools, harness = process.env.RENDERER_PI_HARNESS) {
+  const expected = IDE_HARNESS_TOOLS[harness ?? "pi-agent-ide-codemode"];
+  if (!expected) return [`unknown harness ${harness}`];
   const names = new Set(tools);
-  return requiredTools.filter((name) => !names.has(name));
+  return [
+    ...expected.required.filter((name) => !names.has(name)),
+    ...expected.forbidden.filter((name) => names.has(name)).map((name) => `-${name}`),
+  ];
 }
 
 /** Replay Pi's system tool declarations, including removals, without changing context. */
@@ -43,7 +55,7 @@ export default function codemodeProfile(pi) {
     if (missing.length) {
       writeSync(
         2,
-        `Invalid pi-agent-ide-codemode loadout (${phase}): missing ${missing.join(", ")}\n`,
+        `Invalid ${process.env.RENDERER_PI_HARNESS} loadout (${phase}): missing or forbidden ${missing.join(", ")}\n`,
       );
       // Lifecycle handler errors can be reported and ignored by Pi. This benchmark-only
       // process must stop instead; the runner terminates its remaining process group.
