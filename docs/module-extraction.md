@@ -39,9 +39,9 @@ followed by the common correction schedule and one line difference score.
 3. One structural correction, one build correction and one result correction.
    There is no correction between the phases.
 
-Structural corrections describe units the way assignments do: by kind,
-signature and namespace, never by their text. One assignment per file lists
-its problems:
+Structural corrections name units without their text: a named unit by kind,
+signature and namespace, as in assignments, and an unnamed block by its first
+and last line. One assignment per file lists its problems:
 
 - a unit, or a run of consecutive units, that belongs at another place or in
   another file: where it is now, where it belongs (between which units or
