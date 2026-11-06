@@ -42,8 +42,10 @@ its approved runtime requirement. The Codemode-disabled `pi-agent-ide` profile
 is not an alias for this profile.
 
 `harness: "pi-agent-ide-codemode-no-bash"` is the same profile with
-`--tools +codemode,-bash`: the IDE tools and Codemode must be declared and Bash
-must not be, so every edit and command goes through the IDE.
+`--tools +codemode,-bash` and `defaultTools: ["+codemode", "-bash"]` in its
+settings; the IDE registers its own Bash, and only the settings entry hides it.
+The IDE tools and Codemode must be declared and Bash must not be, so edits go
+through the IDE tools and Codemode.
 
 ## Find safe parallel work first
 

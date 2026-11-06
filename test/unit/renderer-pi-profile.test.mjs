@@ -110,7 +110,10 @@ test("the IDE variant without Bash removes Bash and must not declare it", async 
   assert.equal(profile.baseline, false);
   assert.equal(profile.harness.id, "pi-agent-ide-codemode-no-bash");
   assert.deepEqual(profile.toolArgs, ["--tools", "+codemode,-bash"]);
-  assert.deepEqual(profile.settings, { codemode: { mode: "on" } });
+  assert.deepEqual(profile.settings, {
+    codemode: { mode: "on" },
+    defaultTools: ["+codemode", "-bash"],
+  });
   const ide = ["codemode", "read", "write", "search", "diff", "replace", "insert"];
   const editing = [...ide, "delete", "copy", "move", "undo"];
   assert.deepEqual(missingProfileTools(editing, "pi-agent-ide-codemode-no-bash"), []);

@@ -95,6 +95,10 @@ export async function resolvePiParticipantProfile(config) {
       "--extension",
       "/observer/pi-codemode-profile.mjs",
     ],
-    settings: { codemode: { mode: "on" } },
+    // The IDE registers its own Bash; only a `-bash` default-tools entry hides it.
+    settings:
+      harness === "pi-agent-ide-codemode-no-bash"
+        ? { codemode: { mode: "on" }, defaultTools: ["+codemode", "-bash"] }
+        : { codemode: { mode: "on" } },
   };
 }
