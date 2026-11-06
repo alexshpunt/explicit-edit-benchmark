@@ -189,3 +189,34 @@ export async function canonicalizeTrustedProject(tree) {
   }
   return canonicalInventory([...entries.values()], contents);
 }
+
+/** Structural-unit input of a sealed capture: regular files by decoded path and every
+ * other physical entry as a candidate unit. Trusted trees only contain parent directories.
+ */
+export function capturedUnitInput(candidate) {
+  requireInput(candidate?.manifest?.version === "renderer-candidate-evidence-v1", "manifest");
+  const entries = candidate.manifest.entries;
+  const tree = {},
+    extraUnits = [];
+  const parents = new Set();
+  for (const entry of entries) {
+    if (entry.type !== "file" || entry.path === null) continue;
+    const parts = entry.path.split("/");
+    for (let depth = 1; depth < parts.length; depth++) parents.add(parts.slice(0, depth).join("/"));
+  }
+  for (const entry of entries) {
+    if (entry.type === "file" && entry.path !== null) {
+      const bytes = candidate.contents.get(entry.pathBytes);
+      requireInput(Buffer.isBuffer(bytes), "contents");
+      tree[entry.path] = decodeSourceBytes(bytes);
+    } else if (!(entry.type === "directory" && parents.has(entry.path)))
+      extraUnits.push({
+        file: entry.path ?? `(path bytes ${entry.pathBytes})`,
+        scope: [],
+        kind: "physical-entry",
+        ordered: true,
+        text: entry.type === "file" ? "regular file" : entry.type,
+      });
+  }
+  return { tree, extraUnits };
+}

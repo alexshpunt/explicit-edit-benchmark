@@ -4,26 +4,32 @@ import { appendFileSync } from "node:fs";
 import { mkdir, readFile, readlink, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MULTI_AGENT_BENCHMARK } from "../results.mjs";
-import { CANONICAL_RUN_VERSION, CANONICAL_RUN_POLICY } from "../canonical-results.mjs";
 import { writeTree } from "../generation/generator.mjs";
 import { encodeSourceBytes } from "../cpp/source-bytes.mjs";
 import { coherentTaskPrompt } from "../tasks/coherent-tasks.mjs";
-import { scoreCanonicalRounds } from "../grading/canonical-score.mjs";
 import { measureCoherentCandidate } from "../grading/coherent-build.mjs";
+import { STRUCTURAL_UNIT_POLICY, prepareStructuralUnits } from "../grading/structural-units.mjs";
+import {
+  STRUCTURAL_UNIT_SCORE_POLICY,
+  structuralUnitRunScore,
+} from "../grading/structural-unit-score.mjs";
 import {
   CANONICAL_MULTI_AGENT_PROTOCOL,
   loadCanonicalPreparation,
 } from "./canonical-preparation.mjs";
-import { canonicalizeCapturedCandidate } from "./canonical-candidate.mjs";
+import { CANONICAL_CANDIDATE_POLICY, capturedUnitInput } from "./canonical-candidate.mjs";
 import {
   canonicalAssignmentPrompt,
-  canonicalCorrectionNodes,
   canonicalIntegrationNodes,
   prepareCanonicalFeedback,
 } from "./canonical-diagnostics.mjs";
 import { runCanonicalRound } from "./canonical-round.mjs";
-import { runRoundPool } from "./round-pool.mjs";
-import { admitProviderDelivery, createProviderRecovery } from "./provider-recovery.mjs";
+import { ROUND_POOL_DEADLINE_POLICY, ROUND_POOL_POLICY, runRoundPool } from "./round-pool.mjs";
+import {
+  PROVIDER_RECOVERY_POLICY,
+  admitProviderDelivery,
+  createProviderRecovery,
+} from "./provider-recovery.mjs";
 import { startPiParticipant, finalizedUsage } from "./pi-baseline.mjs";
 import { resolvePiParticipantProfile } from "./pi-profile.mjs";
 import { restoringSourceIdentity } from "./restoring-identity.mjs";
@@ -33,7 +39,34 @@ import {
   releaseCandidateWorkspace,
 } from "./candidate-evidence.mjs";
 import { restoreCanonicalSource } from "./canonical-restore.mjs";
-import { prepareCanonicalCstCorrections } from "./canonical-cst-corrections.mjs";
+import { CHUNK_DELIVERY_DEADLINE_MS, executeChunkDelivery } from "./chunk-delivery-deadline.mjs";
+import {
+  STRUCTURAL_UNIT_CORRECTION_POLICY,
+  structuralUnitCorrections,
+} from "./structural-unit-corrections.mjs";
+
+/** Restoring runs scored by structural unit differences. Version 1 reports keep
+ * their text-hunk policy and are exported by canonical-results.mjs only.
+ */
+export const CANONICAL_UNIT_RUN_VERSION = "renderer-canonical-run-v2";
+export const CANONICAL_UNIT_RUN_POLICY = Object.freeze({
+  version: "renderer-canonical-policy-v2",
+  candidate: CANONICAL_CANDIDATE_POLICY,
+  candidateBuild: "captured-complete-physical-inventory",
+  units: STRUCTURAL_UNIT_POLICY,
+  corrections: STRUCTURAL_UNIT_CORRECTION_POLICY,
+  score: STRUCTURAL_UNIT_SCORE_POLICY,
+  pool: ROUND_POOL_POLICY,
+  deadline: ROUND_POOL_DEADLINE_POLICY,
+  delivery: Object.freeze({
+    deadlineSeconds: CHUNK_DELIVERY_DEADLINE_MS / 1000,
+    onTimeout: "retire-and-continue",
+  }),
+  providerRecovery: PROVIDER_RECOVERY_POLICY,
+  schedule: "original-structural-build-result",
+  maxEditingWaves: 4,
+  restoration: "trusted-round-end-after-saving-candidate",
+});
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const usageFields = ["input", "output", "cacheRead", "cacheWrite", "totalTokens", "cost"];
@@ -129,7 +162,6 @@ export async function runCanonical(
     createDriver,
     maxConcurrentAgents,
     batchSize = 10,
-    cppCorrectionCommand,
     fromRound = 1,
     allowModelCalls = false,
     signal: externalSignal,
@@ -157,10 +189,14 @@ export async function runCanonical(
   const {
     agentLifecycle,
     maxConcurrentAgents: configuredCap,
-    cppCorrectionCommand: configuredCorrectionCommand,
+    cppCorrectionCommand,
     ...config
   } = privateConfig;
-  const correctionCommand = cppCorrectionCommand ?? configuredCorrectionCommand;
+  assert.equal(
+    cppCorrectionCommand,
+    undefined,
+    "Unit-scored restoring has no source correction command",
+  );
   assert.ok(
     agentLifecycle === undefined || agentLifecycle === "round-ready-pool",
     "Canonical execution requires the round-ready lifecycle",
@@ -178,13 +214,22 @@ export async function runCanonical(
   await mkdir(output, { mode: 0o700 });
   for (const file of ["participants", "rounds", "boundaries"])
     await mkdir(path.join(output, file), { mode: 0o700 });
-  const plan = loaded.canonical.manifest.rounds.map(({ round, totalHunks }) => ({
-    round,
-    totalHunks,
+  // Every planned round is prepared from its trusted start, including skipped rounds.
+  const preparedRounds = new Map();
+  let roundStart = loaded.initial;
+  for (const round of loaded.schedule) {
+    signal.throwIfAborted();
+    const expectedTree = loaded.atomicIntervals.rounds.get(round.id).expectedTree;
+    preparedRounds.set(round.id, await prepareStructuralUnits(roundStart, expectedTree));
+    roundStart = expectedTree;
+  }
+  const plan = loaded.schedule.map(({ id }) => ({
+    round: id,
+    totalUnits: preparedRounds.get(id).totalUnits,
   }));
   const report = {
     ...source,
-    version: CANONICAL_RUN_VERSION,
+    version: CANONICAL_UNIT_RUN_VERSION,
     benchmark: MULTI_AGENT_BENCHMARK,
     protocol: CANONICAL_MULTI_AGENT_PROTOCOL,
     mode: start.mode,
@@ -199,7 +244,7 @@ export async function runCanonical(
         }
       : {}),
     status: "running",
-    policy: CANONICAL_RUN_POLICY,
+    policy: CANONICAL_UNIT_RUN_POLICY,
     configuration: {
       agents: loaded.agents,
       maxConcurrentAgents: cap,
@@ -241,7 +286,7 @@ export async function runCanonical(
     usage: null,
     agentsClosed: [],
     concurrency: { method: "kernel-samples-at-participant-start", peakObserved: 0, samples: [] },
-    score: scoreCanonicalRounds([], plan.length),
+    score: structuralUnitRunScore([], plan.length),
     initialCheck: null,
     terminal: null,
     final: start.skippedRounds.length
@@ -305,13 +350,12 @@ export async function runCanonical(
       "Trusted initial source failed integration verification",
     );
     await save();
-    let trustedStart = start.initial;
     for (const round of start.schedule) {
       signal.throwIfAborted();
       const interval = loaded.atomicIntervals.rounds.get(round.id);
       const roundOutput = path.join(output, "rounds", round.id);
       await mkdir(roundOutput, { mode: 0o700 });
-      const prepared = loaded.canonical.rounds.get(round.id).preparedDiff;
+      const prepared = preparedRounds.get(round.id);
       const outcome = await runCanonicalRound({
         prepared,
         signal,
@@ -323,17 +367,12 @@ export async function runCanonical(
                   prompt: coherentTaskPrompt("", node.operations),
                 }))
               : stage === "structural-correction"
-                ? correctionCommand
-                  ? await prepareCanonicalCstCorrections({
-                      comparison,
-                      startTree: trustedStart,
-                      expectedTree: interval.expectedTree,
-                      captured: boundary,
-                      command: correctionCommand,
-                      directory: path.join(roundOutput, "structural-feedback"),
-                      signal,
-                    })
-                  : canonicalCorrectionNodes(comparison)
+                ? structuralUnitCorrections(prepared, comparison).map(({ id, prompt }) => ({
+                    id,
+                    kind: "unit-correction",
+                    dependencies: [],
+                    prompt,
+                  }))
                 : canonicalIntegrationNodes(stage, { expectedPixels: loaded.manifest.pixels });
           await releaseBoundary();
           const sessions = new Map();
