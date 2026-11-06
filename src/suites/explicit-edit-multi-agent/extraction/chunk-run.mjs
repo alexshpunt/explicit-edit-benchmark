@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -587,17 +587,18 @@ function referencePools(workspace, { sourceMarkers, rawMarkers }) {
         try {
           await sleep(context.index % 7 === 0 ? 5 : context.index % 3);
           const { task, batch } = context;
-          let source = await readFile(path.join(workspace, "main.cpp"), "utf8"),
-            destination = await readFile(path.join(workspace, task.file), "utf8");
+          // Synchronous reads and writes keep each scripted delivery atomic in the event loop.
+          let source = readFileSync(path.join(workspace, "main.cpp"), "utf8"),
+            destination = readFileSync(path.join(workspace, task.file), "utf8");
           for (const fragment of batch.fragments) {
             assert.ok(!moved.has(fragment.id));
             source = replaceUnique(source, sourceMarkers.get(fragment.id) + fragment.text, "");
             destination = replaceUnique(destination, rawMarkers.get(fragment.id), fragment.text);
             moved.add(fragment.id);
           }
-          // The event loop serializes these scripted writes; agents have no such guarantee.
-          await writeFile(path.join(workspace, "main.cpp"), source);
-          await writeFile(path.join(workspace, task.file), destination);
+          // Agents have no such guarantee.
+          writeFileSync(path.join(workspace, "main.cpp"), source);
+          writeFileSync(path.join(workspace, task.file), destination);
           return { status: "settled", receipt: { units: batch.fragments.length } };
         } finally {
           active--;
