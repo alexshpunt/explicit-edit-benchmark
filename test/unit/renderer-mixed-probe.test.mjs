@@ -53,7 +53,10 @@ test("each move and rename is graded on its own", () => {
   assert.deepEqual(grade.moves, { passed: 1, total: 1 });
   assert.deepEqual(grade.failed.sort(), ["rename-shared-left", "rename-unique-twice"]);
   // A copy left behind fails the move, but not the renames.
-  const copy = expected.replace("\n\n\nint doubled", `\n\n${unit.replace("left", "first")}\nint doubled`);
+  const copy = expected.replace(
+    "\n\n\nint doubled",
+    `\n\n${unit.replace("left", "first")}\nint doubled`,
+  );
   assert.deepEqual(gradeMixedProbe(probe, copy).failed, ["a-1"]);
 });
 
