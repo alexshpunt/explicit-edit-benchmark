@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -596,9 +596,15 @@ function referencePools(workspace, { sourceMarkers, rawMarkers }) {
             destination = replaceUnique(destination, rawMarkers.get(fragment.id), fragment.text);
             moved.add(fragment.id);
           }
-          // Agents have no such guarantee.
-          writeFileSync(path.join(workspace, "main.cpp"), source);
-          writeFileSync(path.join(workspace, task.file), destination);
+          // Agents have no such guarantee. Renames keep concurrent controller reads whole.
+          for (const [file, content] of [
+            ["main.cpp", source],
+            [task.file, destination],
+          ]) {
+            const target = path.join(workspace, file);
+            writeFileSync(target + ".reference-write", content);
+            renameSync(target + ".reference-write", target);
+          }
           return { status: "settled", receipt: { units: batch.fragments.length } };
         } finally {
           active--;
