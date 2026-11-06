@@ -170,7 +170,7 @@ export function renameLeftovers(tree, selected, reference) {
 /** One rename assignment. It names no position, so it stays valid after an imperfect assembly. */
 export function renameProse({ name, newName, kind }) {
   return [
-    "Several agents are editing main.cpp at the same time.",
+    "Several agents are editing main.cpp at the same time. The file can change between the moment you read it and the moment you write it, and the risk of conflicting edits is high, so be as careful as possible with your edits.",
     `Rename the ${kind} \`${name}\` to \`${newName}\` in main.cpp. Every occurrence of the identifier \`${name}\` in the code of main.cpp refers to this ${kind}: its declarations, its definition and all of its uses. Replace each of them with \`${newName}\`.`,
     `Do not change comments, string literals or character literals, even where they contain \`${name}\`. Do not change longer identifiers that only contain \`${name}\` as a part. Leave all other code unchanged.`,
   ].join("\n\n");
@@ -182,8 +182,9 @@ export function renameProse({ name, newName, kind }) {
  * Assembly keeps the original units; corrections and the score use the renamed
  * reference view, whose regions, units and final files carry the new names.
  */
-export async function prepareAssemblyRenames(setup, percent) {
+export async function prepareAssemblyRenames(setup, percent, { agents = 20 } = {}) {
   assert.ok(Number.isInteger(percent) && percent >= 0 && percent <= 100, "Invalid rename share");
+  assert.ok(Number.isInteger(agents) && agents >= 1 && agents <= 20, "Invalid rename agents");
   const reference = {
     regions: setup.regions,
     items: setup.items,
@@ -191,7 +192,7 @@ export async function prepareAssemblyRenames(setup, percent) {
   };
   if (percent === 0)
     return {
-      renames: { version: ASSEMBLY_RENAME_VERSION, percent, eligible: 0, selected: [] },
+      renames: { version: ASSEMBLY_RENAME_VERSION, percent, agents, eligible: 0, selected: [] },
       renameDeliveries: [],
       reference,
     };
@@ -237,7 +238,13 @@ export async function prepareAssemblyRenames(setup, percent) {
     Object.entries(setup.trees.final).map(([file, text]) => [file, rename(text)]),
   );
   return {
-    renames: { version: ASSEMBLY_RENAME_VERSION, percent, eligible: unique.length, selected },
+    renames: {
+      version: ASSEMBLY_RENAME_VERSION,
+      percent,
+      agents,
+      eligible: unique.length,
+      selected,
+    },
     renameDeliveries: selected.map((entry, index) => ({
       id: `rename-${String(index + 1).padStart(3, "0")}`,
       file: "main.cpp",

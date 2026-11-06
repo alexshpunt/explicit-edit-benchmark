@@ -384,7 +384,10 @@ export function cleanupAssemblyMarkers(tree, markers) {
 /** Load a verified flat case, add code traps at the chosen level, derive its
  * assembly case and add renames of the given share of uniquely spelled symbols.
  */
-export async function prepareAssemblyCase(casePath, { traps = 0, renames = 0 } = {}) {
+export async function prepareAssemblyCase(
+  casePath,
+  { traps = 0, renames = 0, renameAgents = 20 } = {},
+) {
   const { plan: verified, manifest } = await loadFlatCase(casePath);
   const plan = applyCodeTraps(verified, traps);
   const setup = await prepareAssemblyPlan(plan);
@@ -393,6 +396,6 @@ export async function prepareAssemblyCase(casePath, { traps = 0, renames = 0 } =
     manifest,
     traps: { version: CODE_TRAP_VERSION, level: traps, insertions: plan.traps?.insertions ?? 0 },
     ...setup,
-    ...(await prepareAssemblyRenames(setup, renames)),
+    ...(await prepareAssemblyRenames(setup, renames, { agents: renameAgents })),
   };
 }

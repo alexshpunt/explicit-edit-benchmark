@@ -198,7 +198,13 @@ async function runAssemblyObservation({
   await save();
 
   /** Agents follow the phase lifecycle; the controller issues prompts exactly as prepared. */
-  async function runPhase(name, entries, promptOf, phaseLifecycle = "per-delivery") {
+  async function runPhase(
+    name,
+    entries,
+    promptOf,
+    phaseLifecycle = "per-delivery",
+    maxAgents = ASSEMBLY_AGENTS,
+  ) {
     const pool = pools.create(name);
     const phase = { name, lifecycle: phaseLifecycle, status: "running", entries: entries.length };
     report.phases.push(phase);
@@ -210,7 +216,7 @@ async function runAssemblyObservation({
     try {
       const { results, maxLive, agents } = await runAgentQueue(entries, {
         lifecycle: phaseLifecycle,
-        maxAgents: ASSEMBLY_AGENTS,
+        maxAgents,
         signal,
         createDriver: (item, session, context) => pool.createDriver(item, session, context),
         async execute(driver, item, context) {
@@ -361,8 +367,8 @@ async function runAssemblyObservation({
   }
 
   try {
-    for (const [index, { name, entries, prompt }] of phases.entries()) {
-      await runPhase(name, entries, prompt, lifecycle);
+    for (const [index, { name, entries, prompt, agents }] of phases.entries()) {
+      await runPhase(name, entries, prompt, lifecycle, agents);
       await cp(workspace, path.join(output, `after-${index + 1}-${name}`), {
         recursive: true,
         errorOnExist: true,
@@ -511,7 +517,14 @@ function observationPhases(setup) {
   return [
     { name: "assembly", entries: setup.deliveries, prompt: (delivery) => delivery.prompt },
     ...(setup.renameDeliveries.length
-      ? [{ name: "rename", entries: setup.renameDeliveries, prompt: (entry) => entry.prompt }]
+      ? [
+          {
+            name: "rename",
+            entries: setup.renameDeliveries,
+            prompt: (entry) => entry.prompt,
+            agents: setup.renames.agents,
+          },
+        ]
       : []),
     { name: "extraction", entries: setup.extractions, prompt: (entry) => entry.prompt },
   ];
@@ -519,18 +532,18 @@ function observationPhases(setup) {
 
 /** The rename share and selection are part of the case identity. */
 function renameSummary(setup) {
-  const { version, percent, eligible, selected } = setup.renames;
-  return { version, percent, eligible, selected: selected.length };
+  const { version, percent, agents, eligible, selected } = setup.renames;
+  return { version, percent, agents, eligible, selected: selected.length };
 }
 
 /** Model-free proof that the measured route reaches the trusted endpoint with Score 100. */
 export async function verifyAssemblyCase(
   casePath,
   outputPath,
-  { lifecycle = "per-delivery", traps = 0, renames = 0, signal } = {},
+  { lifecycle = "per-delivery", traps = 0, renames = 0, renameAgents = 20, signal } = {},
 ) {
   const output = path.resolve(outputPath);
-  const setup = await prepareAssemblyCase(casePath, { traps, renames });
+  const setup = await prepareAssemblyCase(casePath, { traps, renames, renameAgents });
   const general = await loadGeneralPrompt();
   const identity = await assemblyRunIdentity(setup, general);
   const pools = referencePools(path.join(output, "workspace"), setup);
@@ -567,8 +580,8 @@ export async function verifyAssemblyCase(
   assert.deepEqual(await assemblyRunIdentity(setup, general), identity);
   const final = report.stages.at(-1);
   const agentsOf = (name) => report.phases.find((phase) => phase.name === name).agents;
-  const expectedAgents = (entries) =>
-    lifecycle === "persistent" ? Math.min(ASSEMBLY_AGENTS, entries) : entries;
+  const expectedAgents = (entries, limit = ASSEMBLY_AGENTS) =>
+    lifecycle === "persistent" ? Math.min(limit, entries) : entries;
   const summary = {
     version: ASSEMBLY_RUN_VERSION,
     identity,
@@ -582,7 +595,8 @@ export async function verifyAssemblyCase(
       stats.renamed === setup.renameDeliveries.length &&
       stats.extracted === setup.regions.length &&
       (!setup.renameDeliveries.length ||
-        agentsOf("rename") === expectedAgents(setup.renameDeliveries.length)) &&
+        agentsOf("rename") ===
+          expectedAgents(setup.renameDeliveries.length, setup.renames.agents)) &&
       stats.maxActive === ASSEMBLY_AGENTS &&
       agentsOf("assembly") === expectedAgents(setup.deliveries.length) &&
       agentsOf("extraction") === expectedAgents(setup.extractions.length) &&
@@ -647,10 +661,17 @@ export async function runAssemblyModel(
   casePath,
   outputPath,
   config,
-  { proofPath, lifecycle = "per-delivery", traps = 0, renames = 0, signal } = {},
+  {
+    proofPath,
+    lifecycle = "per-delivery",
+    traps = 0,
+    renames = 0,
+    renameAgents = 20,
+    signal,
+  } = {},
 ) {
   const output = path.resolve(outputPath);
-  const setup = await prepareAssemblyCase(casePath, { traps, renames });
+  const setup = await prepareAssemblyCase(casePath, { traps, renames, renameAgents });
   const general = await loadGeneralPrompt();
   const identity = await assemblyRunIdentity(setup, general);
   const proof = JSON.parse(await readFile(proofPath, "utf8"));
