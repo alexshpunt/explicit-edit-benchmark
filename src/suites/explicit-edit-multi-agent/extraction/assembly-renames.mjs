@@ -175,16 +175,14 @@ export async function prepareAssemblyRenames(setup, percent) {
   for (const text of [...Object.values(setup.trees.assembled), ...Object.values(setup.trees.final)])
     for (const word of text.match(/[A-Za-z_]\w*/g) ?? []) used.add(word);
   const selected = assignNames(
-    unique
-      .slice(0, count)
-      .map(({ name, kind, uses, usr }) => ({
-        name,
-        kind,
-        uses,
-        family: usr,
-        scope: "",
-        role: kind,
-      })),
+    unique.slice(0, count).map(({ name, kind, uses, usr }) => ({
+      name,
+      kind,
+      uses,
+      family: usr,
+      scope: "",
+      role: kind,
+    })),
     used,
   ).map(({ name, newName, kind, uses }) => ({ name, newName, kind, uses }));
   const names = new Map(selected.map(({ name, newName }) => [name, newName]));
