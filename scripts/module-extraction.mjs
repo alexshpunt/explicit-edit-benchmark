@@ -73,7 +73,8 @@ committed source. assembly-probe runs the first assembly deliveries of the queue
 and/or the extraction of chosen regions, compares the result with the scripted
 outcome of the same assignments and reports no observation score.
 Mixed commands run one phase on main.cpp with twenty agents and no corrections:
-the first N assembly deliveries (default 80) interleaved with renames of uniquely
+the assembly deliveries of whole regions whose project includes move too, at most
+N (default 80), so the reference builds, interleaved with renames of uniquely
 spelled symbols, of one field or overload among same-named symbols and of one
 function's parameter. Every move and rename is one check; the summary adds build
 and render, tokens, cost and wall time. The harness comes from the private

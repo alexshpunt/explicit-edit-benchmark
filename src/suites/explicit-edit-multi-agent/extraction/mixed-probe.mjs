@@ -103,7 +103,25 @@ export async function prepareMixedProbe(casePath, options = {}) {
   const source = setup.plan.initial["main.cpp"];
   const shift = start.length - source.length;
   assert.equal(start.slice(setup.regionStart + shift), source.slice(setup.regionStart));
-  const moves = setup.deliveries.slice(0, counts.moves);
+  // Whole regions whose project includes are moved too, so the moved code still
+  // follows everything it uses and the reference builds; at most `moves` deliveries.
+  const selected = new Set();
+  let total = 0;
+  for (const region of setup.regions) {
+    const size = setup.deliveries.filter((delivery) => delivery.file === region.file).length;
+    const required = region.headerLines
+      .map((line) => /^#include\s+[<"]([^>"]+)[>"]/.exec(line)?.[1])
+      .filter(Boolean)
+      .map((include) =>
+        setup.regions.find(({ file }) => file === include || file.endsWith(`/${include}`)),
+      )
+      .filter(Boolean);
+    if (total + size > counts.moves || !required.every(({ file }) => selected.has(file))) continue;
+    selected.add(region.file);
+    total += size;
+  }
+  assert.ok(total > 0, "No region fits the move budget");
+  const moves = setup.deliveries.filter((delivery) => selected.has(delivery.file));
   const moved = new Set(moves.flatMap((delivery) => delivery.items.map((item) => item.id)));
   const reserved = new Set();
   for (const delivery of moves) for (const word of words(delivery.prompt)) reserved.add(word);
