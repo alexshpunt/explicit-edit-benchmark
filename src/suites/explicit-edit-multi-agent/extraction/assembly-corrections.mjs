@@ -163,11 +163,38 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
       needs.get(owner.id).hunks.add(hunk);
     });
   }
-  // A copy is out of place when the comparison removes any of its lines; the
-  // others may only match unrelated lines by chance. A copy inside correctly
-  // placed code keeps all its lines and is never moved or removed.
-  const extra = (occurrence) =>
-    occurrence.lines.some(({ line }) => removed.get(occurrence.file)?.has(line));
+  const reference = (file) => (prepared.reference.files.get(file) ?? []).length > 0;
+  // The comparison keeps every other line: candidate and reference lines pair up in order.
+  const added = new Map();
+  for (const hunk of hunks)
+    for (const line of hunk.add)
+      if (line.kind === "line") {
+        if (!added.has(hunk.file)) added.set(hunk.file, new Set());
+        added.get(hunk.file).add(line.line);
+      }
+  const aligned = new Map();
+  for (const [file, lines] of index.files) {
+    if (special.has(file) || !reference(file)) continue;
+    const wanted = (layout.files.get(file) ?? textLines(setup.trees.final[file])).filter(
+      ({ line }) => !added.get(file)?.has(line),
+    );
+    const kept = lines.filter(({ line }) => !removed.get(file)?.has(line));
+    assert.equal(kept.length, wanted.length, `Unpaired comparison lines in ${file}`);
+    aligned.set(file, new Map(kept.map(({ line }, at) => [line, wanted[at]])));
+  }
+  const key = (item) => layout.unitLines.get(item.id).join("\n");
+  /** A copy partly paired with its own unit's reference lines is that unit in place. */
+  const own = (occurrence, item) =>
+    occurrence.lines.some(({ line }) => {
+      const owner = aligned.get(occurrence.file)?.get(line)?.item;
+      return owner && key(owner) === key(item);
+    });
+  // A copy is out of place when the comparison removes any of its lines and pairs
+  // none with its own unit; other kept lines only match unrelated lines by chance.
+  // A copy inside correctly placed code keeps all its lines and is never touched.
+  const extra = (occurrence, item) =>
+    occurrence.lines.some(({ line }) => removed.get(occurrence.file)?.has(line)) &&
+    !own(occurrence, item);
   const claimed = new Set();
   const claim = (occurrence) => {
     for (const { line } of occurrence.lines) claimed.add(`${occurrence.file}:${line}`);
@@ -175,8 +202,8 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
       .map(({ line }) => removed.get(occurrence.file).get(line))
       .filter((id) => id !== undefined);
   };
-  const free = (occurrence) =>
-    extra(occurrence) &&
+  const free = (occurrence, item) =>
+    extra(occurrence, item) &&
     occurrence.lines.every(({ line }) => !claimed.has(`${occurrence.file}:${line}`));
   const covered = new Set(),
     created = new Set();
@@ -217,7 +244,6 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
     entries.get(file).push(entry);
     for (const id of entry.differenceIds) covered.add(id);
   };
-  const reference = (file) => (prepared.reference.files.get(file) ?? []).length > 0;
 
   // Destination order keeps the assignments stable and readable.
   const ordered = [...needs.values()].sort(
@@ -233,7 +259,9 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
     const lines = layout.unitLines.get(item.id);
     const name = describeUnit(item, lines);
     const occurrences = index.find(lines);
-    const source = occurrences.find(free);
+    // A unit in place keeps its other differing lines as line corrections.
+    if (occurrences.some((occurrence) => own(occurrence, item))) continue;
+    const source = occurrences.find((occurrence) => free(occurrence, item));
     if (source) {
       const differenceIds = [...ids, ...claim(source)];
       const run = runs.at(-1);
@@ -285,7 +313,7 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
         const item = items.get(unitId);
         const unit = layout.unitLines.get(unitId);
         const occurrence = index.find(unit).find((copy) => copy.file === file && copy.index === at);
-        if (!occurrence || !free(occurrence)) continue;
+        if (!occurrence || !free(occurrence, item)) continue;
         add(file, {
           differenceIds: claim(occurrence),
           prose: `An extra copy of ${describeUnit(item, unit)} is in ${file}, ${where(occurrence)}. Its required copy is in ${item.file}${file === item.file ? " at another place" : ""}; remove this extra copy.`,
