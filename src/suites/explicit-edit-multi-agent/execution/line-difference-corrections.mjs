@@ -11,14 +11,14 @@ export const LINE_DIFFERENCE_CORRECTION_POLICY = Object.freeze({
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 
-function block(lines) {
+export function block(lines) {
   const text = lines.join("\n");
   let fence = "```";
   while (text.includes(fence)) fence += "`";
   return `${fence}\n${text}\n${fence}`;
 }
 
-const code = (line) => {
+export const code = (line) => {
   let tick = "`";
   while (line.includes(tick)) tick += "`";
   return `${tick}${line.startsWith("`") || line.endsWith("`") ? ` ${line} ` : line}${tick}`;
@@ -39,7 +39,8 @@ function contentLines(lines) {
   return lines.filter(({ kind }) => kind === "line").map(({ text }) => text);
 }
 
-function item(hunk, number) {
+/** One numbered prose item for a changed hunk: where it is and which lines change. */
+export function hunkProse(hunk, number) {
   const removed = contentLines(hunk.remove);
   const added = contentLines(hunk.add);
   const bytes = [...hunk.remove, ...hunk.add].filter(({ kind }) => kind === "bytes");
@@ -120,7 +121,7 @@ export function lineDifferenceCorrections(prepared, comparison) {
     let current = [],
       bytes = 0;
     for (const hunk of hunks) {
-      const size = Buffer.byteLength(item(hunk, 0));
+      const size = Buffer.byteLength(hunkProse(hunk, 0));
       if (
         current.length &&
         (current.length >= LINE_DIFFERENCE_CORRECTION_POLICY.maximumItems ||
@@ -141,7 +142,7 @@ export function lineDifferenceCorrections(prepared, comparison) {
         differenceIds: members.flatMap((hunk) => hunk.differenceIds),
         prompt: [
           heading(file, index + 1, groups.length),
-          ...members.map((hunk, number) => item(hunk, number + 1)).filter(Boolean),
+          ...members.map((hunk, number) => hunkProse(hunk, number + 1)).filter(Boolean),
         ].join("\n\n"),
       });
     });
