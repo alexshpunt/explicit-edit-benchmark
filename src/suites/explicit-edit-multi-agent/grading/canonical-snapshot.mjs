@@ -7,6 +7,7 @@ import { decodeSourceBytes, encodeSourceBytes } from "../cpp/source-bytes.mjs";
 
 const require = createRequire(import.meta.url);
 const version = "renderer-canonical-snapshot-v4";
+export const STRUCTURAL_UNIT_VERSION = "renderer-structural-units-v1";
 const cppExtension = /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|ipp|inl|tcc|inc)$/i;
 const literals = new Set([
   "string_literal",
@@ -697,6 +698,233 @@ function validateFile(file) {
     file.split("/").some((part) => !part || part === "." || part === "..")
   )
     throw new TypeError("Canonical snapshot paths must be unambiguous project-relative files");
+}
+
+const conditionalScopes = new Set([
+  "preproc_if",
+  "preproc_ifdef",
+  "preproc_elif",
+  "preproc_elifdef",
+  "preproc_else",
+]);
+const classScopes = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
+
+function renderedText(nodes, macros) {
+  return nodes
+    .map((node) => render(node, macros).text)
+    .join("")
+    .replace(/\n$/, "");
+}
+
+function inlineText(nodes, macros) {
+  return renderedText(nodes, macros)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function significant(node) {
+  return node.type !== "comment" && !node.isMissing && node.type !== "\n";
+}
+
+/** Direct members of one structural scope, without its delimiters or directive lines. */
+function scopeItems(node) {
+  let items = node.children.filter(significant);
+  if (["declaration_list", "field_declaration_list"].includes(node.type)) {
+    if (items[0]?.type === "{") items = items.slice(1);
+    if (items.at(-1)?.type === "}") items = items.slice(0, -1);
+  } else if (conditionalScopes.has(node.type)) {
+    const excluded = new Set(
+      ["condition", "name", "alternative"]
+        .map((field) => node.childForFieldName(field))
+        .filter(Boolean)
+        .map(nodeKey),
+    );
+    items = items.filter((child) => !excluded.has(nodeKey(child)) && !child.type.startsWith("#"));
+  }
+  return items;
+}
+
+function directiveHead(node, macros) {
+  const keyword = node.children.find((child) => child.type.startsWith("#"));
+  const argument = node.childForFieldName("condition") ?? node.childForFieldName("name");
+  return [keyword?.type ?? node.type, argument ? inlineText([argument], macros) : ""]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** A class-like definition with a member list is a scope; its head names the scope. */
+function classScope(node, macros) {
+  if (classScopes.has(node.type)) {
+    const body = node.childForFieldName("body");
+    if (body?.type !== "field_declaration_list") return null;
+    const head = node.children.filter(
+      (child) => significant(child) && nodeKey(child) !== nodeKey(body),
+    );
+    return { head: inlineText(head, macros), body };
+  }
+  if (["declaration", "field_declaration", "template_declaration"].includes(node.type)) {
+    const parts = node.children.filter(significant);
+    const prefix =
+      node.type === "template_declaration"
+        ? parts.filter((child) => ["template", "template_parameter_list"].includes(child.type))
+        : [];
+    const rest = parts.filter((child) => !prefix.includes(child) && child.type !== ";");
+    if (rest.length !== 1 || parts.length - prefix.length - rest.length > 1) return null;
+    if (parts.length - prefix.length - rest.length === 1 && parts.at(-1).type !== ";") return null;
+    const inner = classScope(rest[0], macros);
+    if (!inner) return null;
+    return {
+      head: [inlineText(prefix, macros), inner.head].filter(Boolean).join(" "),
+      body: inner.body,
+    };
+  }
+  return null;
+}
+
+function namespaceScope(node, macros) {
+  const body = node.childForFieldName("body");
+  if (
+    !["namespace_definition", "linkage_specification"].includes(node.type) ||
+    body?.type !== "declaration_list"
+  )
+    return null;
+  const head = node.children.filter(
+    (child) => significant(child) && nodeKey(child) !== nodeKey(body),
+  );
+  const name = node.childForFieldName("name");
+  if (
+    node.type === "namespace_definition" &&
+    head.length === 2 &&
+    head[0].type === "namespace" &&
+    name?.type === "nested_namespace_specifier"
+  )
+    return {
+      path: name.namedChildren
+        .filter(significant)
+        .map((part) => `namespace ${inlineText([part], macros)}`),
+      body,
+    };
+  return { path: [inlineText(head, macros)], body };
+}
+
+function collectUnits(container, scope, units, macros) {
+  const items = scopeItems(container);
+  let access = null,
+    count = 0;
+  const nested = (body, path) => {
+    count += collectUnits(body, path, units, macros);
+  };
+  for (let index = 0; index < items.length; index++) {
+    const node = items[index];
+    const here = access ? [...scope, access] : scope;
+    if (node.type === "access_specifier") {
+      access = `${inlineText([node], macros)}:`;
+      if (items[index + 1]?.type === ":") index++;
+      continue;
+    }
+    const type = classScope(node, macros);
+    if (type) {
+      if (classScopes.has(node.type) && items[index + 1]?.type === ";") index++;
+      nested(type.body, [...here, type.head]);
+      continue;
+    }
+    const namespace = namespaceScope(node, macros);
+    if (namespace) {
+      nested(namespace.body, [...here, ...namespace.path]);
+      continue;
+    }
+    if (conditionalScopes.has(node.type)) {
+      let branch = node,
+        chain = [];
+      while (branch) {
+        chain = [...chain, directiveHead(branch, macros)];
+        nested(branch, [...here, chain.join("; ")]);
+        branch = branch.childForFieldName("alternative");
+      }
+      continue;
+    }
+    const nodes = [node];
+    if (classDefinitions.has(node.type) && items[index + 1]?.type === ";")
+      nodes.push(items[++index]);
+    units.push({
+      scope: here,
+      kind: "declaration",
+      ordered: !sortable(node),
+      text: renderedText(nodes, macros),
+    });
+    count++;
+  }
+  if (!count) {
+    units.push({ scope, kind: "empty-scope", ordered: true, text: "" });
+    count++;
+  }
+  return count;
+}
+
+/** Smallest structural units of one C++ source: functions, class members,
+ * namespace-level declarations and preprocessor directives. Namespaces, classes,
+ * linkage blocks and conditional branches are scopes. Placement of sortable
+ * definitions within one scope is not part of a unit.
+ */
+export async function canonicalCppUnits(source, { macros } = {}) {
+  if (typeof source !== "string") throw new TypeError("Canonical C++ input must be source text");
+  if (!source.isWellFormed()) {
+    const bytes = encodeSourceBytes(source);
+    return [
+      {
+        scope: [],
+        kind: "bytes",
+        ordered: true,
+        text: `${bytes.length} bytes, SHA-256 ${createHash("sha256").update(bytes).digest("hex")}`,
+      },
+    ];
+  }
+  const loaded = await language(),
+    parser = new Parser();
+  parser.setLanguage(loaded.language);
+  let tree;
+  try {
+    tree = parser.parse(source);
+    if (!tree) throw new Error("The canonical parser did not produce a syntax tree");
+    const units = [];
+    collectUnits(tree.rootNode, [], units, macros ?? projectMacros([source]));
+    return units;
+  } finally {
+    tree?.delete();
+    parser.delete();
+  }
+}
+
+/** Units of every file. Non-C++ text is compared line by line and other bytes as one unit. */
+export async function canonicalProjectUnits(tree) {
+  if (!tree || typeof tree !== "object" || Array.isArray(tree))
+    throw new TypeError("Canonical project input must be a source tree");
+  const sources = new Map();
+  for (const file of Object.keys(tree).sort()) {
+    let source = tree[file];
+    if (Buffer.isBuffer(source)) source = decodeSourceBytes(source);
+    if (typeof source !== "string")
+      throw new TypeError("Canonical project contents must be source text or bytes");
+    sources.set(file, source);
+  }
+  const macros = projectMacros(
+    [...sources].filter(([file]) => cppExtension.test(file)).map(([, source]) => source),
+  );
+  const units = [];
+  for (const [file, source] of sources) {
+    let fileUnits;
+    if (cppExtension.test(file)) fileUnits = await canonicalCppUnits(source, { macros });
+    else if (!source.isWellFormed()) fileUnits = await canonicalCppUnits(source);
+    else if (!source) fileUnits = [{ scope: [], kind: "empty-scope", ordered: true, text: "" }];
+    else
+      fileUnits = source
+        .split("\n")
+        .map((text) => ({ scope: [], kind: "line", ordered: true, text }));
+    for (const unit of fileUnits) units.push({ file, ...unit });
+  }
+  return { version: STRUCTURAL_UNIT_VERSION, canonicalizer: (await language()).identity, units };
 }
 
 /** Include every captured file. Non-C++ contents remain explicit original bytes.
