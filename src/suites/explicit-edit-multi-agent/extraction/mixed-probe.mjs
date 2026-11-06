@@ -236,7 +236,7 @@ export async function prepareMixedProbe(casePath, options = {}) {
       for (const item of setup.items) {
         if (count("parameter") >= counts.parameters) break;
         if (moved.has(item.id) || item.kind !== "named" || item.copies !== 1) continue;
-        if (item.description.kind !== "function") continue;
+        if (item.description.kind !== "function-definition") continue;
         const header = item.text.slice(0, item.text.indexOf("{"));
         for (const parameter of parameters(header)) {
           const { name } = parameter;
@@ -269,9 +269,11 @@ export async function prepareMixedProbe(casePath, options = {}) {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-  assert.equal(renames.filter(({ kind }) => kind === "unique").length, counts.unique);
-  assert.equal(renames.filter(({ kind }) => kind === "shared").length, counts.shared);
-  assert.equal(renames.filter(({ kind }) => kind === "parameter").length, counts.parameters);
+  for (const kind of ["unique", "shared", "parameter"]) {
+    const wanted = counts[kind === "parameter" ? "parameters" : kind];
+    const found = renames.filter((rename) => rename.kind === kind).length;
+    assert.equal(found, wanted, `Found ${found} of ${wanted} ${kind} renames`);
+  }
 
   // Fresh names that appear nowhere in the source.
   const used = words(start);
@@ -345,7 +347,7 @@ export function renameProse(rename) {
   const { name, newName } = rename;
   const ask =
     rename.kind === "unique"
-      ? `In main.cpp, rename the ${rename.role} ${code(name)} to ${code(newName)}. Every occurrence of the identifier ${code(name)} in the code refers to this ${rename.role}; change its declarations, its definition and all of its uses.`
+      ? `In main.cpp, rename the ${rename.role} ${code(name)} to ${code(newName)}. Every occurrence of the identifier ${code(name)} in the code refers to this ${rename.role}; change every one of them.`
       : rename.kind === "parameter"
         ? `In main.cpp, in ${rename.function}, rename the parameter ${code(name)} to ${code(newName)}. Change the parameter and every use of it inside this function. Other functions also have parameters and variables named ${code(name)}; they stay unchanged.`
         : rename.role === "field"
@@ -362,9 +364,10 @@ const lines = (text) =>
 
 /** Grade one candidate main.cpp: one check per moved unit and per rename. A move
  * passes when the unit, with renames undone, stands exactly once in its region and
- * the file holds as many copies as the reference. A rename passes when the lines
- * that contain its new name match the reference, other renames undone: a missed
- * occurrence drops a line and an extra one adds a line. Moves never change line text.
+ * the file holds as many copies as the reference. A rename passes when, other
+ * renames undone, every reference line with its new name is present as often as in
+ * the reference and no other line has it: a missed occurrence drops a line and a
+ * wrong one adds a line. Moves never change line text.
  */
 export function gradeMixedProbe(probe, candidateMain) {
   const candidate = cleanupAssemblyMarkers({ "main.cpp": candidateMain }, probe.setup.markers).tree[
@@ -401,14 +404,21 @@ export function gradeMixedProbe(probe, candidateMain) {
   });
   const renames = probe.renames.map((rename) => {
     const pattern = new RegExp(`\\b${rename.newName}\\b`);
-    const mentions = (text) =>
-      lines(undo(text, rename))
-        .filter((line) => pattern.test(line))
-        .sort();
+    const mentions = (text) => {
+      const counts = new Map();
+      for (const line of lines(undo(text, rename)))
+        if (pattern.test(line)) counts.set(line, (counts.get(line) ?? 0) + 1);
+      return counts;
+    };
+    const got = mentions(candidate),
+      want = mentions(expected);
+    // Extra copies of correct lines belong to a failed move, not to the rename.
     return {
       id: `rename-${rename.kind}-${rename.name}`,
       kind: rename.kind,
-      passed: JSON.stringify(mentions(candidate)) === JSON.stringify(mentions(expected)),
+      passed:
+        [...want].every(([line, count]) => (got.get(line) ?? 0) >= count) &&
+        [...got.keys()].every((line) => want.has(line)),
     };
   });
   const tally = (checks) => ({
