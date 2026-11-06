@@ -16,6 +16,9 @@ const help = `Experimental paired-module extraction
   chunk-smoke NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls
   chunk-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls
   chunk-rescore FLAT_CASE SAVED_RUN NEW_OUTPUT
+  assembly-verify FLAT_CASE NEW_RUN
+  assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls
+  assembly-probe FLAT_CASE NEW_RUN [--deliveries N] [--regions FILE[,FILE]] (--scripted | --config PRIVATE_JSON --allow-model-calls)
 
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
@@ -46,6 +49,13 @@ result correction. Score counts structural unit differences from the trusted
 start; see docs/module-extraction.md. chunk-verify is the scripted reference and
 must report Score 100 from clean committed source. chunk-smoke spends one small
 model delivery. chunk-rescore recomputes a saved run without participants.
+Assembly commands run the two-phase observation: twenty fresh agents move units
+into regions of main.cpp, new agents move each region into its file, then the
+common corrections run once and one structural unit score is computed.
+assembly-verify is the scripted reference and must report Score 100 from clean
+committed source. assembly-probe runs the first assembly deliveries of the queue
+and/or the extraction of chosen regions, compares the result with the scripted
+outcome of the same assignments and reports no observation score.
 Use fresh ignored output directories and the shared renderer lock on a capable worker.
 See docs/multi-agent.md for shared renderer prerequisites.
 `;
@@ -107,6 +117,61 @@ async function chunkCommand(values, positionals) {
   }
 }
 
+async function assemblyCommand(values, positionals) {
+  const [command, ...paths] = positionals;
+  assert.ok(["assembly-verify", "assembly-run", "assembly-probe"].includes(command), help);
+  assert.equal(paths.length, 2, help);
+  for (const option of ["modules", "generation", "agents", "task", "from-run", "source-receipt"])
+    assert.equal(values[option], undefined, help);
+  const probe = command === "assembly-probe";
+  if (!probe)
+    assert.ok(!values.deliveries && !values.regions && !values.scripted, help);
+  const modelCommand = command === "assembly-run" || (probe && !values.scripted);
+  if (modelCommand) {
+    assert.equal(
+      values["allow-model-calls"],
+      true,
+      "Model calls require explicit --allow-model-calls",
+    );
+    assert.equal(typeof values.config, "string", help);
+  } else assert.ok(!values.config && !values["allow-model-calls"], help);
+  assert.equal(typeof values.proof === "string", command === "assembly-run", help);
+  const assembly =
+    await import("../src/suites/explicit-edit-multi-agent/extraction/assembly-run.mjs");
+  const config = modelCommand ? JSON.parse(await readFile(values.config, "utf8")) : null;
+  const signal = controller.signal;
+  if (command === "assembly-verify") {
+    const summary = await assembly.verifyAssemblyCase(paths[0], paths[1], { signal });
+    console.log(JSON.stringify(summary));
+    if (summary.status !== "pass") process.exitCode = 1;
+    return;
+  }
+  const report = probe
+    ? await assembly.probeAssembly(paths[0], paths[1], config, {
+        deliveries: values.deliveries === undefined ? 0 : Number(values.deliveries),
+        regions: values.regions ? values.regions.split(",") : [],
+        scripted: values.scripted === true,
+        signal,
+      })
+    : await assembly.runAssemblyModel(paths[0], paths[1], config, {
+        proofPath: values.proof,
+        signal,
+      });
+  const final = report.stages.at(-1);
+  console.log(
+    JSON.stringify({
+      status: report.status,
+      kind: report.kind,
+      totalUnits: report.totalUnits,
+      deliveries: report.deliveries.length,
+      timedOut: report.deliveries.filter((row) => row.status === "timed-out").length,
+      remainingMarkers: report.remainingMarkers,
+      differences: final.structure.differenceIds.length,
+      score: report.score?.score ?? null,
+    }),
+  );
+}
+
 const controller = new AbortController();
 const stop = (signal) => {
   process.exitCode = signal === "SIGINT" ? 130 : 143;
@@ -132,10 +197,14 @@ try {
       "from-run": { type: "string" },
       "source-receipt": { type: "string" },
       "allow-model-calls": { type: "boolean" },
+      deliveries: { type: "string" },
+      regions: { type: "string" },
+      scripted: { type: "boolean" },
     },
   });
   if (values.help) console.log(help);
   else if (positionals[0]?.startsWith("chunk-")) await chunkCommand(values, positionals);
+  else if (positionals[0]?.startsWith("assembly-")) await assemblyCommand(values, positionals);
   else {
     const [command, input, output] = positionals;
     assert.equal(positionals.length, 3, help);

@@ -79,7 +79,7 @@ export async function chunkRunIdentity(manifest, general) {
   };
 }
 
-function physicalUnits(diagnostics) {
+export function physicalUnits(diagnostics) {
   return diagnostics.map(({ file, pathBytes, type }) => ({
     file: file ?? `(path bytes ${pathBytes})`,
     scope: [],
@@ -89,7 +89,7 @@ function physicalUnits(diagnostics) {
   }));
 }
 
-function integrationPrompt(stage, state, pixels) {
+export function integrationPrompt(stage, state, pixels) {
   const details = (state.compiler ?? [])
     .slice(0, 30)
     .map(

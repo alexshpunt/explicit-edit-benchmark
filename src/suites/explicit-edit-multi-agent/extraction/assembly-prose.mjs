@@ -9,13 +9,18 @@ export function publicSignature(signature) {
     .trim();
 }
 
+const code = (text) => {
+  assert.ok(!text.includes("`"), "Unsupported inline code");
+  return "`" + text + "`";
+};
+
 export function describeNamed({ scope, kind, signature }) {
   const where = scope ? `in namespace ${scope}` : "in the global namespace";
-  return `the ${kind.replaceAll("-", " ")} ${signature} ${where}`;
+  return `the ${kind.replaceAll("-", " ")} ${code(signature)} ${where}`;
 }
 
 const SHARED =
-  "Several agents are editing main.cpp at the same time. It contains one region for each future project file, delimited by a #pragma region line naming the file and the next #pragma endregion line.";
+  "Several agents are editing main.cpp at the same time. It contains one region for each future project file, delimited by a `#pragma region` line naming the file and the next `#pragma endregion` line.";
 
 function blockProse(item) {
   const lines = item.text.split("\n").map((line) => line.trim());
@@ -30,8 +35,8 @@ function blockProse(item) {
     .join(" and ");
   const bounds =
     nonEmpty.length === 1
-      ? `It consists of the single line ${nonEmpty[0]}`
-      : `Its first line is ${nonEmpty[0]} and its last line is ${nonEmpty.at(-1)}`;
+      ? `It consists of the single line ${code(nonEmpty[0])}`
+      : `Its first line is ${code(nonEmpty[0])} and its last line is ${code(nonEmpty.at(-1))}`;
   return [
     `the block of consecutive lines that, in the original main.cpp, ${position || "stands alone"}. ${bounds}. The complete block is:`,
     "```cpp",
@@ -45,11 +50,11 @@ export function assemblyDeliveryProse(region, items) {
   assert.ok(Array.isArray(items) && items.length > 0);
   const entries = items.map((item, index) => {
     assert.equal(item.taskId, region.taskId);
-    const marker = item.marker.trim();
+    const marker = code(item.marker.trim());
     if (item.kind === "block") return `${index + 1}. Placeholder ${marker}: ${blockProse(item)}`;
     const copies =
       item.copies > 1
-        ? ` main.cpp contains ${item.copies} identical copies of it; move one of them.`
+        ? ` main.cpp contains ${item.copies} copies of it that differ at most in spacing; move one of them.`
         : "";
     return `${index + 1}. Placeholder ${marker}: ${describeNamed(item.description)}.${copies}`;
   });
@@ -67,11 +72,11 @@ export function extractionProse(region) {
     SHARED,
     `Move the region for ${region.file} out of main.cpp into a new file ${region.file}. ${
       region.headerLines.length
-        ? `Begin the new file with these lines, in this order:\n${region.headerLines.join("\n")}\nFollow them with`
+        ? `Begin the new file with these lines, in this order:\n\`\`\`cpp\n${region.headerLines.join("\n")}\n\`\`\`\nFollow them with`
         : "The new file consists of"
-    } the region's contents exactly as they are, without its #pragma region and #pragma endregion lines.`,
+    } the region's contents exactly as they are, without its \`#pragma region\` and \`#pragma endregion\` lines.`,
     replacement
-      ? `In main.cpp, replace the whole region, including those two lines, with the line ${replacement}`
+      ? `In main.cpp, replace the whole region, including those two lines, with the line ${code(replacement)}.`
       : "In main.cpp, remove the whole region, including those two lines.",
     "Leave the other regions and all other code unchanged.",
   ].join("\n\n");

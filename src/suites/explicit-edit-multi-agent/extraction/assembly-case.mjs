@@ -6,7 +6,12 @@ import { loadFlatCase } from "./flat-case.mjs";
 import { scaffoldFlatPlan } from "./flat-scaffold.mjs";
 import { flatVendorContract } from "./flat-vendor-contract.mjs";
 import { symbolSpecifications } from "./symbol-spec.mjs";
-import { assemblyDeliveryProse, extractionProse, publicSignature } from "./assembly-prose.mjs";
+import {
+  assemblyDeliveryProse,
+  describeNamed,
+  extractionProse,
+  publicSignature,
+} from "./assembly-prose.mjs";
 
 export const ASSEMBLY_CASE_VERSION = "renderer-assembly-case-v1";
 export const ASSEMBLY_ASSIGNMENT_BYTES = 2048;
@@ -23,6 +28,8 @@ const NAMED_KINDS = new Set([
 ]);
 
 const whitespace = (text) => !text.trim();
+/** Copies that differ only in spacing are interchangeable for every agent and the score. */
+const layout = (text) => text.replace(/\s+/g, " ").trim();
 
 /** Describe one source unit publicly, or return null when it has no single name. */
 async function describeUnit(text, kind, scope) {
@@ -188,8 +195,8 @@ export async function prepareAssemblyPlan(plan) {
       if (item.kind === "named") {
         const copies = byKey.get(describeKey(item.description));
         assert.ok(
-          copies.every((text) => text === item.text.trim()),
-          "A unit description matches different source text",
+          copies.every((text) => layout(text) === layout(item.text)),
+          `A unit description matches different source text: ${describeNamed(item.description)}`,
         );
         item.copies = copies.length;
       } else {
@@ -288,6 +295,53 @@ export async function prepareAssemblyPlan(plan) {
       final: treeIdentity(final),
     },
     markers: new Set(items.map((item) => item.marker)),
+    regionStart: lineStart,
+  };
+}
+
+const REGION_END = "#pragma endregion\n";
+
+/** The scripted reference participant: it applies exactly its assignment to the
+ * current text using private offsets and never corrects anything else. One writer
+ * belongs to one run because it remembers which original units it has removed.
+ */
+export function scriptedAssemblyWriter(setup) {
+  const removed = [];
+  return {
+    removed: () => removed.length,
+    assemble(main, items) {
+      for (const item of items) {
+        const close = main.lastIndexOf(REGION_END);
+        assert.ok(close >= 0 && main[close + REGION_END.length] === "\n", "Region block changed");
+        const shift = removed
+          .filter((other) => other.end <= item.start)
+          .reduce((sum, other) => sum + other.end - other.start, 0);
+        const at = close + REGION_END.length + 1 + item.start - setup.regionStart - shift;
+        assert.equal(main.slice(at, at + item.text.length), item.text, "Source unit moved");
+        main = main.slice(0, at) + main.slice(at + item.text.length);
+        removed.push(item);
+        const marker = main.indexOf(item.marker);
+        assert.ok(marker >= 0 && marker === main.lastIndexOf(item.marker), "Marker changed");
+        main = main.slice(0, marker) + item.text + main.slice(marker + item.marker.length);
+      }
+      return main;
+    },
+    extract(tree, extraction) {
+      const region = setup.regions.find((candidate) => candidate.file === extraction.file);
+      assert.ok(region && !Object.hasOwn(tree, region.file), "Region already extracted");
+      const main = tree["main.cpp"];
+      const open = `#pragma region ${region.file}\n`;
+      const start = main.indexOf(open);
+      assert.ok(start >= 0 && start === main.lastIndexOf(open), "Region opening changed");
+      const end = main.indexOf(REGION_END, start);
+      assert.ok(end > start, "Region end is missing");
+      const body = main.slice(start + open.length, end);
+      return {
+        ...tree,
+        "main.cpp": main.slice(0, start) + region.replacement + main.slice(end + REGION_END.length),
+        [region.file]: region.headerLines.map((line) => line + "\n").join("") + body,
+      };
+    },
   };
 }
 
