@@ -51,7 +51,7 @@ import {
  */
 export const CANONICAL_UNIT_RUN_VERSION = "renderer-canonical-run-v3";
 export const CANONICAL_UNIT_RUN_POLICY = Object.freeze({
-  version: "renderer-canonical-policy-v3",
+  version: "renderer-canonical-policy-v4",
   candidate: CANONICAL_CANDIDATE_POLICY,
   candidateBuild: "captured-complete-physical-inventory",
   units: LINE_DIFFERENCE_POLICY,

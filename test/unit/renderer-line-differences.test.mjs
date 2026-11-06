@@ -96,6 +96,32 @@ test("corrections describe each hunk in prose with its surrounding lines", () =>
   );
 });
 
+test("a resolved line refunds a quarter and a new line costs one", () => {
+  const prepared = prepareLineDifferences(start, reference);
+  const integration = {
+    buildFirstPassed: true,
+    preRecoveryBuildPassed: true,
+    firstImageMatched: true,
+    resultRecoveryAttempted: false,
+    finalBuildPassed: true,
+    finalImageMatched: true,
+  };
+  const initial = compareLineDifferences(prepared, start);
+  const resolved = structuralUnitScore({
+    initial,
+    final: compareLineDifferences(prepared, reference),
+    ...integration,
+  });
+  assert.equal(resolved.structural.rawBalance, 10 - 10 + 0.25 * 10);
+  assert.equal(resolved.score, 25);
+  const damaged = structuralUnitScore({
+    initial: compareLineDifferences(prepared, reference),
+    final: compareLineDifferences(prepared, { ...reference, "x.py": "pass\n" }),
+    ...integration,
+  });
+  assert.equal(damaged.structural.rawBalance, 10 - 2);
+});
+
 test("a round without reference changes is rejected during preparation", () => {
   assert.throws(() => prepareLineDifferences(start, start), {
     code: "LINE_DIFFERENCES_EMPTY_REFERENCE",

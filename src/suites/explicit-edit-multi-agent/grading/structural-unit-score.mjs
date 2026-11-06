@@ -14,10 +14,15 @@ export const STRUCTURAL_UNIT_SCORE_POLICY = Object.freeze({
   integration: CANONICAL_SCORE_POLICY.integration,
 });
 
-/** The same balance over line differences: one missing or extra line has weight 1. */
+/** The balance over line differences: one missing or extra line has weight 1. As in
+ * the main suite (0.75 first exact + 0.25 final exact), a resolved original
+ * difference refunds a quarter; a new one costs as much as an original one.
+ * Version 1 refunded half.
+ */
 export const LINE_DIFFERENCE_SCORE_POLICY = Object.freeze({
   ...STRUCTURAL_UNIT_SCORE_POLICY,
-  version: "renderer-line-difference-score-v1",
+  version: "renderer-line-difference-score-v2",
+  resolvedInitialCredit: 0.25,
   units: LINE_DIFFERENCE_POLICY.version,
   structural: "initial-and-final-line-differences",
 });
@@ -48,6 +53,7 @@ export function structuralUnitScore({ initial, final, ...integration }) {
     totalFiles: initial.totalUnits,
     initialDifferences: initial.differenceIds,
     finalDifferences: final.differenceIds,
+    resolvedCredit: policy.resolvedInitialCredit,
   });
   const { totalFiles: _files, ...structural } = score.structural;
   return {

@@ -65,7 +65,7 @@ about 12 kB; one hunk is never split.
 Differences are measured only at the original and final captures:
 
 ```text
-balance = N - D0 + 0.5 * resolved - 1 * introduced
+balance = N - D0 + 0.25 * resolved - 1 * introduced
 structural score = clamp(balance / N, 0, 1)
 round Score = structural score * build factor * image factor
 run Score = 100 * sum(round Scores) / planned rounds
@@ -75,7 +75,10 @@ run Score = 100 * sum(round Scores) / planned rounds
 line difference. `resolved` counts original
 disagreements absent from the final capture, and `introduced` counts final
 disagreements absent from the original capture. A disagreement present in both
-is charged once. Build and image factors are 1 without a correction, 0.75 after
+is charged once. As in the main suite, where quality is 0.75 × first exact +
+0.25 × final exact, a resolved original difference refunds a quarter of its cost;
+a difference introduced later costs as much as an original one. Line difference
+score version 1 refunded half, as chunk runs still do. Build and image factors are 1 without a correction, 0.75 after
 the allowed correction and 0.5 when the stage still fails. When the final build
 fails, the image factor is 0.5.
 

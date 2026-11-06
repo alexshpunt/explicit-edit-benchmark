@@ -342,7 +342,7 @@ for (const scenario of [
       assert.deepEqual(structural.resolved, structural.initialDifferences);
       const factors = fourWaves ? 0.75 * 0.75 : 1;
       const expectedScore =
-        (100 * (total - structural.initialDifferences.length / 2) * factors) / total;
+        (100 * (total - (structural.initialDifferences.length * 3) / 4) * factors) / total;
       assert.ok(Math.abs(firstRound.score.score - expectedScore) < 1e-9);
       if (missedFirst) assert.equal(structural.initialDifferences.length, total);
       if (timeoutFirst) {

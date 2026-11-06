@@ -45,7 +45,7 @@ export const ASSEMBLY_AGENTS = 20;
 /** Long enough that slower models are not cut off, short enough to bound a run. */
 export const ASSEMBLY_DELIVERY_DEADLINE_MS = 300_000;
 export const ASSEMBLY_RUN_POLICY = Object.freeze({
-  version: "renderer-assembly-policy-v3",
+  version: "renderer-assembly-policy-v4",
   case: ASSEMBLY_CASE_VERSION,
   phases: Object.freeze(["assembly", "extraction"]),
   agents: ASSEMBLY_AGENTS,

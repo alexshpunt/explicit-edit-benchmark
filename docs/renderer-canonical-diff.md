@@ -301,7 +301,7 @@ verification after the correction wave.
 ## Score
 
 Version 3 rounds use the line difference Score: original and final captures,
-`N - D0`, half credit per resolved original difference, one point per new
+`N - D0`, a quarter credit per resolved original difference, one point per new
 difference, an unchanged difference charged once, and build and image factors.
 See [Line difference score](structural-unit-score.md).
 

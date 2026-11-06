@@ -62,14 +62,14 @@ test("an exact endpoint uses only the original wave and earns the full score", a
   assert.equal(result.score.score, 100);
 });
 
-test("the structural correction receives the comparison and resolved units earn half", async () => {
+test("the structural correction receives the comparison and resolved lines earn a quarter", async () => {
   const f = fixture({ candidates: [tree(0), tree(1)] });
   const result = await runCanonicalRound(f.options);
   assert.deepEqual(waves(f), ["original", "structural-correction"]);
   const correction = f.events.find(({ stage }) => stage === "structural-correction");
   assert.equal(correction.comparison.differenceIds.length, 2);
-  assert.equal(result.score.structural.rawBalance, 1);
-  assert.equal(result.score.score, 50);
+  assert.equal(result.score.structural.rawBalance, 0.5);
+  assert.equal(result.score.score, 25);
 });
 
 test("a failed build gets one build correction and the corrected factor", async () => {

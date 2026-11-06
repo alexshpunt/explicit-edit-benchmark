@@ -34,7 +34,11 @@ export function finalSnapshotScore({
   resultRecoveryAttempted,
   finalBuildPassed,
   finalImageMatched,
+  resolvedCredit = FINAL_SNAPSHOT_SCORE_POLICY.resolvedInitialCredit,
 }) {
+  // Exact arithmetic in fractions of one difference: 2 parts for 0.5, 4 for 0.25.
+  const parts = 1 / resolvedCredit;
+  assert.ok(Number.isSafeInteger(parts) && parts >= 1, "Unsupported resolved credit");
   assert.ok(
     Number.isSafeInteger(totalFiles) && totalFiles > 0 && totalFiles <= Number.MAX_SAFE_INTEGER / 2,
   );
@@ -58,10 +62,10 @@ export function finalSnapshotScore({
   const resolved = initial.filter((id) => !after.has(id));
   const unresolved = initial.filter((id) => after.has(id));
   const introduced = final.filter((id) => !before.has(id));
-  const ticks = 2 * (totalFiles - initial.length - introduced.length) + resolved.length;
+  const ticks = parts * (totalFiles - initial.length - introduced.length) + resolved.length;
   assert.ok(Number.isSafeInteger(ticks));
-  const rawBalance = ticks / 2;
-  const structuralNormalized = Math.max(0, Math.min(1, ticks / (2 * totalFiles)));
+  const rawBalance = ticks / parts;
+  const structuralNormalized = Math.max(0, Math.min(1, ticks / (parts * totalFiles)));
   const build = {
     firstPassed: buildFirstPassed,
     correctionUsed: !buildFirstPassed && (preRecoveryBuildPassed || resultRecoveryAttempted),
