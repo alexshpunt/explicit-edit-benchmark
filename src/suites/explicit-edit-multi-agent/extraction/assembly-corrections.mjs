@@ -181,16 +181,24 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
     const before = lines[occurrence.index - 1];
     return `around line ${occurrence.lines[0].line}${before ? `, after the line ${code(before.text)}` : ", at the beginning of the file"}`;
   };
-  const place = (item) => {
+  const span = (item) => {
     const lines = layout.files.get(item.file);
-    const first = lines.findIndex((line) => line.item === item);
-    const last = lines.findLastIndex((line) => line.item === item);
+    return {
+      lines,
+      first: lines.findIndex((line) => line.item === item),
+      last: lines.findLastIndex((line) => line.item === item),
+    };
+  };
+  /** Where units belong: between their reference neighbours, units or other lines. */
+  const place = (first, last = first) => {
+    const { lines, first: start } = span(first);
+    const { last: end } = span(last);
     const neighbour = (line) =>
       line.item
         ? describeUnit(line.item, layout.unitLines.get(line.item.id))
         : `the line ${code(line.text)}`;
-    const after = lines[first - 1],
-      before = lines[last + 1];
+    const after = lines[start - 1],
+      before = lines[end + 1];
     return [
       after ? `after ${neighbour(after)}` : "at the beginning of the file",
       before ? `before ${neighbour(before)}` : "at the end of the file",
@@ -214,24 +222,53 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
   );
   const items = new Map(setup.items.map((item) => [item.id, item]));
   const restores = [];
+  /** Units adjacent in the reference and in their current place move as one run. */
+  const runs = [];
   for (const { item, ids, hunks: touched } of ordered) {
     const lines = layout.unitLines.get(item.id);
     const name = describeUnit(item, lines);
     const occurrences = index.find(lines);
     const source = occurrences.find(free);
     if (source) {
-      const from =
-        source.file === item.file ? `elsewhere in ${item.file}` : `in ${source.file}`;
-      add(reference(source.file) ? item.file : source.file, {
-        differenceIds: [...ids, ...claim(source)],
-        prose: `${sentence(name)} belongs in ${item.file} ${place(item)}. It is currently ${from}, ${where(source)}. Move it there unchanged and remove it from its current place.`,
-      });
+      const differenceIds = [...ids, ...claim(source)];
+      const run = runs.at(-1);
+      const previous = run?.units.at(-1);
+      if (
+        previous &&
+        previous.item.file === item.file &&
+        previous.source.file === source.file &&
+        previous.source.index + previous.source.lines.length === source.index &&
+        span(previous.item).lines[span(previous.item).last + 1]?.item === item
+      ) {
+        run.units.push({ item, source, name });
+        run.differenceIds.push(...differenceIds);
+      } else runs.push({ units: [{ item, source, name }], differenceIds });
     } else if (occurrences.length) {
       add(item.file, {
         differenceIds: ids,
         prose: `${sentence(name)} is missing from ${item.file}; it belongs ${place(item)}. An identical copy exists in ${occurrences[0].file}, ${where(occurrences[0])}, and stays where it is. Add another copy of it at the required place.`,
       });
     } else restores.push({ item, ids, touched, name, lines });
+  }
+  for (const { units, differenceIds } of runs) {
+    const [{ item, source, name }] = units;
+    const from = source.file === item.file ? `elsewhere in ${item.file}` : `in ${source.file}`;
+    const target = reference(source.file) ? item.file : source.file;
+    if (units.length === 1) {
+      add(target, {
+        differenceIds,
+        prose: `${sentence(name)} belongs in ${item.file} ${place(item)}. It is currently ${from}, ${where(source)}. Move it there unchanged and remove it from its current place.`,
+      });
+      continue;
+    }
+    const last = units.at(-1);
+    add(target, {
+      differenceIds,
+      prose: [
+        `These ${units.length} consecutive units belong in ${item.file}, in this order, ${place(item, last.item)}. They are currently together and in the same order ${from}, from ${where(source)}, to around line ${last.source.lines.at(-1).line}. Move them there unchanged and remove them from their current place:`,
+        ...units.map(({ name: unit }) => `- ${unit}`),
+      ].join("\n"),
+    });
   }
   // Remaining exact copies of units in lines to remove are duplicates. An extra
   // file is deleted as a whole, so its copies need no separate removal.

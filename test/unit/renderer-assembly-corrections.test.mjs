@@ -97,6 +97,20 @@ test("an extra file gives its units back before it is deleted, a missing file is
   assert.ok(!created.includes("return 42;"));
 });
 
+test("units that moved together are described as one run", () => {
+  const [{ prompt }, ...rest] = corrections({
+    "main.cpp": MAIN,
+    "a.h": `#pragma once\n#include <cmath>\n${C}\n`,
+    "b.cpp": `#include "a.h"\n${A}\n${B}\n${D}\n`,
+  });
+  assert.equal(rest.length, 0);
+  assert.match(
+    prompt,
+    /1\. These 2 consecutive units belong in a\.h, in this order, after the line `#include <cmath>` and before the block of 2 lines[^\n]*\. They are currently together and in the same order in b\.cpp, from around line 2, after the line `#include "a\.h"`, to around line 9\.[^\n]*\n- the function `float twice\(float x\)`[^\n]*\n- the struct `struct Pair`/,
+  );
+  assert.equal(prompt.match(/^\d+\. /gm).length, 1);
+});
+
 test("a scripted reference result needs no correction", () => {
   assert.deepEqual(corrections(setup.trees.final), []);
 });
