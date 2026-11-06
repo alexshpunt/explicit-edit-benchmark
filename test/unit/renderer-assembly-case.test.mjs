@@ -156,10 +156,7 @@ test("marker cleanup removes only complete issued marker lines and counts them",
     setup.markers,
   );
   assert.equal(remaining, 1);
-  assert.equal(
-    tree["main.cpp"],
-    `int x;\n${marker} trailing\n// __EXPLICIT_EDIT_SLOT_9_9__\n`,
-  );
+  assert.equal(tree["main.cpp"], `int x;\n${marker} trailing\n// __EXPLICIT_EDIT_SLOT_9_9__\n`);
   assert.ok(Buffer.isBuffer(tree["a.h"]));
 });
 
