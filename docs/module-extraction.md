@@ -96,12 +96,33 @@ function's closing line, and a `// };` comment before the closing `};` of a
 struct, class, union or enum. Traps between units stay in `main.cpp`: comment
 lines with braces, a commented-out copy of the following function, struct or
 enum, unused initializers and raw strings ending in `};`, unused macros with
-braces, and an overload of the preceding free header function that takes an extra
-unused tag type, so no existing call can select it. Unnamed blocks get no
-commented-out copy, because they are identified by their text. The level, the
-trap version and the number of insertions are part of the case identity, and the
-scripted reference proves that the trapped assembled unity build and the final
-files build and render the expected images.
+braces, and an overload of the preceding free header function that takes an
+extra unused tag type, so no existing call can select it. Only header functions
+get this copy, because it stays in `main.cpp`, which does not see what a `.cpp`
+file defines. Unnamed blocks get no commented-out copy, because they are
+identified by their text. The level, the trap version and the number of
+insertions are part of the case identity, and the scripted reference proves that
+the trapped assembled unity build and the final files build and render the
+expected images.
+
+`--renames PERCENT` (0 to 100, default 0) adds a rename phase between assembly
+and extraction. The case asks clangd for every function, type and field of the
+assembled `main.cpp` outside function bodies and the standard library, except
+`main`. A spelling qualifies when renaming its symbol edits every occurrence of
+that identifier in code, outside comments and literals, so "rename X to Y
+everywhere" has exactly one correct result. The given share of the qualifying
+spellings, rounded up and most used first, is renamed; 5 renames 41 symbols with
+9,477 uses in this case, mostly types. New names come from the generator's naming
+vocabulary and appear nowhere in the source, including comments. Each delivery
+asks one agent to rename one identifier in the code of `main.cpp` and to keep
+comments and literals unchanged; it names no position, so it stays valid after an
+imperfect assembly. The final reference carries the new names; the assembled
+reference does not. Before corrections, the controller counts old names still
+used in the code of each file. Each count becomes one instruction at the top of
+that file's correction, and the other problems are described as if the renames
+were complete, so a missed rename does not turn into one line hunk per use. The
+share, the number of qualifying spellings and the number of renames are part of
+the case identity.
 
 Corrections always start a new agent for every assignment. The lifecycle is part
 of the run policy and the report, and usage is recorded once per agent session;
