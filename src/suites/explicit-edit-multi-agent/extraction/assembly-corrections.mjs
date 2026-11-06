@@ -12,6 +12,7 @@ import { describeNamed } from "./assembly-prose.mjs";
 export const ASSEMBLY_CORRECTION_POLICY = Object.freeze({
   version: "renderer-assembly-corrections-v2",
   units: "named-units-and-blocks-described-by-problem-and-place",
+  neighbours: "copy-number-when-repeated-and-current-line-when-in-place",
   text: "only-when-no-exact-copy-exists-anywhere",
   otherLines: "changed-hunks-with-surrounding-lines",
   renames: "old-names-left-in-code-counted-per-file-before-other-problems",
