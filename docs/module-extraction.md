@@ -55,7 +55,9 @@ one queue that interleaves regions: the first delivery of every region, then
 every second delivery, and so on. A free slot takes the next delivery. Every
 delivery in every phase and correction starts a new agent with an empty context;
 the general instructions precede its assignment, startup does not count toward
-the 120-second limit, and the agent is closed when its delivery ends. The
+the 300-second limit, and the agent is closed when its delivery ends. The limit
+bounds a run without cutting off slower models; policy version 1 used 120
+seconds. The
 controller never repairs source, regions or placeholders and never rewrites an
 assignment. Placeholders still present after extraction are removed before the
 first capture and counted in the report.

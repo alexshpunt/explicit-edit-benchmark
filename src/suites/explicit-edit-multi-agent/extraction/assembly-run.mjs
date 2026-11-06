@@ -21,7 +21,6 @@ import {
   captureCandidate,
   releaseCandidateWorkspace,
 } from "../execution/candidate-evidence.mjs";
-import { CHUNK_DELIVERY_DEADLINE_MS } from "../execution/chunk-delivery-deadline.mjs";
 import { chunkModelDrivers } from "../execution/chunk-model-drivers.mjs";
 import { runCorrectionSchedule } from "../execution/correction-schedule.mjs";
 import { FRESH_AGENT_QUEUE_POLICY, runFreshAgentQueue } from "../execution/fresh-agent-queue.mjs";
@@ -43,8 +42,10 @@ import { captureExtractionState } from "./run.mjs";
 
 export const ASSEMBLY_RUN_VERSION = "renderer-assembly-run-v1";
 export const ASSEMBLY_AGENTS = 20;
+/** Long enough that slower models are not cut off, short enough to bound a run. */
+export const ASSEMBLY_DELIVERY_DEADLINE_MS = 300_000;
 export const ASSEMBLY_RUN_POLICY = Object.freeze({
-  version: "renderer-assembly-policy-v1",
+  version: "renderer-assembly-policy-v2",
   case: ASSEMBLY_CASE_VERSION,
   phases: Object.freeze(["assembly", "extraction"]),
   agents: ASSEMBLY_AGENTS,
@@ -52,7 +53,7 @@ export const ASSEMBLY_RUN_POLICY = Object.freeze({
   assemblyOrder: "regions-interleaved-round-robin",
   assignment: Object.freeze({ bytes: ASSEMBLY_ASSIGNMENT_BYTES, units: ASSEMBLY_ASSIGNMENT_UNITS }),
   delivery: Object.freeze({
-    deadlineSeconds: CHUNK_DELIVERY_DEADLINE_MS / 1000,
+    deadlineSeconds: ASSEMBLY_DELIVERY_DEADLINE_MS / 1000,
     onTimeout: "close-and-continue",
     generalInstructions: "before-every-assignment",
   }),
@@ -533,7 +534,11 @@ function modelPools(output, config, general) {
         cleanup: drivers.cleanup,
         createDriver: (_item, session, context) => drivers.createDriver(phase, session, context),
         execute: (driver, prompt, { signal, session }) =>
-          drivers.execute(driver, prompt, { signal, session }),
+          drivers.execute(driver, prompt, {
+            signal,
+            session,
+            timeoutMs: ASSEMBLY_DELIVERY_DEADLINE_MS,
+          }),
       };
     },
   };

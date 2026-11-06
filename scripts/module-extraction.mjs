@@ -49,8 +49,9 @@ result correction. Score counts structural unit differences from the trusted
 start; see docs/module-extraction.md. chunk-verify is the scripted reference and
 must report Score 100 from clean committed source. chunk-smoke spends one small
 model delivery. chunk-rescore recomputes a saved run without participants.
-Assembly commands run the two-phase observation: twenty fresh agents move units
-into regions of main.cpp, new agents move each region into its file, then the
+Assembly commands run the two-phase observation: twenty fresh agents, each with a
+300-second limit, move units into regions of main.cpp, new agents move each
+region into its file, then the
 common corrections run once and one structural unit score is computed.
 assembly-verify is the scripted reference and must report Score 100 from clean
 committed source. assembly-probe runs the first assembly deliveries of the queue

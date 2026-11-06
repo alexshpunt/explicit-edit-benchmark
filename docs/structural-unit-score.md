@@ -68,7 +68,7 @@ Each round allows four editing waves:
 3. One build correction, only when the build fails.
 4. One result correction, when the build still fails or the rendered images differ.
 
-Every delivery has a 120-second limit. A participant that exceeds it is shut
+Every delivery has a 120-second limit, 300 seconds in two-phase assembly. A participant that exceeds it is shut
 down and its partial edits remain; its assignment is not retried. Restoring then
 restores the trusted round endpoint before the next round.
 

@@ -46,13 +46,13 @@ export function chunkModelDrivers(output, workspace, config, generalPrompt) {
       states.set(state, driver);
       return driver;
     },
-    async execute(driver, assignment, { signal, session, retire }) {
+    async execute(driver, assignment, { signal, session, retire, timeoutMs }) {
       await admitProviderDelivery(recovery, { signal });
       retries.set(session, 0);
       const prompt =
         (started.has(session) || !generalPrompt ? "" : generalPrompt + "\n\n") + assignment;
       started.add(session);
-      return executeChunkDelivery(driver, prompt, { signal, retire });
+      return executeChunkDelivery(driver, prompt, { signal, retire, timeoutMs });
     },
     /** Private provider credentials never remain in retained participant state. */
     async cleanup() {
