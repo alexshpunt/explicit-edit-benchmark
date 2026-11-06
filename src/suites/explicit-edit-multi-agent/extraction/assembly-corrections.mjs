@@ -345,11 +345,15 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
       added = [],
       rest = [];
     hunk.remove.forEach((line, at) => {
-      if (!covered.has(ids[at])) (remove.push(line), rest.push(ids[at]));
+      if (covered.has(ids[at])) return;
+      remove.push(line);
+      rest.push(ids[at]);
     });
     hunk.add.forEach((line, at) => {
       const id = ids[hunk.remove.length + at];
-      if (!covered.has(id)) (added.push(line), rest.push(id));
+      if (covered.has(id)) return;
+      added.push(line);
+      rest.push(id);
     });
     if (!rest.length) continue;
     if (!reference(hunk.file)) {
