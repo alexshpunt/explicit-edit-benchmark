@@ -26,22 +26,27 @@ const items = [
   { id: "a-3", file: "a.h", kind: "block", text: C, marker: slot(1, 3) },
   named("b-1", "b.cpp", "function", "int answer()", D, slot(2, 1)),
 ];
+const regions = [
+  {
+    file: "a.h",
+    headerLines: ["#pragma once"],
+    body: `#include <cmath>\n${slot(1, 1)}\n${slot(1, 2)}\n${slot(1, 3)}\n`,
+    items: items.slice(0, 3),
+  },
+  { file: "b.cpp", headerLines: ['#include "a.h"'], body: `${slot(2, 1)}\n`, items: [items[3]] },
+];
+// As in preparation: a unit's text ends without a line break and replaces its placeholder.
+for (const item of items) item.text = item.text.trimEnd();
+const fill = (region) =>
+  region.headerLines.map((line) => line + "\n").join("") +
+  region.items.reduce((body, item) => body.replace(item.marker, item.text), region.body);
 const setup = {
   items,
-  regions: [
-    {
-      file: "a.h",
-      headerLines: ["#pragma once"],
-      body: `#include <cmath>\n${slot(1, 1)}\n\n${slot(1, 2)}\n\n${slot(1, 3)}\n`,
-      items: items.slice(0, 3),
-    },
-    { file: "b.cpp", headerLines: ['#include "a.h"'], body: `${slot(2, 1)}\n`, items: [items[3]] },
-  ],
+  regions,
   trees: {
     final: {
       "main.cpp": MAIN,
-      "a.h": `#pragma once\n#include <cmath>\n${A}\n${B}\n${C}\n`,
-      "b.cpp": `#include "a.h"\n${D}\n`,
+      ...Object.fromEntries(regions.map((region) => [region.file, fill(region)])),
     },
   },
 };
@@ -64,7 +69,11 @@ test("units are named by problem and place; only lost text is quoted", () => {
   assert.match(header, /The struct `struct Pair` in the global namespace belongs in a\.h after/);
   assert.match(header, /It is currently in b\.cpp, around line 2, after the line `#include "a\.h"`/);
   assert.match(header, /An extra copy of the block of 2 lines from `using Real = float;`/);
-  assert.match(header, /no longer exists anywhere in the project/);
+  assert.match(
+    header,
+    /no longer exists anywhere in the project\. It belongs after the line `#include <cmath>` and before the struct `struct Pair` in the global namespace\. Its changed version is around line 4 of a\.h, from the line ` {2}return x \+ x;` to the line ` {2}return x \+ x;`; replace those lines/,
+  );
+  assert.equal(header.match(/^\d+\. /gm).length, 3, "The changed version has no separate item");
   assert.ok(header.includes("  return x * 2.0f;"), "Lost text is given in full");
   for (const line of [...bodyLines(B), "constexpr int kCount = 3;\n"])
     assert.ok(!header.includes(line.trim() + "\n"), `Existing unit text was quoted: ${line}`);
@@ -83,8 +92,8 @@ test("an extra file gives its units back before it is deleted, a missing file is
   assert.match(byFile["a.hpp"], /2\. After moving these units, delete the file a\.hpp\./);
   const created = byFile["b.cpp"];
   assert.match(created, /1\. The file b\.cpp does not exist yet; create it first\./);
-  assert.match(created, /The function `int answer\(\)` in the global namespace belongs in b\.cpp after the line `#include "a\.h"` and at the end of the file\. It is currently in main\.cpp/);
-  assert.match(created, /Add these lines:\n```\n#include "a\.h"\n```/);
+  assert.match(created, /2\. At the beginning of the file:\nAdd these lines:\n```\n#include "a\.h"\n```/);
+  assert.match(created, /3\. The function `int answer\(\)` in the global namespace belongs in b\.cpp after the line `#include "a\.h"` and at the end of the file\. It is currently in main\.cpp/);
   assert.ok(!created.includes("return 42;"));
 });
 

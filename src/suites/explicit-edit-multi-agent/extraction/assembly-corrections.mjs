@@ -145,10 +145,12 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
   // Units with a missing line where they belong, and the candidate lines to remove.
   const needs = new Map();
   const removed = new Map();
+  const lineIds = new Map();
   for (const hunk of hunks) {
     const ids = hunk.differenceIds;
     hunk.remove.forEach((line, at) => {
       if (line.kind !== "line") return;
+      lineIds.set(line, ids[at]);
       if (!removed.has(hunk.file)) removed.set(hunk.file, new Map());
       removed.get(hunk.file).set(line.line, ids[at]);
     });
@@ -156,8 +158,9 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
       if (line.kind !== "line") return;
       const owner = layout.byLine.get(hunk.file)?.get(line.line)?.item;
       if (!owner) return;
-      if (!needs.has(owner.id)) needs.set(owner.id, { item: owner, ids: [] });
+      if (!needs.has(owner.id)) needs.set(owner.id, { item: owner, ids: [], hunks: new Set() });
       needs.get(owner.id).ids.push(ids[hunk.remove.length + at]);
+      needs.get(owner.id).hunks.add(hunk);
     });
   }
   const extra = (occurrence) =>
@@ -210,7 +213,8 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
       layout.firstAt.get(left.item.id) - layout.firstAt.get(right.item.id),
   );
   const items = new Map(setup.items.map((item) => [item.id, item]));
-  for (const { item, ids } of ordered) {
+  const restores = [];
+  for (const { item, ids, hunks: touched } of ordered) {
     const lines = layout.unitLines.get(item.id);
     const name = describeUnit(item, lines);
     const occurrences = index.find(lines);
@@ -227,12 +231,7 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
         differenceIds: ids,
         prose: `${sentence(name)} is missing from ${item.file}; it belongs ${place(item)}. An identical copy exists in ${occurrences[0].file}, ${where(occurrences[0])}, and stays where it is. Add another copy of it at the required place.`,
       });
-    } else {
-      add(item.file, {
-        differenceIds: ids,
-        prose: `${sentence(name)} is missing from ${item.file} or no longer matches its original text, and that exact text no longer exists anywhere in the project. It belongs ${place(item)}. Put exactly these lines there, replacing any changed version of it:\n${block(lines)}`,
-      });
-    }
+    } else restores.push({ item, ids, touched, name, lines });
   }
   // Remaining exact copies of units in lines to remove are duplicates. An extra
   // file is deleted as a whole, so its copies need no separate removal.
@@ -252,6 +251,21 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
         break;
       }
     }
+  }
+
+  // Lost text is quoted. Unclaimed lines of the same hunks are its changed version.
+  for (const { item, ids, touched, name, lines } of restores) {
+    const changed = [...touched]
+      .flatMap((hunk) => hunk.remove)
+      .filter(({ kind, line }) => kind === "line" && !claimed.has(`${item.file}:${line}`));
+    for (const { line } of changed) claimed.add(`${item.file}:${line}`);
+    const current = changed.length
+      ? ` Its changed version is around line ${changed[0].line} of ${item.file}, from the line ${code(changed[0].text)} to the line ${code(changed.at(-1).text)}; replace those lines with exactly these lines:`
+      : " Put exactly these lines there:";
+    add(item.file, {
+      differenceIds: [...ids, ...changed.map((line) => lineIds.get(line))],
+      prose: `${sentence(name)} is missing from ${item.file} or no longer matches its original text, and that exact text no longer exists anywhere in the project. It belongs ${place(item)}.${current}\n${block(lines)}`,
+    });
   }
 
   // Lines outside units and stray lines, kept in their hunks with their surroundings.
@@ -288,9 +302,11 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
         first: true,
       });
     }
+    // In a new file, its lines outside units come before the units placed after them.
     add(hunk.file, {
       differenceIds: rest,
       prose: hunkProse({ ...hunk, remove, add: added }, 0).replace(/^0\. /, ""),
+      first: created.has(hunk.file),
     });
   }
 

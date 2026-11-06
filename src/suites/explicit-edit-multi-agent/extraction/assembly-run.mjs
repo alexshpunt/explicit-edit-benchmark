@@ -32,10 +32,6 @@ import {
 } from "../execution/fresh-agent-queue.mjs";
 import { restoringSourceIdentity } from "../execution/restoring-identity.mjs";
 import {
-  LINE_DIFFERENCE_CORRECTION_POLICY,
-  lineDifferenceCorrections,
-} from "../execution/line-difference-corrections.mjs";
-import {
   ASSEMBLY_ASSIGNMENT_BYTES,
   ASSEMBLY_ASSIGNMENT_UNITS,
   ASSEMBLY_CASE_VERSION,
@@ -43,6 +39,7 @@ import {
   prepareAssemblyCase,
   scriptedAssemblyWriter,
 } from "./assembly-case.mjs";
+import { ASSEMBLY_CORRECTION_POLICY, assemblyCorrections } from "./assembly-corrections.mjs";
 import { integrationPrompt, loadGeneralPrompt, physicalUnits } from "./chunk-run.mjs";
 import { captureExtractionState } from "./run.mjs";
 
@@ -51,7 +48,7 @@ export const ASSEMBLY_AGENTS = 20;
 /** Long enough that slower models are not cut off, short enough to bound a run. */
 export const ASSEMBLY_DELIVERY_DEADLINE_MS = 300_000;
 export const ASSEMBLY_AGENT_LIFECYCLES = AGENT_LIFECYCLES;
-const ASSEMBLY_POLICY_VERSION = "renderer-assembly-policy-v5";
+const ASSEMBLY_POLICY_VERSION = "renderer-assembly-policy-v6";
 
 /** The lifecycle of assembly and extraction agents is part of the run policy, so
  * scores from per-delivery and persistent runs are never compared as one kind.
@@ -83,7 +80,7 @@ export function assemblyRunPolicy(lifecycle = "per-delivery") {
     controller: "never-repairs-or-rewrites-assignments",
     schedule: "original-structural-build-result",
     units: LINE_DIFFERENCE_POLICY,
-    corrections: LINE_DIFFERENCE_CORRECTION_POLICY,
+    corrections: ASSEMBLY_CORRECTION_POLICY,
     score: LINE_DIFFERENCE_SCORE_POLICY,
   });
 }
@@ -304,7 +301,10 @@ async function runAssemblyObservation({
       structure = compareLineDifferences(prepared, state.completeTree, {
         extraUnits: physicalUnits(state.physicalDiagnostics),
       });
-      assignments = lineDifferenceCorrections(prepared, structure);
+      // Probes compare with a partial reference and issue no corrections.
+      assignments = corrections
+        ? assemblyCorrections(setup, prepared, structure, state.completeTree)
+        : [];
     }
     await assertCandidateUnchanged(workspace, state.candidate, { signal: abort });
     let integration,
