@@ -22,12 +22,17 @@ export async function runFreshAgentQueue(
   assert.ok(Number.isSafeInteger(maxAgents) && maxAgents > 0);
   for (const callback of [createDriver, execute, onClosed])
     assert.equal(typeof callback, "function");
+  /** @type {any[]} */
   const results = Array.from({ length: items.length }, () => null);
+  const state = { failure: /** @type {Error | null} */ (null) };
+  const fail = (error) => {
+    state.failure ??=
+      error instanceof Error ? error : new Error("Fresh agent delivery failed", { cause: error });
+  };
   let next = 0,
     session = 0,
     live = 0,
-    maxLive = 0,
-    failure = null;
+    maxLive = 0;
   async function close(driver) {
     if (!driver || driver.closed === true) return;
     const stop = driver.terminate ?? driver.close;
@@ -36,7 +41,8 @@ export async function runFreshAgentQueue(
     assert.equal(driver.closed, true, "Agent shutdown was not confirmed");
   }
   async function slot() {
-    while (!failure && next < items.length && !signal?.aborted) {
+    for (;;) {
+      if (state.failure || next >= items.length || signal?.aborted) return;
       const index = next++,
         id = ++session,
         item = items[index];
@@ -54,13 +60,13 @@ export async function runFreshAgentQueue(
       } catch (error) {
         result.status = "error";
         result.error = { name: error?.name, message: error?.message };
-        failure ??= error;
+        fail(error);
       } finally {
         try {
           await close(driver);
           await onClosed(driver, item, result);
         } catch (error) {
-          failure ??= error;
+          fail(error);
         }
         result.ended = new Date().toISOString();
         live--;
@@ -68,7 +74,7 @@ export async function runFreshAgentQueue(
     }
   }
   await Promise.all(Array.from({ length: Math.min(maxAgents, items.length) }, slot));
-  if (failure) throw failure;
+  if (state.failure) throw state.failure;
   signal?.throwIfAborted();
   return { results, maxLive };
 }

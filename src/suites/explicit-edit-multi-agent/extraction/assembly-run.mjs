@@ -143,8 +143,8 @@ async function runAssemblyObservation({
     captures: /** @type {any[]} */ ([]),
     stages: /** @type {any[]} */ ([]),
     attempts: /** @type {any[]} */ ([]),
-    remainingMarkers: null,
-    score: null,
+    remainingMarkers: /** @type {number | null} */ (null),
+    score: /** @type {any} */ (null),
     passed: false,
   };
   let saving = Promise.resolve();
@@ -171,7 +171,10 @@ async function runAssemblyObservation({
     report.phases.push(phase);
     await save();
     const rows = new Map();
+    /** @type {any} */
     let failure;
+    /** @type {any[]} */
+    let completed = [];
     try {
       const { results, maxLive } = await runFreshAgentQueue(entries, {
         maxAgents: ASSEMBLY_AGENTS,
@@ -217,20 +220,20 @@ async function runAssemblyObservation({
       phase.status = "complete";
       phase.maxLive = maxLive;
       phase.timedOut = results.filter((result) => result?.status === "timed-out").length;
-      return results;
+      completed = results;
     } catch (error) {
       failure = error;
       phase.status = "interrupted";
-      throw error;
-    } finally {
-      try {
-        await pool.cleanup();
-      } catch (error) {
-        if (!failure) throw error;
-        report.cleanupFailure = { name: error.name, message: error.message };
-      }
-      await save();
     }
+    try {
+      await pool.cleanup();
+    } catch (error) {
+      if (failure) report.cleanupFailure = { name: error.name, message: error.message };
+      else failure = error;
+    }
+    await save();
+    if (failure) throw failure;
+    return completed;
   }
 
   let currentCandidate = null;

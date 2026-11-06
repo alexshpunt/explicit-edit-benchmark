@@ -7,7 +7,7 @@ import { decodeSourceBytes, encodeSourceBytes } from "../cpp/source-bytes.mjs";
 
 const require = createRequire(import.meta.url);
 const version = "renderer-canonical-snapshot-v4";
-export const STRUCTURAL_UNIT_VERSION = "renderer-structural-units-v1";
+export const STRUCTURAL_UNIT_VERSION = "renderer-structural-units-v2";
 const cppExtension = /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|ipp|inl|tcc|inc)$/i;
 const literals = new Set([
   "string_literal",
@@ -809,8 +809,18 @@ function namespaceScope(node, macros) {
   return { path: [inlineText(head, macros)], body };
 }
 
+/** `#pragma region NAME` and `#pragma endregion` directives, or null. */
+function regionDirective(node) {
+  if (node.type !== "preproc_call") return null;
+  const match = /^#\s*pragma\s+(region|endregion)\b(.*)$/s.exec(node.text.trim());
+  return match ? { kind: match[1], name: match[2].trim() } : null;
+}
+
 function collectUnits(container, scope, units, macros) {
-  const items = scopeItems(container);
+  return collectItems(scopeItems(container), scope, units, macros);
+}
+
+function collectItems(items, scope, units, macros) {
   let access = null,
     count = 0;
   const nested = (body, path) => {
@@ -823,6 +833,27 @@ function collectUnits(container, scope, units, macros) {
       access = `${inlineText([node], macros)}:`;
       if (items[index + 1]?.type === ":") index++;
       continue;
+    }
+    // A matched region is a scope named after it; unmatched region lines stay units.
+    const opening = regionDirective(node);
+    if (opening?.kind === "region") {
+      let depth = 1,
+        end = index + 1;
+      for (; end < items.length; end++) {
+        const other = regionDirective(items[end]);
+        if (other?.kind === "region") depth++;
+        else if (other?.kind === "endregion" && --depth === 0) break;
+      }
+      if (end < items.length) {
+        count += collectItems(
+          items.slice(index + 1, end),
+          [...here, `region ${opening.name}`],
+          units,
+          macros,
+        );
+        index = end;
+        continue;
+      }
     }
     const type = classScope(node, macros);
     if (type) {
@@ -865,7 +896,8 @@ function collectUnits(container, scope, units, macros) {
 
 /** Smallest structural units of one C++ source: functions, class members,
  * namespace-level declarations and preprocessor directives. Namespaces, classes,
- * linkage blocks and conditional branches are scopes. Placement of sortable
+ * linkage blocks, conditional branches and matched `#pragma region` blocks are
+ * scopes. Placement of sortable
  * definitions within one scope is not part of a unit.
  */
 export async function canonicalCppUnits(source, { macros } = {}) {
