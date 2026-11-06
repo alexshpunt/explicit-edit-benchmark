@@ -126,6 +126,35 @@ test("units that moved together are described as one run", () => {
   assert.equal(prompt.match(/^\d+\. /gm).length, 1);
 });
 
+test("a neighbour with several copies in the file is named with its copy number", () => {
+  const declaration = "inline float half(float x);";
+  const units = [
+    named("c-1", "c.h", "function declaration", "inline float half(float x)", declaration, slot(3, 1)),
+    named("c-2", "c.h", "struct", "struct Pair", B.trimEnd(), slot(3, 2)),
+    named("c-3", "c.h", "function declaration", "inline float half(float x)", declaration, slot(3, 3)),
+    named("c-4", "c.h", "function", "float twice(float x)", A.trimEnd(), slot(3, 4)),
+  ];
+  const region = {
+    file: "c.h",
+    headerLines: ["#pragma once"],
+    body: units.map(({ marker }) => `${marker}\n`).join(""),
+    items: units,
+  };
+  const local = { items: units, regions: [region], trees: { final: { "main.cpp": MAIN, "c.h": fill(region) } } };
+  const reference = prepareLineDifferences({ "main.cpp": A + B + MAIN }, local.trees.final);
+  const candidate = { "main.cpp": `${MAIN}${A}`, "c.h": `#pragma once\n${declaration}\n${B}${declaration}\n` };
+  const [{ prompt }] = assemblyCorrections(
+    local,
+    reference,
+    compareLineDifferences(reference, candidate),
+    candidate,
+  );
+  assert.match(
+    prompt,
+    /belongs in c\.h after the function declaration `inline float half\(float x\)` in the global namespace \(copy 2 of the 2 in c\.h, counted from the top\) and at the end of the file\./,
+  );
+});
+
 test("a scripted reference result needs no correction", () => {
   assert.deepEqual(corrections(setup.trees.final), []);
 });

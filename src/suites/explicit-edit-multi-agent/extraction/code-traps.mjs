@@ -112,7 +112,13 @@ export function applyCodeTraps(plan, level = 0, { rates = RATES } = {}) {
       if (!lineStart) continue;
       if (chosen("betweenComment", id))
         insertions.push({ at: start, text: `// }; {\n` });
-      if (chosen("commentedCopy", id) && !/\\\n/.test(text) && !text.includes("*/"))
+      // Unnamed blocks are found by their text, so only named units get a commented copy.
+      if (
+        kind !== "other" &&
+        chosen("commentedCopy", id) &&
+        !/\\\n/.test(text) &&
+        !text.includes("*/")
+      )
         insertions.push({
           at: start,
           text: `/*\n${text}\n*/\n`,

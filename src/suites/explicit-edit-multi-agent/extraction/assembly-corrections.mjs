@@ -225,14 +225,25 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
       last: lines.findLastIndex((line) => line.item === item),
     };
   };
-  /** Where units belong: between their reference neighbours, units or other lines. */
+  /** Where units belong: between their reference neighbours, units or other lines.
+   * A neighbour that occurs more than once in the file is named with its copy number.
+   */
   const place = (first, last = first) => {
     const { lines, first: start } = span(first);
     const { last: end } = span(last);
-    const neighbour = (line) =>
-      line.item
-        ? describeUnit(line.item, layout.unitLines.get(line.item.id))
-        : `the line ${code(line.text)}`;
+    const describe = (item) => describeUnit(item, layout.unitLines.get(item.id));
+    const neighbour = (line) => {
+      const name = line.item ? describe(line.item) : `the line ${code(line.text)}`;
+      // Copies are units an agent cannot tell apart by this description.
+      const copies = line.item
+        ? [...new Set(lines.filter((other) => other.item).map((other) => other.item))].filter(
+            (item) => describe(item) === name,
+          )
+        : lines.filter((other) => !other.item && other.text === line.text);
+      return copies.length > 1
+        ? `${name} (copy ${copies.indexOf(line.item ?? line) + 1} of the ${copies.length} in ${first.file}, counted from the top)`
+        : name;
+    };
     const after = lines[start - 1],
       before = lines[end + 1];
     return [
