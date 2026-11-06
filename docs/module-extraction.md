@@ -6,6 +6,16 @@ retains the generated names, declaration order, function mixing and vendor code.
 A selected module must have an original header and implementation; required
 header-only and vendor dependencies receive separate whole-file assignments.
 
+## Chunk teams
+
+The `chunk-*` commands run a flat case with ten-agent teams over small fragment
+assignments: all files except `frond_math.h` first, then `frond_math.h`. Each
+delivery has a 120-second limit. Structural, build and result corrections follow
+the common schedule, and the round is scored by structural unit differences from
+the marker-free scaffold to the trusted endpoint. Commands, the scripted reference
+and the Score are described in [Structural unit score](structural-unit-score.md).
+The sections below describe the earlier whole-file and per-file protocols.
+
 ## Flat CPU diagnostic profile
 
 The separate `flat-prepare` profile derives an active CPU-only source from an

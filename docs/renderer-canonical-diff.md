@@ -4,6 +4,11 @@ This methodology is under implementation. It is separate from accepted-prefix an
 restoring atom-score observations. Historical evidence, proofs and scores retain
 their original interpretation.
 
+Run version `renderer-canonical-run-v2` scores structural unit differences with the
+same schedule, delivery limit and Score as chunk extraction; see
+[Structural unit score](structural-unit-score.md). Version 1 runs scored canonical
+text hunks; the hunk sections below describe that historical policy and its export.
+
 ## Local commands
 
 Use a new cache and output directory for each preparation or observation. The cache
@@ -24,14 +29,20 @@ replaced to accept modified inputs. This path runs no reference execution.
 
 ```sh
 node scripts/multi-agent.mjs prepare-canonical PREPARATION NEW_CACHE --proof RETAINED_PROOF --agents 15
-node scripts/multi-agent.mjs run-canonical PREPARATION NEW_OUTPUT --canonical NEW_CACHE --config PRIVATE_JSON --allow-model-calls --agents 15 --batch-size 10 --max-concurrent-agents 30
+node scripts/multi-agent.mjs verify-canonical PREPARATION NEW_REFERENCE --canonical NEW_CACHE --agents 15 --batch-size 10
+node scripts/multi-agent.mjs run-canonical PREPARATION NEW_OUTPUT --canonical NEW_CACHE --proof NEW_REFERENCE/summary.json --config PRIVATE_JSON --allow-model-calls --agents 15 --batch-size 10 --max-concurrent-agents 30
 node scripts/multi-agent.mjs export-canonical NEW_OUTPUT NEW_RESULT_JSON
 node scripts/multi-agent.mjs validate-canonical NEW_RESULT_JSON
 node scripts/multi-agent.mjs inspect-canonical NEW_OUTPUT
 ```
 
-The run command spends model credit and needs separate run authorization. There is
-no `verify-canonical` reference-execution command. `--agents` retains the workload's
+The run command spends model credit and needs separate run authorization. It
+requires a passing `verify-canonical` summary from the same commit. That
+model-free reference writes each round's trusted endpoint during the original
+wave and must reach Score 100 without corrections; it does not re-execute the
+workload's operations, whose feasibility the retained proof establishes.
+Export, validation and inspection accept version 1 reports only; a version 2 run
+keeps its private `report.json`. `--agents` retains the workload's
 original graph schedule; `--max-concurrent-agents` bounds the new process pool.
 The participant configuration uses the isolated native runtime fields documented
 in the Multi-Agent run guide. Omit its legacy `agentLifecycle` field or set it to
@@ -62,10 +73,10 @@ under its recorded schedule; it is not proof of arbitrary parallel schedules.
 
 The verifier creates the same deterministic canonical representation of the
 trusted round start, trusted round end and measured candidate. It compares the
-expected and actual changes from the same trusted start. The scoring unit is a
-hunk under one pinned diff algorithm and configuration, not an original atom or
-an inferred semantic edit. Different hunk sizes are an accepted property of this
-metric.
+expected and actual changes from the same trusted start. In version 2 the scoring
+unit is the smallest structural scope, such as a function, class member,
+declaration or directive. In version 1 it was a hunk under one pinned diff
+algorithm, whose size depended on neighbouring code.
 
 Full function and method bodies participate in comparison. There is no separate
 preservation veto that zeros a round for changes outside an assigned footprint.
@@ -121,7 +132,7 @@ file kinds need explicit, deterministic handling; unsupported content must never
 silently disappear from the snapshot. Parser and canonicalizer identity are part
 of preparation and result identity.
 
-## Hunk comparison
+## Hunk comparison (version 1)
 
 Both diffs use the same canonical round-start text. Pin the diff implementation,
 context size, file ordering, newline policy and hunk matching rules. Diff metadata
@@ -157,70 +168,17 @@ JSON target tables or serialized selector records in these instructions.
 
 ## Structural correction feedback
 
-The expected and actual changes are diffs from the same trusted round start.
-For each file with disagreements, compare those two complete diffs, including
-already matching hunks. Each resulting diff-of-diffs hunk is one correction
-assignment. The outer minus and plus lines represent actual and expected diff
-lines; the inner markers represent changes relative to the shared round start.
-The assignment names the project-relative file and gives the complete hunk. Its
-coordinates refer to the serialized diffs, not physical source line numbers.
-The agent locates and edits the source; the controller does not reconstruct a
-physical replacement, match definition owners, or apply a canonical patch.
-Scoring retains its original disagreement identities and hunk denominator.
+Version 2 correction assignments name each disagreeing structural unit in prose,
+one file per assignment, as described in
+[Structural unit score](structural-unit-score.md). The agent locates and edits the
+source; the controller does not apply a patch. Version 1 delivered diff-of-diffs
+hunks as JSON and optionally used an external Mergiraf correspondence helper; both
+were removed because agents must receive prose only.
 
 Assignments of at most 4096 UTF-8 bytes are sent inline; larger assignments are
 stored in full in a participant's read-only `/feedback/*.txt` file outside the
 candidate workspace. Earlier files remain available while the session is reused.
-Hunks are not truncated.
-
-### Experimental CST correction backend
-
-The private run configuration accepts `cppCorrectionCommand`, an argument array
-whose first element is an absolute executable path. The same option is available
-to `runCanonical` callers. It opts regular UTF-8 C++ source/header disagreements
-into an external Mergiraf 0.20.0 correspondence helper. The setting is not passed
-to participant processes. Without it, the diff-of-diffs backend remains in use.
-
-This requires a separately built instrumented helper, **not** the ordinary
-`mergiraf` merge CLI. The helper is not bundled or installed by this repository.
-Mergiraf's GPL-3.0-only license, internal matching API and runtime distribution
-need separate consideration before adopting or distributing that helper.
-
-For each supported file, the controller writes immutable copies of the common
-start, captured actual and trusted expected sources outside the candidate. It
-invokes the configured command without a shell, appending these four arguments:
-
-```text
-BASE.cpp ACTUAL.cpp EXPECTED.cpp NEW_OUTPUT_DIRECTORY
-```
-
-The helper must create `probe.ndjson` in that new directory using the
-`lpt944-mergiraf-pcs-probe-v1` protocol. Its header identifies Mergiraf `0.20.0`,
-roles `B`/`A`/`E`, `recoveryPolicy: opaque-cst-regions` and `mergeExecuted: false`.
-Records carry all three original sources; occurrence-specific native nodes and
-class leaders; ordered children, fields, leaf text and UTF-8 byte spans; direct
-matchings; ordered parent-child-successor triples; directed actual-to-expected
-triple additions/removals and value updates; retained parser diagnostics; and a
-complete summary with inventory/delta counts. A successful process exit alone is
-not sufficient. The controller independently checks source identity, node and
-matching uniqueness, spans, all ordered relations, and complete directed AST
-reconstruction. Parse recovery must retain diagnostics and opaque source regions.
-Timeout, cancellation, invalid output or failed reconstruction aborts preparation;
-there is no silent fallback after a supported file's helper fails.
-
-The controller aligns proven unchanged CST subtrees before comparing source gaps.
-Assignments contain the full changed source fragments, surrounding context and
-occurrence-specific locations for preserved code. Unchanged-subtree labels are
-instructions to preserve existing code, not text to insert. Gaps participating in
-the same subtree move belong to one assignment. The controller does not apply
-these changes to the candidate. Correction agents still edit the shared project;
-scoring, native-process closure and independent integration checks are unchanged.
-
-Absent files, physical entries, byte-path filenames, non-C++ files and invalid
-UTF-8 endpoints retain the existing diff-of-diffs backend. The private
-`structural-feedback/report.json` names each file's chosen backend. Native output,
-executable/input hashes, diagnostics, validated plans and complete assignments
-remain in that private evidence directory. Do not publish those files as results.
+Assignments are not truncated.
 
 ### Diagnostic start at a later round
 
@@ -261,24 +219,30 @@ Original and structural-correction agents avoid project-wide builds and lint run
 integration-correction agents may run the supplied validation command. Native IDE
 tools, instructions and diagnostic services remain enabled.
 
+Every delivery has a 120-second limit, the same as in chunk extraction. A
+participant that exceeds it is shut down and its partial edits remain. The
+packet is not retried; its dependents are released and later packets go to a
+fresh participant under the same process cap.
+
 After original work:
 
-1. Capture and canonicalize the shared candidate. Compare its actual diff with the
-   reference diff and retain the independent first-pass evidence.
-2. If disagreements exist, turn them into correction tasks, batch them and give
-   one structural correction pass to a new pool. The original executor is not
-   relevant. Close the pool and compare the complete candidate again.
+1. Capture the shared candidate and compare its structural units with the
+   expected round change. This first-pass evidence is retained.
+2. If disagreements exist, turn them into per-file correction assignments and
+   give one structural correction pass to a new pool. The original executor is
+   not relevant. Close the pool.
 3. Build the actual candidate. Discover translation units from its complete
    captured physical inventory, including malformed UTF-8 contents, byte-path
    filenames and source symlinks. Preserve inert FIFO/socket entry types in the
    private mirror without opening them. Unrepresentable unsafe types are verifier
    failures, not omitted files. A failed build permits one build-correction pass.
    Close that pool and build again.
-4. If the build permits rendering, compare the repeated scene outputs. A mismatch
-   permits one image-correction pass. Close that pool, rebuild and compare again.
+4. If the build still fails or the repeated scene outputs differ, one
+   result-correction pass follows. Close that pool.
+5. Capture, compare and measure the final candidate.
 
 There are at most four editing waves: original, structural correction, build
-correction and image correction. Successful stages do not trigger a correction.
+correction and result correction. Successful stages do not trigger a correction.
 Transient transport failures first use the harness's bounded native recovery.
 Controller-managed recovery requires Pi 1.4 or newer. An exhausted retryable
 failure holds the current delivery at the native pre-settlement boundary. The controller pauses new deliveries for
@@ -334,27 +298,16 @@ resulting pixel hashes against the two expected hashes. It exposes those hashes,
 not the reference pixels or source. The controller still performs independent
 verification after the correction wave.
 
-Every later code-changing pass also produces a canonical comparison. Newly
-introduced structural disagreements incur penalties without opening another
-structural correction budget. A later repair cannot retain credit by destroying
-previously correct structure. Repeated observation of an unchanged disagreement
-alone must not create repeated penalties.
-
 ## Score
 
-Let `N` be the number of reference hunks and `D0` the number of reference hunks
-that are missing or wrong, plus independent unexpected actual hunks. The raw
-initial balance is `N - D0`.
+Version 2 rounds use the structural unit Score: original and final captures,
+`N - D0`, half credit per resolved original disagreement, one point per new
+disagreement, an unchanged disagreement charged once, and build and image factors.
+See [Structural unit score](structural-unit-score.md).
 
-For the one structural correction pass, add `0.5` for each supplied disagreement
-resolved, subtract `1` for each supplied disagreement still unresolved, and
-subtract `1` for each newly introduced disagreement. Later integration repairs
-also subtract for newly introduced structural disagreements. Preserve the raw
-balance and its ledger; clamp only each reported normalized score to `[0, 1]`.
-For example, 10 expected hunks with 3 initial disagreements have a first balance
-of 7; fixing all 3 produces 8.5, or 85%, before integration factors.
-
-Build and image factors are independently:
+Version 1 rounds used reference hunks: `N` reference hunks, `D0` missing or wrong
+hunks plus independent unexpected hunks, `+0.5` per resolved and `-1` per new
+disagreement, with the same factors:
 
 | Outcome                                    | Factor |
 | ------------------------------------------ | -----: |
@@ -362,17 +315,11 @@ Build and image factors are independently:
 | Passes after the single allowed correction |   0.75 |
 | Still fails                                |    0.5 |
 
-If the final candidate does not build, its image factor is `0.5` because image
-matching cannot be established. A later change that breaks the build cannot keep
-an earlier successful build factor. Rendering infrastructure failure must not be
-reported as a measured pixel mismatch.
-
 ```text
 round Score = normalized structural balance * build factor * image factor
 run Score = 100 * sum(round Scores) / full planned round count
 ```
 
-Keep first-pass, structural-correction and final evidence separately. Unobserved
-rounds remain in the planned denominator. An interrupted run is not a completed
-model result. Duration, actual native concurrency, inference usage and correction
-counts remain separately reported observations.
+Unobserved rounds remain in the planned denominator. An interrupted run is not a
+completed model result. Duration, actual native concurrency, inference usage and
+correction counts remain separately reported observations.

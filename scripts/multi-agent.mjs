@@ -19,7 +19,8 @@ Separate from the existing 226-task benchmark and its Score.
   verify-restoring PREPARATION NEW_OUTPUT [--agents auto|N] [--batch-size N] [--reference-batch-size N] [--build-weight W] [--result-weight W]
   run-restoring PREPARATION NEW_OUTPUT --config PRIVATE_JSON --proof NEW_PROOF --allow-model-calls [--agents auto|N] [--batch-size N] [--build-weight W] [--result-weight W] [--agent-lifecycle persistent|per-delivery] [--max-concurrent-agents N]
   prepare-canonical PREPARATION NEW_CACHE --proof RETAINED_PROOF [--agents auto|N] [--trusted-endpoints PRIVATE_JSON]
-  run-canonical PREPARATION NEW_OUTPUT --canonical CACHE --config PRIVATE_JSON --allow-model-calls [--agents auto|N] [--batch-size N] [--max-concurrent-agents N] [--from-round N]
+  verify-canonical PREPARATION NEW_OUTPUT --canonical CACHE [--agents auto|N] [--batch-size N] [--max-concurrent-agents N]
+  run-canonical PREPARATION NEW_OUTPUT --canonical CACHE --proof REFERENCE/summary.json --config PRIVATE_JSON --allow-model-calls [--agents auto|N] [--batch-size N] [--max-concurrent-agents N] [--from-round N]
   export-canonical RUN_DIRECTORY NEW_RESULT_JSON
   validate-canonical RESULT_JSON
   inspect-canonical RUN_DIRECTORY
@@ -46,13 +47,14 @@ Both modes require native Baseline Pi 1.3.0 and have no delivery deadline.
 For 15 agents delivering 10 edits, reference verification may batch 100 edits:
   verify-restoring PREPARATION PROOF_OUTPUT --agents 15 --batch-size 10 --reference-batch-size 100
   run-restoring PREPARATION RUN_OUTPUT --agents 15 --batch-size 10 --config PRIVATE_JSON --proof PROOF_OUTPUT/verification.json --allow-model-calls
-Canonical commands use full-project fixed-hunk scoring and round-ready agent pools.
-prepare-canonical caches trusted endpoints from retained feasibility evidence; it
-never executes a new reference. run-canonical closes all namespaces before grading
-and permits one structural, one build and one image correction. Its default live
-native process cap is 30, separate from the original graph schedule's --agents.
-Canonical results remain separate from historical scores. inspect-canonical reads
-a terminal run without publishing it. See docs/renderer-canonical-diff.md.
+Canonical commands score structural unit differences with round-ready agent pools.
+prepare-canonical caches trusted endpoints from retained feasibility evidence.
+verify-canonical is a model-free scripted reference that must reach Score 100;
+run-canonical requires its summary from the same commit. run-canonical closes all
+namespaces before grading, limits each delivery to 120 seconds and permits one
+structural, one build and one result correction. Its default live native process
+cap is 30, separate from the original graph schedule's --agents. Export, validate
+and inspect accept earlier text-hunk runs only. See docs/structural-unit-score.md.
 export creates a safe local result. Nothing uploads or publishes automatically.
 See docs/multi-agent.md for prerequisites, private config and result interpretation.
 `;
