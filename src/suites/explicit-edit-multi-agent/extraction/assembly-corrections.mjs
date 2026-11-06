@@ -330,7 +330,7 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
       .filter(({ kind, line }) => kind === "line" && !claimed.has(`${item.file}:${line}`));
     for (const { line } of changed) claimed.add(`${item.file}:${line}`);
     const current = changed.length
-      ? ` Its changed version is around line ${changed[0].line} of ${item.file}, from the line ${code(changed[0].text)} to the line ${code(changed.at(-1).text)}; replace those lines with exactly these lines:`
+      ? ` Its changed version is around line ${changed[0].line} of ${item.file}, ${changed.length === 1 ? `the line ${code(changed[0].text)}; replace that line` : `from the line ${code(changed[0].text)} to the line ${code(changed.at(-1).text)}; replace those lines`} with exactly these lines:`
       : " Put exactly these lines there:";
     add(item.file, {
       differenceIds: [...ids, ...changed.map((line) => lineIds.get(line))],

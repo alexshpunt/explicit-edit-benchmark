@@ -39,6 +39,26 @@ followed by the common correction schedule and one line difference score.
 3. One structural correction, one build correction and one result correction.
    There is no correction between the phases.
 
+Structural corrections describe units the way assignments do: by kind,
+signature and namespace, never by their text. One assignment per file lists
+its problems:
+
+- a unit, or a run of consecutive units, that belongs at another place or in
+  another file: where it is now, where it belongs (between which units or
+  lines), and that it moves unchanged;
+- an extra copy of a unit, with where its required copy is;
+- a unit that is missing although an identical copy exists elsewhere, which
+  stays where it is.
+
+Only a unit whose exact text exists nowhere in the project, such as one that
+lost its closing `};`, is given in full, with the place of its changed version.
+Lines outside units, stray lines, extra files and non-text entries are described
+as they are, with their surrounding lines; an extra file holding units is
+deleted after they move out. A unit counts as in place when one of its copies
+is matched, at least in part, to its own reference lines; its remaining
+differences then stay line corrections. Policy version 6 introduced this
+wording; earlier assembly policies quoted every differing line.
+
 Assignment items never contain the text of a named unit. A function, function
 declaration, class, struct, union or enum is named by kind, signature with
 collapsed spacing, and namespace; the agent finds it and its boundaries. When
