@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { cppTokens } from "../cpp/cpp-tokens.mjs";
 
-export const CODE_TRAP_VERSION = "renderer-code-traps-v1";
+export const CODE_TRAP_VERSION = "renderer-code-traps-v2";
 export const CODE_TRAP_LEVELS = Object.freeze([0, 1, 2, 3]);
 
 /** Percent of eligible units per trap kind and level step. Inside traps move with
@@ -134,7 +134,8 @@ export function applyCodeTraps(plan, level = 0, { rates = RATES } = {}) {
         });
       if (chosen("macro", id))
         insertions.push({ at: start, text: `#define EXPLICIT_EDIT_TRAP_${++serial}(x) { x; }\n` });
-      const overload = kind === "function" && overloadable(text);
+      // The copy stays in main.cpp, which sees what a header sees but not what a .cpp file defines.
+      const overload = kind === "function" && task.kind === "header" && overloadable(text);
       if (overload && chosen("overload", id)) {
         const tag = `ExplicitEditTrapTag${++serial}`;
         const copy =

@@ -20,6 +20,7 @@ const plan = {
     {
       id: "a",
       file: "a.h",
+      kind: "header",
       preamble: "#pragma once\n",
       destination: `#pragma once\n${units[0]}\n\n${units[1]}\n\n${units[2]}\n`,
       replacement: '#include "a.h"\n',
@@ -28,6 +29,7 @@ const plan = {
     {
       id: "b",
       file: "b.cpp",
+      kind: "implementation",
       preamble: '#include "a.h"\n',
       destination: `#include "a.h"\n${units[3]}\n`,
       replacement: "",
@@ -96,10 +98,8 @@ test("traps inside units move with them; traps between units stay in the source"
     after,
     /struct ExplicitEditTrapTag\d+ \{\};\ninline float twice\(float x, ExplicitEditTrapTag\d+\) \{/,
   );
-  assert.match(
-    main.slice(trapped.tasks[1].fragments[0].end),
-    /int answer\(ExplicitEditTrapTag\d+\)/,
-  );
+  // A copy of a .cpp function would stay in main.cpp without what that file defines.
+  assert.doesNotMatch(main, /int answer\(ExplicitEditTrapTag\d+\)/);
   assert.deepEqual(trapped.traps.level, 1);
 });
 

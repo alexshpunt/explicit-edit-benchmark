@@ -96,7 +96,7 @@ function's closing line, and a `// };` comment before the closing `};` of a
 struct, class, union or enum. Traps between units stay in `main.cpp`: comment
 lines with braces, a commented-out copy of the following function, struct or
 enum, unused initializers and raw strings ending in `};`, unused macros with
-braces, and an overload of the preceding free function that takes an extra
+braces, and an overload of the preceding free header function that takes an extra
 unused tag type, so no existing call can select it. Unnamed blocks get no
 commented-out copy, because they are identified by their text. The level, the
 trap version and the number of insertions are part of the case identity, and the
