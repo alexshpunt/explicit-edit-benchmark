@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { prepareStructuralUnits } from "../../src/suites/explicit-edit-multi-agent/grading/structural-units.mjs";
+import { prepareLineDifferences } from "../../src/suites/explicit-edit-multi-agent/grading/line-differences.mjs";
 import { runCanonicalRound } from "../../src/suites/explicit-edit-multi-agent/execution/canonical-round.mjs";
 
 const tree = (value, extra = false) => ({
   "main.cpp": `int value = ${value};\n`,
   ...(extra ? { "extra.cpp": "int damage;\n" } : {}),
 });
-// One changed declaration: its old form disappears and its new form appears.
-const prepared = await prepareStructuralUnits(tree(0), tree(1));
+// One changed line: its old form disappears and its new form appears.
+const prepared = prepareLineDifferences(tree(0), tree(1));
 const pass = { buildPassed: true, resultMatched: true };
 const buildFailure = { buildPassed: false, resultMatched: false };
 const imageFailure = { buildPassed: true, resultMatched: false };
@@ -104,13 +104,14 @@ test("an image failure gets one result correction", async () => {
   assert.equal(result.score.images.factor, 0.75);
 });
 
-test("damage introduced by a later correction costs one per new unit difference", async () => {
+test("damage introduced by a later correction costs one per new line difference", async () => {
   const f = fixture({ candidates: [tree(1), tree(1), tree(1, true)] });
   let checks = 0;
   f.options.measure = async () => (checks++ === 0 ? imageFailure : pass);
   const result = await runCanonicalRound(f.options);
-  assert.deepEqual(result.score.structural.introduced.length, 1);
-  assert.equal(result.score.structural.rawBalance, 1);
+  // The extra file costs its presence and its one line.
+  assert.deepEqual(result.score.structural.introduced.length, 2);
+  assert.equal(result.score.structural.rawBalance, 0);
 });
 
 test("participant failures and cancellation propagate without grading", async () => {

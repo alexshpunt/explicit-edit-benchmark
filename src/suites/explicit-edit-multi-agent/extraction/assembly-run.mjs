@@ -8,12 +8,12 @@ import { writeTree } from "../generation/generator.mjs";
 import { measureExtractionCandidate } from "../grading/coherent-build.mjs";
 import { compilerDiagnostics } from "../grading/repair-diagnostics.mjs";
 import {
-  STRUCTURAL_UNIT_POLICY,
-  compareStructuralUnits,
-  prepareStructuralUnits,
-} from "../grading/structural-units.mjs";
+  LINE_DIFFERENCE_POLICY,
+  compareLineDifferences,
+  prepareLineDifferences,
+} from "../grading/line-differences.mjs";
 import {
-  STRUCTURAL_UNIT_SCORE_POLICY,
+  LINE_DIFFERENCE_SCORE_POLICY,
   structuralUnitScore,
 } from "../grading/structural-unit-score.mjs";
 import {
@@ -26,9 +26,9 @@ import { runCorrectionSchedule } from "../execution/correction-schedule.mjs";
 import { FRESH_AGENT_QUEUE_POLICY, runFreshAgentQueue } from "../execution/fresh-agent-queue.mjs";
 import { restoringSourceIdentity } from "../execution/restoring-identity.mjs";
 import {
-  STRUCTURAL_UNIT_CORRECTION_POLICY,
-  structuralUnitCorrections,
-} from "../execution/structural-unit-corrections.mjs";
+  LINE_DIFFERENCE_CORRECTION_POLICY,
+  lineDifferenceCorrections,
+} from "../execution/line-difference-corrections.mjs";
 import {
   ASSEMBLY_ASSIGNMENT_BYTES,
   ASSEMBLY_ASSIGNMENT_UNITS,
@@ -40,12 +40,12 @@ import {
 import { integrationPrompt, loadGeneralPrompt, physicalUnits } from "./chunk-run.mjs";
 import { captureExtractionState } from "./run.mjs";
 
-export const ASSEMBLY_RUN_VERSION = "renderer-assembly-run-v1";
+export const ASSEMBLY_RUN_VERSION = "renderer-assembly-run-v2";
 export const ASSEMBLY_AGENTS = 20;
 /** Long enough that slower models are not cut off, short enough to bound a run. */
 export const ASSEMBLY_DELIVERY_DEADLINE_MS = 300_000;
 export const ASSEMBLY_RUN_POLICY = Object.freeze({
-  version: "renderer-assembly-policy-v2",
+  version: "renderer-assembly-policy-v3",
   case: ASSEMBLY_CASE_VERSION,
   phases: Object.freeze(["assembly", "extraction"]),
   agents: ASSEMBLY_AGENTS,
@@ -59,9 +59,9 @@ export const ASSEMBLY_RUN_POLICY = Object.freeze({
   }),
   controller: "never-repairs-or-rewrites-assignments",
   schedule: "original-structural-build-result",
-  units: STRUCTURAL_UNIT_POLICY,
-  corrections: STRUCTURAL_UNIT_CORRECTION_POLICY,
-  score: STRUCTURAL_UNIT_SCORE_POLICY,
+  units: LINE_DIFFERENCE_POLICY,
+  corrections: LINE_DIFFERENCE_CORRECTION_POLICY,
+  score: LINE_DIFFERENCE_SCORE_POLICY,
 });
 
 const hash = (data) => createHash("sha256").update(data).digest("hex");
@@ -124,7 +124,7 @@ async function runAssemblyObservation({
   const workspace = path.join(output, "workspace");
   await mkdir(output, { mode: 0o700 });
   await writeTree(workspace, start);
-  const prepared = await prepareStructuralUnits(
+  const prepared = prepareLineDifferences(
     cleanupAssemblyMarkers(start, setup.markers).tree,
     reference,
   );
@@ -267,10 +267,10 @@ async function runAssemblyObservation({
     currentCandidate = state.candidate;
     let structure, assignments;
     if (assessStructure) {
-      structure = await compareStructuralUnits(prepared, state.completeTree, {
+      structure = compareLineDifferences(prepared, state.completeTree, {
         extraUnits: physicalUnits(state.physicalDiagnostics),
       });
-      assignments = structuralUnitCorrections(prepared, structure);
+      assignments = lineDifferenceCorrections(prepared, structure);
     }
     await assertCandidateUnchanged(workspace, state.candidate, { signal: abort });
     let integration,
@@ -325,7 +325,8 @@ async function runAssemblyObservation({
           report.stages = stages.map(
             ({ stage, structure, integration, directory, candidateIdentity, compiler }) => ({
               stage,
-              structure,
+              // Hunks repeat the differing lines; the differences keep them once.
+              structure: structure && { ...structure, hunks: structure.hunks.length },
               integration,
               directory,
               candidateIdentity,
@@ -367,7 +368,9 @@ async function runAssemblyObservation({
         index: 0,
         signal,
       });
-      report.stages = [{ stage: "probe", structure: state.structure }];
+      report.stages = [
+        { stage: "probe", structure: { ...state.structure, hunks: state.structure.hunks.length } },
+      ];
       report.passed = state.structure.differenceIds.length === 0;
     }
     report.status = "complete";

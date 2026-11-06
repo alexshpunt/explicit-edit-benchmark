@@ -1,4 +1,4 @@
-import { compareStructuralUnits } from "../grading/structural-units.mjs";
+import { compareLineDifferences } from "../grading/line-differences.mjs";
 import { structuralUnitScore } from "../grading/structural-unit-score.mjs";
 import { runCorrectionSchedule } from "./correction-schedule.mjs";
 
@@ -25,7 +25,7 @@ export async function runCanonicalRound({
       const candidate = await capture({ stage, index, signal });
       signal?.throwIfAborted();
       const structure = assessStructure
-        ? await compareStructuralUnits(prepared, candidate.units.tree, {
+        ? compareLineDifferences(prepared, candidate.units.tree, {
             extraUnits: candidate.units.extraUnits,
           })
         : null;

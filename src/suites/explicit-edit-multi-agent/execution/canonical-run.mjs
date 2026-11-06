@@ -8,9 +8,9 @@ import { writeTree } from "../generation/generator.mjs";
 import { encodeSourceBytes } from "../cpp/source-bytes.mjs";
 import { coherentTaskPrompt } from "../tasks/coherent-tasks.mjs";
 import { measureCoherentCandidate } from "../grading/coherent-build.mjs";
-import { STRUCTURAL_UNIT_POLICY, prepareStructuralUnits } from "../grading/structural-units.mjs";
+import { LINE_DIFFERENCE_POLICY, prepareLineDifferences } from "../grading/line-differences.mjs";
 import {
-  STRUCTURAL_UNIT_SCORE_POLICY,
+  LINE_DIFFERENCE_SCORE_POLICY,
   structuralUnitRunScore,
 } from "../grading/structural-unit-score.mjs";
 import {
@@ -41,21 +41,22 @@ import {
 import { restoreCanonicalSource } from "./canonical-restore.mjs";
 import { CHUNK_DELIVERY_DEADLINE_MS, executeChunkDelivery } from "./chunk-delivery-deadline.mjs";
 import {
-  STRUCTURAL_UNIT_CORRECTION_POLICY,
-  structuralUnitCorrections,
-} from "./structural-unit-corrections.mjs";
+  LINE_DIFFERENCE_CORRECTION_POLICY,
+  lineDifferenceCorrections,
+} from "./line-difference-corrections.mjs";
 
-/** Restoring runs scored by structural unit differences. Version 1 reports keep
- * their text-hunk policy and are exported by canonical-results.mjs only.
+/** Restoring runs scored by line differences. Version 2 reports used structural
+ * units; version 1 reports keep their text-hunk policy and are exported by
+ * canonical-results.mjs only.
  */
-export const CANONICAL_UNIT_RUN_VERSION = "renderer-canonical-run-v2";
+export const CANONICAL_UNIT_RUN_VERSION = "renderer-canonical-run-v3";
 export const CANONICAL_UNIT_RUN_POLICY = Object.freeze({
-  version: "renderer-canonical-policy-v2",
+  version: "renderer-canonical-policy-v3",
   candidate: CANONICAL_CANDIDATE_POLICY,
   candidateBuild: "captured-complete-physical-inventory",
-  units: STRUCTURAL_UNIT_POLICY,
-  corrections: STRUCTURAL_UNIT_CORRECTION_POLICY,
-  score: STRUCTURAL_UNIT_SCORE_POLICY,
+  units: LINE_DIFFERENCE_POLICY,
+  corrections: LINE_DIFFERENCE_CORRECTION_POLICY,
+  score: LINE_DIFFERENCE_SCORE_POLICY,
   pool: ROUND_POOL_POLICY,
   deadline: ROUND_POOL_DEADLINE_POLICY,
   delivery: Object.freeze({
@@ -237,7 +238,7 @@ export async function runCanonical(
   for (const round of loaded.schedule) {
     signal.throwIfAborted();
     const expectedTree = loaded.atomicIntervals.rounds.get(round.id).expectedTree;
-    preparedRounds.set(round.id, await prepareStructuralUnits(roundStart, expectedTree));
+    preparedRounds.set(round.id, prepareLineDifferences(roundStart, expectedTree));
     roundStart = expectedTree;
   }
   const plan = loaded.schedule.map(({ id }) => ({
@@ -385,7 +386,7 @@ export async function runCanonical(
                   prompt: coherentTaskPrompt("", node.operations),
                 }))
               : stage === "structural-correction"
-                ? structuralUnitCorrections(prepared, comparison).map(({ id, prompt }) => ({
+                ? lineDifferenceCorrections(prepared, comparison).map(({ id, prompt }) => ({
                     id,
                     kind: "unit-correction",
                     dependencies: [],

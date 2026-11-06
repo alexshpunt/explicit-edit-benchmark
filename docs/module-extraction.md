@@ -13,7 +13,8 @@ assignments: all files except `frond_math.h` first, then `frond_math.h`. Each
 delivery has a 120-second limit. Structural, build and result corrections follow
 the common schedule, and the round is scored by structural unit differences from
 the marker-free scaffold to the trusted endpoint. Commands, the scripted reference
-and the Score are described in [Structural unit score](structural-unit-score.md).
+and the Score are described in [Line difference score](structural-unit-score.md);
+chunk runs keep the earlier structural unit policy described there.
 Chunk runs are not repeated; the two-phase assembly below replaces them. Their
 reports keep their meaning. The sections after it describe the earlier
 whole-file and per-file protocols.
@@ -21,7 +22,7 @@ whole-file and per-file protocols.
 ## Two-phase assembly
 
 The `assembly-*` commands run a flat case in two phases on one `main.cpp`,
-followed by the common correction schedule and one structural unit score.
+followed by the common correction schedule and one line difference score.
 
 1. **Assembly.** The scaffold inserts one `#pragma region FILE` …
    `#pragma endregion` block per future project file, in unity-build order:
@@ -64,8 +65,9 @@ first capture and counted in the report.
 
 `N` runs from the scaffold without placeholders to the final reference: the
 assembled regions moved into their files, with `main.cpp` keeping one include
-line per header where the regions were. Structural units treat a matched region
-as a scope, so a unit moved inside `main.cpp` still counts. The scripted
+line per header where the regions were. Version 1 assembly runs counted
+structural units; version 2 counts line differences, so a lost brace costs only
+the lines that differ. The scripted
 reference also builds the assembled unity build, all files still in their
 regions; it and the final files must render the expected images.
 

@@ -47,7 +47,7 @@ Both modes require native Baseline Pi 1.3.0 and have no delivery deadline.
 For 15 agents delivering 10 edits, reference verification may batch 100 edits:
   verify-restoring PREPARATION PROOF_OUTPUT --agents 15 --batch-size 10 --reference-batch-size 100
   run-restoring PREPARATION RUN_OUTPUT --agents 15 --batch-size 10 --config PRIVATE_JSON --proof PROOF_OUTPUT/verification.json --allow-model-calls
-Canonical commands score structural unit differences with round-ready agent pools.
+Canonical commands score line differences with round-ready agent pools.
 prepare-canonical caches trusted endpoints from retained feasibility evidence.
 verify-canonical is a model-free scripted reference that must reach Score 100;
 run-canonical requires its summary from the same commit. run-canonical closes all

@@ -4,10 +4,10 @@ This methodology is under implementation. It is separate from accepted-prefix an
 restoring atom-score observations. Historical evidence, proofs and scores retain
 their original interpretation.
 
-Run version `renderer-canonical-run-v2` scores structural unit differences with the
-same schedule, delivery limit and Score as chunk extraction; see
-[Structural unit score](structural-unit-score.md). Version 1 runs scored canonical
-text hunks; the hunk sections below describe that historical policy and its export.
+Run version `renderer-canonical-run-v3` scores line differences against each
+round's trusted endpoint with the same schedule and Score as two-phase assembly;
+see [Line difference score](structural-unit-score.md). Version 2 runs counted
+structural units. Version 1 runs scored canonical text hunks; the hunk sections below describe that historical policy and its export.
 
 ## Local commands
 
@@ -168,9 +168,9 @@ JSON target tables or serialized selector records in these instructions.
 
 ## Structural correction feedback
 
-Version 2 correction assignments name each disagreeing structural unit in prose,
+Version 3 correction assignments describe each differing hunk of lines in prose,
 one file per assignment, as described in
-[Structural unit score](structural-unit-score.md). The agent locates and edits the
+[Line difference score](structural-unit-score.md). The agent locates and edits the
 source; the controller does not apply a patch. Version 1 delivered diff-of-diffs
 hunks as JSON and optionally used an external Mergiraf correspondence helper; both
 were removed because agents must receive prose only.
@@ -226,8 +226,8 @@ fresh participant under the same process cap.
 
 After original work:
 
-1. Capture the shared candidate and compare its structural units with the
-   expected round change. This first-pass evidence is retained.
+1. Capture the shared candidate and compare its lines with the trusted round
+   endpoint. This first-pass evidence is retained.
 2. If disagreements exist, turn them into per-file correction assignments and
    give one structural correction pass to a new pool. The original executor is
    not relevant. Close the pool.
@@ -300,10 +300,10 @@ verification after the correction wave.
 
 ## Score
 
-Version 2 rounds use the structural unit Score: original and final captures,
-`N - D0`, half credit per resolved original disagreement, one point per new
-disagreement, an unchanged disagreement charged once, and build and image factors.
-See [Structural unit score](structural-unit-score.md).
+Version 3 rounds use the line difference Score: original and final captures,
+`N - D0`, half credit per resolved original difference, one point per new
+difference, an unchanged difference charged once, and build and image factors.
+See [Line difference score](structural-unit-score.md).
 
 Version 1 rounds used reference hunks: `N` reference hunks, `D0` missing or wrong
 hunks plus independent unexpected hunks, `+0.5` per resolved and `-1` per new

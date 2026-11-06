@@ -1,63 +1,44 @@
-# Structural unit score
+# Line difference score
 
-Restoring (`run-canonical`, run version `renderer-canonical-run-v2`), chunk
-extraction (`chunk-run`) and two-phase assembly (`assembly-run`) measure a round
-the same way. Earlier policies keep their
-meaning: version 1 canonical runs use text hunks, and earlier extraction runs use
-per-file or per-fragment checks. Those reports are not rescored in place.
+Restoring (`run-canonical`, run version `renderer-canonical-run-v3`) and two-phase
+assembly (`assembly-run`, run version `renderer-assembly-run-v2`) measure a round
+by line differences against the trusted endpoint. Earlier policies keep their
+meaning and are not rescored in place: version 2 canonical runs, version 1
+assembly runs and chunk runs counted structural units (described at the end of
+this page), version 1 canonical runs used text hunks, and earlier extraction runs
+used per-file or per-fragment checks.
 
-## Units
+## Lines
 
-Both protocols parse C++ with the pinned tree-sitter grammar and canonicalizer
-(`canonicalCppUnits` in `grading/canonical-snapshot.mjs`). A unit is the smallest
-structural scope:
+Assignments ask for exact edits, so the measure is the text itself, not its
+syntax. Each file is compared as a sequence of lines after removing spaces at the
+end of each line and ignoring blank lines. Everything else counts, including
+indentation, comments and order. `grading/line-differences.mjs` diffs every file
+of the candidate against the endpoint with the Myers algorithm.
 
-- a function definition or declaration, never split;
-- a class, struct or union member: method, field, nested type or other member;
-- a namespace-level or global declaration;
-- a preprocessor directive.
+A difference is one line that is missing where the endpoint has it, or one extra
+line the endpoint does not have. Every difference has weight 1, so losing a large
+block costs more than losing a small one. A file's presence counts as one line,
+so a missing or extra file also costs its presence. A file that is not valid
+UTF-8 counts as one line describing its bytes, and a non-regular filesystem
+entry as one difference.
 
-Namespaces, classes, structs, unions, linkage blocks, access sections,
-conditional branches and matched `#pragma region` … `#pragma endregion` blocks
-are scopes, not units. A region line without its partner stays an ordinary
-directive unit. Unit version 2 added region scopes; sources without regions
-produce the same units as version 1. The scope path is part of a unit's
-identity, so moving a member to another class or file changes it. A unit's text
-is its canonical token rendering: comments, spacing and line breaks do not count.
+`N` is the line difference between the trusted round start and the endpoint.
+Moving a line costs two: its removal and its insertion. Because the diff is
+minimal, a block moved past fewer lines than it holds costs the lines it crossed
+instead.
 
-Functions and other sortable definitions form a multiset within their scope, so
-their placement there does not count. Order-sensitive units, such as fields,
-directives and variables, keep their order within the scope and are compared as
-a sequence. A scope without units counts as one empty-scope unit, so an empty
-file or class is still visible. Non-C++ text files are compared line by line.
-Files that are not valid UTF-8 and non-regular filesystem entries count as one
-unit each.
+| Candidate                                         |   Differences |
+| ------------------------------------------------- | ------------: |
+| A 10-line function moved exactly as required      |             0 |
+| The same move not done                            |            20 |
+| A copy inserted, original not removed             |            10 |
+| One line of the function changed after the move   |             2 |
+| A struct cut short, its last two lines left behind |             4 |
+| A helper script left in the workspace (5 lines)   |             6 |
 
-## Expected change and disagreements
-
-The expected change of a round is the multiset of units that disappear and
-appear between the trusted round start and the trusted endpoint. `N` is its
-size. Moving a function counts twice: its removal from the source scope and its
-appearance in the destination scope. A rename changes every unit that spells
-the old name.
-
-The actual change is computed the same way between the trusted start and the
-candidate. A disagreement is a unit in the multiset symmetric difference of the
-expected and actual changes. Every disagreement has weight 1, regardless of what
-task produced it or which agent made the edit.
-
-| Candidate                                  | Disagreements |
-| ------------------------------------------ | ------------: |
-| A function moved exactly as required       |             0 |
-| A required move not done                   |             2 |
-| A copy inserted, original not removed      |             1 |
-| A function moved but changed               |             2 |
-| An unrelated function deleted              |             1 |
-| An unrelated function changed              |             2 |
-| A stray `;` moved from one file to another |             2 |
-
-Comparison never refuses a candidate. Malformed C++, invalid UTF-8, missing and
-extra files are scored as units.
+A broken brace therefore costs the lines that actually differ; syntax errors do
+not spread to the rest of the file. Comparison never refuses a candidate.
 
 ## Schedule
 
@@ -72,15 +53,16 @@ Every delivery has a 120-second limit, 300 seconds in two-phase assembly. A part
 down and its partial edits remain; its assignment is not retried. Restoring then
 restores the trusted round endpoint before the next round.
 
-Structural correction assignments name each disagreeing unit in prose: the file,
-the scope, whether to add or remove one copy, and the unit text. For an
-order-sensitive unit, the assignment also names the unit that precedes it in the
-required result. Each assignment covers one file, split into parts of at most 20
-units or about 12 kB.
+Structural correction assignments describe each changed hunk in prose: up to
+three lines before it and the line after it in the current file, an approximate
+line number at the time of the check, and the lines to remove and to add, in code
+blocks. A missing file is created with its complete lines, and an extra file is
+deleted. Each assignment covers one file, split into parts of at most 20 hunks or
+about 12 kB; one hunk is never split.
 
 ## Score
 
-Structure is measured only at the original and final captures:
+Differences are measured only at the original and final captures:
 
 ```text
 balance = N - D0 + 0.5 * resolved - 1 * introduced
@@ -89,7 +71,8 @@ round Score = structural score * build factor * image factor
 run Score = 100 * sum(round Scores) / planned rounds
 ```
 
-`D0` is the number of original disagreements. `resolved` counts original
+`D0` is the number of original line differences; a disagreement below means one
+line difference. `resolved` counts original
 disagreements absent from the final capture, and `introduced` counts final
 disagreements absent from the original capture. A disagreement present in both
 is charged once. Build and image factors are 1 without a correction, 0.75 after
@@ -130,3 +113,15 @@ Every model session receives the same general instructions,
 `src/suites/explicit-edit-multi-agent/prompts/general.txt`, before its first
 assignment. The file is identical for all models. Assembly sessions hold one
 assignment each, so the instructions precede every assignment there.
+
+## Earlier structural unit policy
+
+Version 2 canonical runs, version 1 assembly runs and chunk runs parsed C++ with
+the pinned tree-sitter grammar (`canonicalCppUnits` in
+`grading/canonical-snapshot.mjs`) and counted units: functions, class members,
+declarations and directives inside namespace, class, conditional and region
+scopes. A disagreement was a unit in the symmetric difference of the expected and
+actual unit changes. The policy was replaced because one missing brace makes
+every later unit parse inside the broken scope: in one Sol 6.1 low assembly probe,
+a struct cut short produced about 4260 of 4578 disagreements. Chunk commands
+still use this policy.
