@@ -232,14 +232,20 @@ export function assemblyCorrections(
       last: lines.findLastIndex((line) => line.item === item),
     };
   };
+  // Where each kept reference line is in the candidate at the time of the check.
+  const current = new Map();
+  for (const [file, pairs] of aligned)
+    current.set(file, new Map([...pairs].map(([line, wanted]) => [wanted, line])));
   /** Where units belong: between their reference neighbours, units or other lines.
    * A neighbour that occurs more than once in the file is named with its copy number.
+   * A neighbour already in place also gets its adjacent line's current number, so a
+   * similar declaration, such as one with other parameter names, is not taken for it.
    */
   const place = (first, last = first) => {
     const { lines, first: start } = span(first);
     const { last: end } = span(last);
     const describe = (item) => describeUnit(item, layout.unitLines.get(item.id));
-    const neighbour = (line) => {
+    const neighbour = (line, side) => {
       const name = line.item ? describe(line.item) : `the line ${code(line.text)}`;
       // Copies are units an agent cannot tell apart by this description.
       const copies = line.item
@@ -247,15 +253,25 @@ export function assemblyCorrections(
             (item) => describe(item) === name,
           )
         : lines.filter((other) => !other.item && other.text === line.text);
-      return copies.length > 1
-        ? `${name} (copy ${copies.indexOf(line.item ?? line) + 1} of the ${copies.length} in ${first.file}, counted from the top)`
-        : name;
+      const notes = [];
+      if (copies.length > 1)
+        notes.push(
+          `copy ${copies.indexOf(line.item ?? line) + 1} of the ${copies.length} in ${first.file}, counted from the top`,
+        );
+      const at = current.get(first.file)?.get(line);
+      if (at !== undefined)
+        notes.push(
+          !line.item || layout.unitLines.get(line.item.id).length === 1
+            ? `now at line ${at}`
+            : `its ${side} line is now line ${at}`,
+        );
+      return notes.length ? `${name} (${notes.join("; ")})` : name;
     };
     const after = lines[start - 1],
       before = lines[end + 1];
     return [
-      after ? `after ${neighbour(after)}` : "at the beginning of the file",
-      before ? `before ${neighbour(before)}` : "at the end of the file",
+      after ? `after ${neighbour(after, "last")}` : "at the beginning of the file",
+      before ? `before ${neighbour(before, "first")}` : "at the end of the file",
     ].join(" and ");
   };
 
