@@ -67,7 +67,10 @@ test("units are named by problem and place; only lost text is quoted", () => {
   assert.deepEqual(Object.keys(byFile).sort(), ["a.h", "notes.txt"]);
   const header = byFile["a.h"];
   assert.match(header, /The struct `struct Pair` in the global namespace belongs in a\.h after/);
-  assert.match(header, /It is currently in b\.cpp, around line 2, after the line `#include "a\.h"`/);
+  assert.match(
+    header,
+    /It is currently in b\.cpp, around line 2, after the line `#include "a\.h"`/,
+  );
   assert.match(header, /An extra copy of the block of 2 lines from `using Real = float;`/);
   assert.match(
     header,
@@ -77,7 +80,10 @@ test("units are named by problem and place; only lost text is quoted", () => {
   assert.ok(header.includes("  return x * 2.0f;"), "Lost text is given in full");
   for (const line of [...bodyLines(B), "constexpr int kCount = 3;\n"])
     assert.ok(!header.includes(line.trim() + "\n"), `Existing unit text was quoted: ${line}`);
-  assert.match(byFile["notes.txt"], /^Correct the project file notes\.txt\.[\s\S]*1\. Delete the file notes\.txt\./);
+  assert.match(
+    byFile["notes.txt"],
+    /^Correct the project file notes\.txt\.[\s\S]*1\. Delete the file notes\.txt\./,
+  );
 });
 
 test("an extra file gives its units back before it is deleted, a missing file is created first", () => {
@@ -88,12 +94,21 @@ test("an extra file gives its units back before it is deleted, a missing file is
   });
   const byFile = Object.fromEntries(assignments.map(({ file, prompt }) => [file, prompt]));
   assert.deepEqual(Object.keys(byFile).sort(), ["a.hpp", "b.cpp"]);
-  assert.match(byFile["a.hpp"], /1\. The struct `struct Pair`[^\n]*belongs in a\.h after the function `float twice\(float x\)` in the global namespace and before the block of 2 lines/);
+  assert.match(
+    byFile["a.hpp"],
+    /1\. The struct `struct Pair`[^\n]*belongs in a\.h after the function `float twice\(float x\)` in the global namespace and before the block of 2 lines/,
+  );
   assert.match(byFile["a.hpp"], /2\. After moving these units, delete the file a\.hpp\./);
   const created = byFile["b.cpp"];
   assert.match(created, /1\. The file b\.cpp does not exist yet; create it first\./);
-  assert.match(created, /2\. At the beginning of the file:\nAdd these lines:\n```\n#include "a\.h"\n```/);
-  assert.match(created, /3\. The function `int answer\(\)` in the global namespace belongs in b\.cpp after the line `#include "a\.h"` and at the end of the file\. It is currently in main\.cpp/);
+  assert.match(
+    created,
+    /2\. At the beginning of the file:\nAdd these lines:\n```\n#include "a\.h"\n```/,
+  );
+  assert.match(
+    created,
+    /3\. The function `int answer\(\)` in the global namespace belongs in b\.cpp after the line `#include "a\.h"` and at the end of the file\. It is currently in main\.cpp/,
+  );
   assert.ok(!created.includes("return 42;"));
 });
 

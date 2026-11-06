@@ -32,7 +32,11 @@ function textLines(text) {
   for (const [index, raw] of text.split("\n").entries()) {
     const trimmed = raw.trimEnd();
     if (trimmed)
-      lines.push({ text: trimmed, line: index + 1, offset: offset + raw.length - raw.trimStart().length });
+      lines.push({
+        text: trimmed,
+        line: index + 1,
+        offset: offset + raw.length - raw.trimStart().length,
+      });
     offset += raw.length + 1;
   }
   return lines;
@@ -387,7 +391,9 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
   const assignments = [];
   const id = (file, part) => `units-${hash(file).slice(0, 16)}-${part}`;
   for (const file of [...entries.keys()].sort(order)) {
-    const list = entries.get(file).sort((left, right) => Number(!!right.first) - Number(!!left.first));
+    const list = entries
+      .get(file)
+      .sort((left, right) => Number(!!right.first) - Number(!!left.first));
     const groups = [];
     let current = [],
       bytes = 0;
