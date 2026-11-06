@@ -109,6 +109,19 @@ async function canonicalCommand(command, values, positionals) {
       console.log(
         `Prepared ${manifest.rounds.length} canonical rounds; ${manifest.rounds.reduce((sum, row) => sum + row.totalHunks, 0)} reference hunks`,
       );
+    } else if (command === "verify-canonical") {
+      const { verifyCanonical } =
+        await import("../src/suites/explicit-edit-multi-agent/execution/canonical-run.mjs");
+      const summary = await verifyCanonical(...positionals, {
+        canonicalPath: values.canonical,
+        agents,
+        batchSize,
+        maxConcurrentAgents,
+        signal: controller.signal,
+        log: () => {},
+      });
+      console.log(JSON.stringify(summary));
+      if (summary.status !== "pass") process.exitCode = 1;
     } else {
       const { runCanonical } =
         await import("../src/suites/explicit-edit-multi-agent/execution/canonical-run.mjs");
@@ -119,6 +132,7 @@ async function canonicalCommand(command, values, positionals) {
         maxConcurrentAgents,
         fromRound: positive("from-round"),
         configPath: values.config,
+        referenceProofPath: values.proof,
         allowModelCalls: values["allow-model-calls"],
         signal: controller.signal,
       });
@@ -179,6 +193,12 @@ export async function multiAgentMain(args) {
       proof: { type: "string" },
       "trusted-endpoints": { type: "string" },
     },
+    "verify-canonical": {
+      agents: { type: "string", default: "auto" },
+      "batch-size": { type: "string" },
+      "max-concurrent-agents": { type: "string" },
+      canonical: { type: "string" },
+    },
     "run-canonical": {
       agents: { type: "string", default: "auto" },
       "batch-size": { type: "string" },
@@ -186,6 +206,7 @@ export async function multiAgentMain(args) {
       "from-round": { type: "string" },
       canonical: { type: "string" },
       config: { type: "string" },
+      proof: { type: "string" },
       "allow-model-calls": { type: "boolean", default: false },
     },
     "export-canonical": {},
@@ -210,9 +231,13 @@ export async function multiAgentMain(args) {
     assert.equal(values["allow-model-calls"], true, "Live execution requires --allow-model-calls");
     assert.ok(values.config, "Live execution requires --config PRIVATE_JSON");
     if (restoring) assert.ok(values.proof, "Restoring execution requires --proof NEW_PROOF");
-    if (command === "run-canonical")
+    if (command === "run-canonical") {
       assert.ok(values.canonical, "Canonical execution requires --canonical CACHE");
+      assert.ok(values.proof, "Canonical execution requires --proof REFERENCE/summary.json");
+    }
   }
+  if (command === "verify-canonical")
+    assert.ok(values.canonical, "Canonical verification requires --canonical CACHE");
   if (command.endsWith("-canonical")) {
     await canonicalCommand(command, values, positionals);
     return;

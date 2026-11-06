@@ -681,7 +681,11 @@ function aggregate(rounds, planned, status) {
  * host identities remain private. SDK cost is a usage estimate, not a billing receipt.
  */
 export function canonicalMultiAgentResult(report) {
-  assert.equal(report.version, CANONICAL_RUN_VERSION);
+  assert.equal(
+    report.version,
+    CANONICAL_RUN_VERSION,
+    "Only text-hunk canonical runs can be exported; unit-scored runs keep their private report",
+  );
   assert.equal(report.benchmark, MULTI_AGENT_BENCHMARK);
   assert.equal(report.protocol, CANONICAL_MULTI_AGENT_PROTOCOL);
   assert.equal(report.mode, "measured");

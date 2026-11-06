@@ -2,58 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { structuredPatch } from "diff";
-import { CANONICAL_DIFF_POLICY } from "../grading/canonical-diff.mjs";
-
-function location(file) {
-  if (file.startsWith("source/")) {
-    const path = file.slice("source/".length);
-    return { path, pathBytes: Buffer.from(path).toString("base64") };
-  }
-  assert.ok(file.startsWith("bytes/"), "Unknown canonical entry namespace");
-  return {
-    path: null,
-    pathBytes: Buffer.from(file.slice("bytes/".length), "base64url").toString("base64"),
-  };
-}
-
-// Both diffs use the same start. Keep every hunk, including agreements, so the
-// outer diff describes only what differs between the two complete deltas.
-function deltaView(hunks, file) {
-  const lines = [];
-  for (const hunk of hunks) {
-    if (hunk.file !== file) continue;
-    lines.push(JSON.stringify(["hunk", hunk.oldStart, hunk.oldLines, hunk.newLines]));
-    lines.push(...hunk.lines);
-  }
-  return lines.length ? lines.join("\n") + "\n" : "";
-}
-
-/** Split the actual-to-reference diff of diffs into independent assignments. */
-export function canonicalCorrectionNodes(comparison) {
-  const nodes = [];
-  const files = [...new Set(comparison.mismatches.map(({ file }) => file))].sort();
-  for (const file of files) {
-    const actual = deltaView(comparison.actualHunks, file);
-    const expected = deltaView(comparison.expectedHunks, file);
-    const patch = structuredPatch(file, file, actual, expected, undefined, undefined, {
-      context: CANONICAL_DIFF_POLICY.context,
-      ignoreWhitespace: false,
-      stripTrailingCr: false,
-    });
-    const where = location(file);
-    for (const hunk of patch.hunks) {
-      const data = { location: where, hunk };
-      nodes.push({
-        id: `canonical-repair-${nodes.length}`,
-        dependencies: [],
-        prompt: JSON.stringify(data),
-      });
-    }
-  }
-  return nodes;
-}
-
 /** Prepare only this participant's text; the caller owns its private mounted directory. */
 export async function prepareCanonicalFeedback(members, directory) {
   return Promise.all(
@@ -150,11 +98,6 @@ export function canonicalAssignmentPrompt(members) {
   }
   return [
     "Work in the shared writable project. Inspect current files before each edit. Preserve concurrent changes made by other agents; do not assume earlier file contents remain unchanged. Complete only the assignments in this packet. Do not run project-wide builds or lint commands. Address native IDE diagnostics only when they concern your assigned edits.",
-    ...(members.some(({ kind }) => kind !== "cst-correction")
-      ? [
-          "For JSON hunk assignments, compare the actual and reference changes from the same round start. Outer minus lines are actual changes and outer plus lines are reference changes; the inner diff markers describe changes from that start. Locate the affected code in the named project-relative file and make the actual changes match the reference. Hunk coordinates refer to the serialized diffs, not source line numbers. Do not apply the nested diff directly as a source patch. If location.path is null, decode location.pathBytes from base64 to identify the filename.",
-        ]
-      : []),
     ...members.map(({ prompt }) => prompt),
   ].join("\n\n---\n\n");
 }

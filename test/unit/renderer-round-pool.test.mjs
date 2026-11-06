@@ -274,6 +274,37 @@ test(
     assert.equal(f.live, 0);
   },
 );
+
+test(
+  "a timed-out packet retires its worker and releases dependents to a fresh worker",
+  options,
+  async () => {
+    const f = fixture();
+    const executeBatch = async (driver, members) => {
+      driver.history.push(...members.map(({ id }) => id));
+      if (members.some(({ id }) => id === "slow")) {
+        await driver.terminate();
+        return { timedOut: true };
+      }
+      return { history: [...driver.history] };
+    };
+    const result = await f.run([node("slow"), node("after", ["slow"])], {
+      maxAgents: 1,
+      executeBatch,
+    });
+    assert.deepEqual(
+      result.deliveries.map(({ ids, status }) => [ids.join(), status]),
+      [
+        ["slow", "timed-out"],
+        ["after", "settled"],
+      ],
+    );
+    assert.equal(f.created.length, 2);
+    assert.deepEqual(f.created[1].history, ["after"]);
+    assert.equal(f.live, 0);
+  },
+);
+
 test("graph validation happens before any process is created", options, async () => {
   const invalid = [
     [node("a"), node("a")],

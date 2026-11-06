@@ -163,6 +163,7 @@ export async function runCanonical(
     maxConcurrentAgents,
     batchSize = 10,
     fromRound = 1,
+    referenceProofPath,
     allowModelCalls = false,
     signal: externalSignal,
     log = console.log,
@@ -180,6 +181,17 @@ export async function runCanonical(
   externalSignal?.throwIfAborted();
   const source = await restoringSourceIdentity();
   assert.equal(source.sourceClean, true, "Canonical execution requires clean committed source");
+  if (configPath) {
+    assert.ok(referenceProofPath, "Model execution requires a scripted reference proof");
+    const proof = JSON.parse(await readFile(referenceProofPath, "utf8"));
+    assert.equal(proof.version, CANONICAL_UNIT_RUN_VERSION, "The reference proof uses another run");
+    assert.equal(proof.status, "pass", "The reference proof did not pass");
+    assert.equal(
+      proof.sourceCommit,
+      source.sourceCommit,
+      "The reference proof is for other source",
+    );
+  }
   const loaded = await loadCanonicalPreparation(preparationPath, canonicalPath, {
     agents,
     signal: externalSignal,
@@ -472,10 +484,12 @@ export async function runCanonical(
                 members,
                 feedbackDirectories.get(session),
               );
-              return driver.execute(canonicalAssignmentPrompt(packet), {
-                completion: "turn",
-                signal: deliverySignal,
-              });
+              const delivery = await executeChunkDelivery(
+                driver,
+                canonicalAssignmentPrompt(packet),
+                { signal: deliverySignal },
+              );
+              return delivery.status === "timed-out" ? { timedOut: true } : delivery.receipt;
             },
           });
           assert.ok(
@@ -492,13 +506,9 @@ export async function runCanonical(
             includeAllFiles: true,
           });
           boundary = captured;
-          const snapshot = await canonicalizeCapturedCandidate(captured);
+          const units = capturedUnitInput(captured);
           await assertCandidateUnchanged(workspace, captured, { signal });
-          await writeFile(path.join(evidence, "canonical.json"), JSON.stringify(snapshot) + "\n", {
-            flag: "wx",
-            mode: 0o600,
-          });
-          return { snapshot, captured, evidence };
+          return { units, captured, evidence };
         },
         measure: async ({ captured, evidence }) => {
           await assertCandidateUnchanged(workspace, captured, { signal });
@@ -515,22 +525,27 @@ export async function runCanonical(
           report.checks.push({
             round: round.id,
             stage: row.stage,
-            totalHunks: row.comparison.totalHunks,
-            passedHunks: row.comparison.passedHunks,
-            disagreements: row.comparison.differenceIds.length,
+            totalUnits: prepared.totalUnits,
+            disagreements: row.structure ? row.structure.differenceIds.length : null,
+            buildPassed: row.integration?.buildPassed ?? null,
+            resultMatched: row.integration?.resultMatched ?? null,
           });
-          await writeFile(
-            path.join(candidate.evidence, "comparison.json"),
-            JSON.stringify(row.comparison) + "\n",
-            { flag: "wx", mode: 0o600 },
-          );
+          if (row.structure)
+            await writeFile(
+              path.join(candidate.evidence, "comparison.json"),
+              JSON.stringify(row.structure) + "\n",
+              { flag: "wx", mode: 0o600 },
+            );
           await onCase({ kind: "captured", round: round.id, stage: row.stage });
           await save();
         },
       });
       const result = { round: round.id, ...outcome };
       report.rounds.push(result);
-      report.score = scoreCanonicalRounds(report.rounds, plan.length);
+      report.score = structuralUnitRunScore(
+        report.rounds.map(({ score }) => score),
+        plan.length,
+      );
       await save();
       await releaseBoundary();
       result.restoration = await restoreCanonicalSource(workspace, interval.expectedTree, {
@@ -542,7 +557,6 @@ export async function runCanonical(
         includeAllFiles: true,
       });
       assertTrustedCapture(boundary, interval.expectedTree);
-      trustedStart = interval.expectedTree;
       await onCase({ kind: "restored", round: round.id, identity: report.final });
       log(`CHECK ${round.id}: ${outcome.score.score.toFixed(3)}%`);
       await save();
@@ -564,9 +578,80 @@ export async function runCanonical(
     externalSignal?.removeEventListener("abort", abort);
     report.agentsClosed = report.participants.map(({ closed }) => closed);
     report.usage = aggregateUsage(report.participants);
-    report.score = scoreCanonicalRounds(report.rounds, plan.length);
+    report.score = structuralUnitRunScore(
+      report.rounds.map(({ score }) => score),
+      plan.length,
+    );
     report.elapsedMs = elapsed();
     await save();
   }
   return report;
+}
+
+/** Scripted participants for a model-free proof of the unit-scored route. The first
+ * original delivery of each round writes the round's trusted endpoint; every other
+ * delivery leaves the project unchanged. Operation feasibility comes from the
+ * retained proof that the preparation already validated.
+ */
+function endpointReferenceDrivers(loaded) {
+  const written = new Set();
+  let serial = 0;
+  return async (workspace, _state, _agent, { round, stage }) => {
+    const id = ++serial;
+    return {
+      closed: false,
+      ready: Promise.resolve(),
+      async assertIdle() {
+        return { sessionId: `endpoint-reference-${id}`, messageCount: 0 };
+      },
+      async execute() {
+        assert.equal(stage, "original", "The scripted reference received a correction");
+        if (written.has(round)) return { scripted: "unchanged" };
+        written.add(round);
+        await restoreCanonicalSource(
+          workspace,
+          loaded.atomicIntervals.rounds.get(round).expectedTree,
+        );
+        return { scripted: "endpoint" };
+      },
+      async terminate() {
+        this.closed = true;
+      },
+    };
+  };
+}
+
+/** Model-free reference run: every round must reach Score 100 without corrections. */
+export async function verifyCanonical(preparationPath, outputPath, options = {}) {
+  const { canonicalPath, agents, signal } = options;
+  const loaded = await loadCanonicalPreparation(preparationPath, canonicalPath, {
+    agents,
+    signal,
+  });
+  const report = await runCanonical(preparationPath, outputPath, {
+    ...options,
+    createDriver: endpointReferenceDrivers(loaded),
+  });
+  const summary = {
+    version: CANONICAL_UNIT_RUN_VERSION,
+    reference: "scripted-trusted-endpoint-writer",
+    sourceCommit: report.sourceCommit,
+    sourceClean: report.sourceClean,
+    status:
+      report.status === "complete" &&
+      report.score.score === 100 &&
+      report.rounds.every(({ attempts }) => attempts.length === 0)
+        ? "pass"
+        : "fail",
+    rounds: report.rounds.length,
+    totalUnits: report.plan.reduce((sum, { totalUnits }) => sum + totalUnits, 0),
+    score: report.score.score,
+    terminal: report.terminal,
+  };
+  await writeFile(
+    path.join(path.resolve(outputPath), "summary.json"),
+    JSON.stringify(summary, null, 2) + "\n",
+    { flag: "wx", mode: 0o600 },
+  );
+  return summary;
 }

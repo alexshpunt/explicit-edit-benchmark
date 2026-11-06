@@ -3,23 +3,14 @@ import { mkdir, mkdtemp, readFile, readlink, readdir, rm, writeFile } from "node
 import path from "node:path";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { cppTokens } from "../../src/suites/explicit-edit-multi-agent/cpp/cpp-tokens.mjs";
 import {
   prepareCanonical,
   loadCanonicalPreparation,
 } from "../../src/suites/explicit-edit-multi-agent/execution/canonical-preparation.mjs";
 import { runCanonical } from "../../src/suites/explicit-edit-multi-agent/execution/canonical-run.mjs";
 import { startPiParticipant } from "../../src/suites/explicit-edit-multi-agent/execution/pi-baseline.mjs";
-import { canonicalizeTrustedProject } from "../../src/suites/explicit-edit-multi-agent/execution/canonical-candidate.mjs";
-import { compareCanonicalDiff } from "../../src/suites/explicit-edit-multi-agent/grading/canonical-diff.mjs";
-import { canonicalCorrectionNodes } from "../../src/suites/explicit-edit-multi-agent/execution/canonical-diagnostics.mjs";
 import { coherentTaskPrompt } from "../../src/suites/explicit-edit-multi-agent/tasks/coherent-tasks.mjs";
-import {
-  canonicalMultiAgentResult,
-  validateCanonicalResult,
-} from "../../src/suites/explicit-edit-multi-agent/canonical-results.mjs";
 import { providerFixture } from "./provider-fixture.mjs";
-import { multiAgentMain } from "../../scripts/multi-agent.mjs";
 
 function userPrompt(body) {
   const content = body.messages.findLast(({ role }) => role === "user")?.content;
@@ -30,11 +21,11 @@ function userPrompt(body) {
 
 // Commands come from the controller's fixture operations, not from parsing the
 // wording an agent receives. Pi still executes every command in its real mount.
-function renameCommand(assignments, corrections, files = []) {
+function renameCommand(assignments, files = []) {
   return `python3 - <<'PY'
 from pathlib import Path
 import re,json,fcntl,hashlib
-requests=json.loads(${JSON.stringify(JSON.stringify({ assignments, corrections, files }))})
+requests=json.loads(${JSON.stringify(JSON.stringify({ assignments, files }))})
 for item in requests['files']:
     path=Path(item['path'])
     assert str(path).startswith('/feedback/')
@@ -63,30 +54,14 @@ with p.open('r+') as f:
                 text=text[:match.start()]+part+text[match.end():]
             else:
                 text=re.sub(r'\\b'+re.escape(before)+r'\\b',after,text)
-    for correction in requests['corrections']:
-        for before,after in correction:
-            text=re.sub(r'\\b'+re.escape(before)+r'\\b',after,text)
     f.seek(0);f.write(text);f.truncate()
 PY`;
 }
 
-function correctionRenames({ repair }) {
-  assert.equal(repair.action, "replace");
-  assert.equal(repair.path, "main.cpp");
-  const identifiers = (source) =>
-    cppTokens(source)
-      .map(({ text }) => text)
-      .filter((text) => /^[A-Za-z_]\w*$/.test(text));
-  const before = identifiers(repair.before),
-    after = identifiers(repair.after);
-  assert.equal(before.length, after.length);
-  const pairs = before.flatMap((name, index) =>
-    name === after[index] ? [] : [[name, after[index]]],
-  );
-  assert.ok(pairs.length > 0);
-  return [...new Map(pairs)];
+// A scripted structural correction writes the trusted round endpoint of one file.
+function writeCommand(file, content) {
+  return `python3 - <<'PY'\nfrom pathlib import Path\nPath(${JSON.stringify(`/workspace/${file}`)}).write_text(${JSON.stringify(content)})\nPY`;
 }
-
 async function assertClosed(namespaces) {
   const remaining = [];
   for (const pid of await readdir("/proc")) {
@@ -238,9 +213,7 @@ for (const scenario of [
             }
             const damageOriginal = first && wrongFirst;
             let command;
-            if (first && fourWaves)
-              command = replacePixels("pixels[i] = float(", "pixels[i] = float(;");
-            else if (first && missedFirst) command = "true";
+            if (first && missedFirst) command = "true";
             else if (fourWaves && stage === "structural-correction") command = "true";
             else if (fourWaves && stage === "build-correction")
               command = replacePixels("pixels[i] = float(;", "pixels[i] = float(1 + ");
@@ -260,31 +233,17 @@ for (const scenario of [
                 assignments[0].mapping[0].to += longFeedback
                   ? "_feedback_wrong".repeat(600)
                   : "_feedback_wrong";
-              command = renameCommand(assignments, [], files);
+              command = renameCommand(assignments, files);
+              if (first && fourWaves)
+                command += "\n" + replacePixels("pixels[i] = float(", "pixels[i] = float(;");
             } else {
-              const preparedDiff = loaded.canonical.rounds.get(round).preparedDiff;
-              const snapshot = await canonicalizeTrustedProject({
-                "main.cpp": await readFile(path.join(workspace, "main.cpp"), "utf8"),
-              });
-              const repairs = (
-                await canonicalCorrectionNodes(
-                  compareCanonicalDiff(preparedDiff, snapshot),
-                  preparedDiff.start,
-                  {
-                    actual: {
-                      contents: new Map([
-                        [
-                          Buffer.from("main.cpp").toString("base64"),
-                          Buffer.from(await readFile(path.join(workspace, "main.cpp"), "utf8")),
-                        ],
-                      ]),
-                    },
-                    expected: loaded.atomicIntervals.rounds.get(round).expectedTree,
-                  },
-                )
-              ).filter(({ prompt }) => delivered.includes(prompt));
-              assert.ok(repairs.length > 0);
-              command = renameCommand([], repairs.map(correctionRenames), files);
+              assert.equal(stage, "structural-correction");
+              assert.ok(delivered.includes('Correct the structure of the project file "main.cpp"'));
+              assert.equal(/JSON|location\.path/.test(delivered), false);
+              command = writeCommand(
+                "main.cpp",
+                loaded.atomicIntervals.rounds.get(round).expectedTree["main.cpp"],
+              );
             }
             first = false;
             commands.set(prompt, command);
@@ -347,42 +306,43 @@ for (const scenario of [
         );
       }
       assert.equal(report.rounds.length, prepared.scope.totalRounds);
-      assert.equal(
-        captures,
-        prepared.scope.totalRounds + (fourWaves ? 3 : Number(structuralCorrection)),
-      );
+      // Every round captures original, build-check and final; a failed build adds a recheck.
+      assert.equal(captures, 3 * prepared.scope.totalRounds + Number(fourWaves));
       assert.ok(report.agentsClosed.every(Boolean));
       assert.equal(report.repairs, fourWaves ? 3 : Number(structuralCorrection));
-      assert.equal(report.score.score, fourWaves ? 80 : structuralCorrection ? 90 : 100);
-      assert.equal(report.score.firstStructuralScore, structuralCorrection || fourWaves ? 80 : 100);
-      assert.equal(report.rounds[0].stages.length, fourWaves ? 4 : structuralCorrection ? 2 : 1);
-      if (wrongFirst) {
-        assert.ok(
-          report.rounds[0].stages[0].comparison.mismatches.some(({ status }) => status === "wrong"),
-        );
-        assert.deepEqual(report.rounds[0].stages[1].comparison.differenceIds, []);
-      }
+      const [firstRound, ...laterRounds] = report.rounds;
+      assert.ok(laterRounds.every(({ score }) => score.score === 100));
+      const structural = firstRound.score.structural;
+      const total = report.plan[0].totalUnits;
+      assert.equal(structural.totalUnits, total);
+      assert.deepEqual(structural.finalDifferences, []);
+      assert.deepEqual(structural.resolved, structural.initialDifferences);
+      const factors = fourWaves ? 0.75 * 0.75 : 1;
+      const expectedScore =
+        (100 * (total - structural.initialDifferences.length / 2) * factors) / total;
+      assert.ok(Math.abs(firstRound.score.score - expectedScore) < 1e-9);
+      if (missedFirst) assert.equal(structural.initialDifferences.length, total);
+      if (structuralCorrection || fourWaves) assert.ok(structural.initialDifferences.length > 0);
+      else assert.equal(firstRound.score.score, 100);
+      assert.deepEqual(
+        firstRound.attempts.map(({ stage }) => stage),
+        fourWaves
+          ? ["structural-correction", "build-correction", "image-correction"]
+          : structuralCorrection
+            ? ["structural-correction"]
+            : [],
+      );
       if (fourWaves) {
-        assert.deepEqual(
-          report.rounds[0].stages.map(({ stage }) => stage),
-          ["original", "structural-correction", "build-correction", "image-correction"],
-        );
-        assert.equal(report.rounds[0].score.build.factor, 0.75);
-        assert.equal(report.rounds[0].score.images.factor, 0.75);
+        assert.equal(firstRound.score.build.factor, 0.75);
+        assert.equal(firstRound.score.images.factor, 0.75);
       }
+      const mean =
+        report.rounds.reduce((sum, { score }) => sum + score.score, 0) / report.rounds.length;
+      assert.ok(Math.abs(report.score.score - mean) < 1e-9);
       assert.ok(report.rounds.every(({ restoration }) => restoration.restored));
       assert.equal(report.final, prepared.scope.expectedFinal);
       assert.equal(provider.errors.length, 0);
       await assertClosed(namespaces);
-      const safe = canonicalMultiAgentResult(report);
-      assert.ok(validateCanonicalResult(safe));
-      assert.equal(safe.score.score, report.score.score);
-      assert.equal(safe.status, "complete");
-      const exported = path.join(root, "safe.json");
-      await multiAgentMain(["export-canonical", path.join(root, "run"), exported]);
-      await multiAgentMain(["validate-canonical", exported]);
-      await multiAgentMain(["inspect-canonical", path.join(root, "run")]);
-      assert.deepEqual(JSON.parse(await readFile(exported, "utf8")), safe);
       assert.ok(userCounts.every((count) => count >= 1));
       const stageSessions = report.participants.filter(
         ({ round }) => round === report.rounds[0].round,
@@ -440,12 +400,7 @@ test(
     assert.equal(report.score.observedRounds, 0);
     assert.equal(report.score.plannedRounds, prepared.scope.totalRounds);
     await assertClosed(namespaces);
-    const safe = canonicalMultiAgentResult(report);
-    assert.ok(validateCanonicalResult(safe));
-    assert.equal(safe.status, "error");
-    assert.equal(safe.score.complete, false);
-    assert.equal(safe.score.plannedRounds, prepared.scope.totalRounds);
-    assert.equal(Object.hasOwn(safe.terminal, "message"), false);
+    assert.equal(report.score.complete, false);
   },
 );
 
@@ -494,12 +449,8 @@ test(
     assert.equal(report.deliveries, 0);
     assert.equal(report.repairs, 0);
     await assertClosed(namespaces);
-    const safe = canonicalMultiAgentResult(report);
-    assert.equal(validateCanonicalResult(safe), true);
-    assert.equal(safe.execution.registeredParticipants, 0);
-    assert.equal(safe.execution.unregisteredParticipants, 1);
-    assert.equal(safe.score.plannedRounds, prepared.scope.totalRounds);
-    assert.equal(safe.score.complete, false);
+    assert.equal(report.score.plannedRounds, prepared.scope.totalRounds);
+    assert.equal(report.score.complete, false);
   },
 );
 
@@ -550,10 +501,7 @@ test(
     assert.equal(report.participants.length, 1);
     assert.deepEqual(report.agentsClosed, [true]);
     await assertClosed(namespaces);
-    const safe = canonicalMultiAgentResult(report);
-    assert.equal(validateCanonicalResult(safe), true);
-    assert.equal(safe.status, "cancelled");
-    assert.equal(safe.score.complete, false);
-    assert.equal(safe.score.plannedRounds, prepared.scope.totalRounds);
+    assert.equal(report.score.complete, false);
+    assert.equal(report.score.plannedRounds, prepared.scope.totalRounds);
   },
 );

@@ -12,6 +12,16 @@ export const ROUND_POOL_POLICY = Object.freeze({
   occupancy: "starting-running-and-closing-processes",
 });
 
+/** Executors with a delivery deadline return {timedOut: true} after confirmed shutdown.
+ * The packet is not retried; its dependents are released and a fresh worker takes
+ * later packets. Earlier policies never return such receipts.
+ */
+export const ROUND_POOL_DEADLINE_POLICY = Object.freeze({
+  version: "renderer-round-pool-deadline-v1",
+  timedOutPacket: "release-dependents-without-retry",
+  timedOutWorker: "retire-and-start-fresh-worker-for-later-packets",
+});
+
 /** Notification hooks can complete synchronously or return a promise.
  * @returns {void | Promise<void>}
  */
@@ -243,6 +253,11 @@ export async function runRoundPool(
           });
           controller.signal.throwIfAborted();
           for (const member of packet) completed.add(member.id);
+          if (delivery.receipt?.timedOut === true) {
+            assert.equal(driver.closed, true, "Timed-out participant remains active");
+            delivery.status = "timed-out";
+            break;
+          }
           delivery.status = "settled";
         } catch (error) {
           delivery.status = controller.signal.aborted ? "cancelled" : "error";
