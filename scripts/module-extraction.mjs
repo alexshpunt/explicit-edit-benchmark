@@ -16,9 +16,9 @@ const help = `Experimental paired-module extraction
   chunk-smoke NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls
   chunk-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls
   chunk-rescore FLAT_CASE SAVED_RUN NEW_OUTPUT
-  assembly-verify FLAT_CASE NEW_RUN
-  assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls
-  assembly-probe FLAT_CASE NEW_RUN [--deliveries N] [--regions FILE[,FILE]] (--scripted | --config PRIVATE_JSON --allow-model-calls)
+  assembly-verify FLAT_CASE NEW_RUN [--agent-lifecycle LIFECYCLE]
+  assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--agent-lifecycle LIFECYCLE]
+  assembly-probe FLAT_CASE NEW_RUN [--deliveries N] [--regions FILE[,FILE]] [--agent-lifecycle LIFECYCLE] (--scripted | --config PRIVATE_JSON --allow-model-calls)
 
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
@@ -49,10 +49,13 @@ result correction. Score counts structural unit differences from the trusted
 start; see docs/module-extraction.md. chunk-verify is the scripted reference and
 must report Score 100 from clean committed source. chunk-smoke spends one small
 model delivery. chunk-rescore recomputes a saved run without participants.
-Assembly commands run the two-phase observation: twenty fresh agents, each with a
-300-second limit, move units into regions of main.cpp, new agents move each
-region into its file, then the
-common corrections run once and one line difference score is computed.
+Assembly commands run the two-phase observation: twenty agents, each delivery with
+a 300-second limit, move units into regions of main.cpp, agents move each region
+into its file, then the common corrections run once with new agents and one line
+difference score is computed. LIFECYCLE is per-delivery (default: a new agent for
+every delivery) or persistent (each of the twenty slots keeps its agent and its
+context for the next delivery and starts a new agent only after a timeout). The
+lifecycle is part of the report policy; compare scores only within one lifecycle.
 assembly-verify is the scripted reference and must report Score 100 from clean
 committed source. assembly-probe runs the first assembly deliveries of the queue
 and/or the extraction of chosen regions, compares the result with the scripted
@@ -140,8 +143,10 @@ async function assemblyCommand(values, positionals) {
     await import("../src/suites/explicit-edit-multi-agent/extraction/assembly-run.mjs");
   const config = modelCommand ? JSON.parse(await readFile(values.config, "utf8")) : null;
   const signal = controller.signal;
+  const lifecycle = values["agent-lifecycle"] ?? "per-delivery";
+  assert.ok(assembly.ASSEMBLY_AGENT_LIFECYCLES.includes(lifecycle), help);
   if (command === "assembly-verify") {
-    const summary = await assembly.verifyAssemblyCase(paths[0], paths[1], { signal });
+    const summary = await assembly.verifyAssemblyCase(paths[0], paths[1], { lifecycle, signal });
     console.log(JSON.stringify(summary));
     if (summary.status !== "pass") process.exitCode = 1;
     return;
@@ -151,10 +156,12 @@ async function assemblyCommand(values, positionals) {
         deliveries: values.deliveries === undefined ? 0 : Number(values.deliveries),
         regions: values.regions ? values.regions.split(",") : [],
         scripted: values.scripted === true,
+        lifecycle,
         signal,
       })
     : await assembly.runAssemblyModel(paths[0], paths[1], config, {
         proofPath: values.proof,
+        lifecycle,
         signal,
       });
   const final = report.stages.at(-1);
@@ -162,6 +169,7 @@ async function assemblyCommand(values, positionals) {
     JSON.stringify({
       status: report.status,
       kind: report.kind,
+      lifecycle: report.lifecycle,
       totalUnits: report.totalUnits,
       deliveries: report.deliveries.length,
       timedOut: report.deliveries.filter((row) => row.status === "timed-out").length,
@@ -200,8 +208,11 @@ try {
       deliveries: { type: "string" },
       regions: { type: "string" },
       scripted: { type: "boolean" },
+      "agent-lifecycle": { type: "string" },
     },
   });
+  if (!positionals[0]?.startsWith("assembly-"))
+    assert.equal(values["agent-lifecycle"], undefined, help);
   if (values.help) console.log(help);
   else if (positionals[0]?.startsWith("chunk-")) await chunkCommand(values, positionals);
   else if (positionals[0]?.startsWith("assembly-")) await assemblyCommand(values, positionals);

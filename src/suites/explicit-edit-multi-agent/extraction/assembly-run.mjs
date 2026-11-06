@@ -23,7 +23,12 @@ import {
 } from "../execution/candidate-evidence.mjs";
 import { chunkModelDrivers } from "../execution/chunk-model-drivers.mjs";
 import { runCorrectionSchedule } from "../execution/correction-schedule.mjs";
-import { FRESH_AGENT_QUEUE_POLICY, runFreshAgentQueue } from "../execution/fresh-agent-queue.mjs";
+import {
+  AGENT_LIFECYCLES,
+  AGENT_QUEUE_POLICIES,
+  FRESH_AGENT_QUEUE_POLICY,
+  runAgentQueue,
+} from "../execution/fresh-agent-queue.mjs";
 import { restoringSourceIdentity } from "../execution/restoring-identity.mjs";
 import {
   LINE_DIFFERENCE_CORRECTION_POLICY,
@@ -40,29 +45,48 @@ import {
 import { integrationPrompt, loadGeneralPrompt, physicalUnits } from "./chunk-run.mjs";
 import { captureExtractionState } from "./run.mjs";
 
-export const ASSEMBLY_RUN_VERSION = "renderer-assembly-run-v2";
+export const ASSEMBLY_RUN_VERSION = "renderer-assembly-run-v3";
 export const ASSEMBLY_AGENTS = 20;
 /** Long enough that slower models are not cut off, short enough to bound a run. */
 export const ASSEMBLY_DELIVERY_DEADLINE_MS = 300_000;
-export const ASSEMBLY_RUN_POLICY = Object.freeze({
-  version: "renderer-assembly-policy-v4",
-  case: ASSEMBLY_CASE_VERSION,
-  phases: Object.freeze(["assembly", "extraction"]),
-  agents: ASSEMBLY_AGENTS,
-  queue: FRESH_AGENT_QUEUE_POLICY,
-  assemblyOrder: "regions-interleaved-round-robin",
-  assignment: Object.freeze({ bytes: ASSEMBLY_ASSIGNMENT_BYTES, units: ASSEMBLY_ASSIGNMENT_UNITS }),
-  delivery: Object.freeze({
-    deadlineSeconds: ASSEMBLY_DELIVERY_DEADLINE_MS / 1000,
-    onTimeout: "close-and-continue",
-    generalInstructions: "before-every-assignment",
-  }),
-  controller: "never-repairs-or-rewrites-assignments",
-  schedule: "original-structural-build-result",
-  units: LINE_DIFFERENCE_POLICY,
-  corrections: LINE_DIFFERENCE_CORRECTION_POLICY,
-  score: LINE_DIFFERENCE_SCORE_POLICY,
-});
+export const ASSEMBLY_AGENT_LIFECYCLES = AGENT_LIFECYCLES;
+const ASSEMBLY_POLICY_VERSION = "renderer-assembly-policy-v5";
+
+/** The lifecycle of assembly and extraction agents is part of the run policy, so
+ * scores from per-delivery and persistent runs are never compared as one kind.
+ * Corrections always start a new agent for every assignment.
+ */
+export function assemblyRunPolicy(lifecycle = "per-delivery") {
+  assert.ok(AGENT_LIFECYCLES.includes(lifecycle), `Unknown agent lifecycle ${lifecycle}`);
+  const persistent = lifecycle === "persistent";
+  return Object.freeze({
+    version: ASSEMBLY_POLICY_VERSION,
+    case: ASSEMBLY_CASE_VERSION,
+    phases: Object.freeze(["assembly", "extraction"]),
+    agents: ASSEMBLY_AGENTS,
+    lifecycle,
+    queue: AGENT_QUEUE_POLICIES[lifecycle],
+    correctionQueue: FRESH_AGENT_QUEUE_POLICY,
+    assemblyOrder: "regions-interleaved-round-robin",
+    assignment: Object.freeze({
+      bytes: ASSEMBLY_ASSIGNMENT_BYTES,
+      units: ASSEMBLY_ASSIGNMENT_UNITS,
+    }),
+    delivery: Object.freeze({
+      deadlineSeconds: ASSEMBLY_DELIVERY_DEADLINE_MS / 1000,
+      onTimeout: persistent ? "close-and-replace-agent" : "close-and-continue",
+      generalInstructions: persistent
+        ? "before-each-agent-first-assignment"
+        : "before-every-assignment",
+    }),
+    controller: "never-repairs-or-rewrites-assignments",
+    schedule: "original-structural-build-result",
+    units: LINE_DIFFERENCE_POLICY,
+    corrections: LINE_DIFFERENCE_CORRECTION_POLICY,
+    score: LINE_DIFFERENCE_SCORE_POLICY,
+  });
+}
+export const ASSEMBLY_RUN_POLICY = assemblyRunPolicy();
 
 const hash = (data) => createHash("sha256").update(data).digest("hex");
 
@@ -119,8 +143,10 @@ async function runAssemblyObservation({
   start,
   reference,
   corrections,
+  lifecycle = "per-delivery",
   signal,
 }) {
+  const policy = assemblyRunPolicy(lifecycle);
   const workspace = path.join(output, "workspace");
   await mkdir(output, { mode: 0o700 });
   await writeTree(workspace, start);
@@ -130,7 +156,8 @@ async function runAssemblyObservation({
   );
   const report = {
     version: ASSEMBLY_RUN_VERSION,
-    policy: ASSEMBLY_RUN_POLICY,
+    policy,
+    lifecycle,
     mode: pools.mode,
     kind: corrections ? "observation" : "probe",
     identity,
@@ -142,6 +169,7 @@ async function runAssemblyObservation({
     generalSha256: hash(general),
     phases: /** @type {any[]} */ ([]),
     deliveries: /** @type {any[]} */ ([]),
+    sessions: /** @type {any[]} */ ([]),
     captures: /** @type {any[]} */ ([]),
     stages: /** @type {any[]} */ ([]),
     attempts: /** @type {any[]} */ ([]),
@@ -166,21 +194,21 @@ async function runAssemblyObservation({
     );
   await save();
 
-  /** Every entry gets a new agent; the controller issues prompts exactly as prepared. */
-  async function runPhase(name, entries, promptOf, abort = signal) {
+  /** Agents follow the phase lifecycle; the controller issues prompts exactly as prepared. */
+  async function runPhase(name, entries, promptOf, phaseLifecycle = "per-delivery") {
     const pool = pools.create(name);
-    const phase = { name, status: "running", entries: entries.length };
+    const phase = { name, lifecycle: phaseLifecycle, status: "running", entries: entries.length };
     report.phases.push(phase);
     await save();
-    const rows = new Map();
     /** @type {any} */
     let failure;
     /** @type {any[]} */
     let completed = [];
     try {
-      const { results, maxLive } = await runFreshAgentQueue(entries, {
+      const { results, maxLive, agents } = await runAgentQueue(entries, {
+        lifecycle: phaseLifecycle,
         maxAgents: ASSEMBLY_AGENTS,
-        signal: abort,
+        signal,
         createDriver: (item, session, context) => pool.createDriver(item, session, context),
         async execute(driver, item, context) {
           const prompt = promptOf(item);
@@ -195,7 +223,6 @@ async function runAssemblyObservation({
             status: "running",
             started: new Date().toISOString(),
           };
-          rows.set(context.session, row);
           report.deliveries.push(row);
           event("delivery-start", row);
           void save();
@@ -214,13 +241,19 @@ async function runAssemblyObservation({
             void save();
           }
         },
-        async onClosed(driver, _item, result) {
-          const row = rows.get(result.session);
-          if (row && driver) row.usage = pool.usage?.(driver) ?? null;
+        async onClosed(driver, _item, result, deliveries) {
+          // A persistent agent reports usage once for all of its deliveries.
+          report.sessions.push({
+            phase: name,
+            session: result.session,
+            deliveries,
+            usage: driver ? (pool.usage?.(driver) ?? null) : null,
+          });
         },
       });
       phase.status = "complete";
       phase.maxLive = maxLive;
+      phase.agents = agents;
       phase.timedOut = results.filter((result) => result?.status === "timed-out").length;
       completed = results;
     } catch (error) {
@@ -307,7 +340,7 @@ async function runAssemblyObservation({
 
   try {
     for (const [index, { name, entries, prompt }] of phases.entries()) {
-      await runPhase(name, entries, prompt);
+      await runPhase(name, entries, prompt, lifecycle);
       await cp(workspace, path.join(output, `after-${index + 1}-${name}`), {
         recursive: true,
         errorOnExist: true,
@@ -451,7 +484,11 @@ function observationPhases(setup) {
 }
 
 /** Model-free proof that the measured route reaches the trusted endpoint with Score 100. */
-export async function verifyAssemblyCase(casePath, outputPath, { signal } = {}) {
+export async function verifyAssemblyCase(
+  casePath,
+  outputPath,
+  { lifecycle = "per-delivery", signal } = {},
+) {
   const output = path.resolve(outputPath);
   const setup = await prepareAssemblyCase(casePath);
   const general = await loadGeneralPrompt();
@@ -467,6 +504,7 @@ export async function verifyAssemblyCase(casePath, outputPath, { signal } = {}) 
     start: setup.trees.scaffold,
     reference: setup.trees.final,
     corrections: true,
+    lifecycle,
     signal,
   });
   const stats = pools.stats();
@@ -488,15 +526,21 @@ export async function verifyAssemblyCase(casePath, outputPath, { signal } = {}) 
   releaseCandidateWorkspace(path.join(assembledDirectory, "source"));
   assert.deepEqual(await assemblyRunIdentity(setup, general), identity);
   const final = report.stages.at(-1);
+  const agentsOf = (name) => report.phases.find((phase) => phase.name === name).agents;
+  const expectedAgents = (entries) =>
+    lifecycle === "persistent" ? Math.min(ASSEMBLY_AGENTS, entries) : entries;
   const summary = {
     version: ASSEMBLY_RUN_VERSION,
     identity,
+    lifecycle,
     status:
       report.passed &&
       report.score.score === 100 &&
       stats.moved === setup.items.length &&
       stats.extracted === setup.regions.length &&
       stats.maxActive === ASSEMBLY_AGENTS &&
+      agentsOf("assembly") === expectedAgents(setup.deliveries.length) &&
+      agentsOf("extraction") === expectedAgents(setup.extractions.length) &&
       report.remainingMarkers === 0 &&
       report.attempts.length === 0 &&
       assembled.buildPassed &&
@@ -510,6 +554,8 @@ export async function verifyAssemblyCase(casePath, outputPath, { signal } = {}) 
     moved: stats.moved,
     extracted: stats.extracted,
     maxActive: stats.maxActive,
+    assemblyAgents: agentsOf("assembly"),
+    extractionAgents: agentsOf("extraction"),
     remainingMarkers: report.remainingMarkers,
     score: report.score.score,
     finalDifferences: final.structure.differenceIds.length,
@@ -531,7 +577,7 @@ function modelPools(output, config, general) {
     mode: "model",
     create(phase) {
       const drivers = chunkModelDrivers(path.join(output, phase), workspace, config, general);
-      // Each session is new, so the general instructions precede every assignment.
+      // The general instructions precede the first assignment of every session.
       return {
         usage: drivers.usage,
         cleanup: drivers.cleanup,
@@ -548,7 +594,12 @@ function modelPools(output, config, general) {
 }
 
 /** Spend model credit on one observation. The proof must come from the same clean source. */
-export async function runAssemblyModel(casePath, outputPath, config, { proofPath, signal } = {}) {
+export async function runAssemblyModel(
+  casePath,
+  outputPath,
+  config,
+  { proofPath, lifecycle = "per-delivery", signal } = {},
+) {
   const output = path.resolve(outputPath);
   const setup = await prepareAssemblyCase(casePath);
   const general = await loadGeneralPrompt();
@@ -567,6 +618,7 @@ export async function runAssemblyModel(casePath, outputPath, config, { proofPath
     start: setup.trees.scaffold,
     reference: setup.trees.final,
     corrections: true,
+    lifecycle,
     signal,
   });
 }
@@ -580,7 +632,7 @@ export async function probeAssembly(
   casePath,
   outputPath,
   config,
-  { deliveries = 0, regions = [], scripted = false, signal } = {},
+  { deliveries = 0, regions = [], scripted = false, lifecycle = "per-delivery", signal } = {},
 ) {
   assert.ok(Number.isSafeInteger(deliveries) && deliveries >= 0);
   assert.ok(Array.isArray(regions));
@@ -623,6 +675,7 @@ export async function probeAssembly(
     start,
     reference: cleanupAssemblyMarkers(expected, setup.markers).tree,
     corrections: false,
+    lifecycle,
     signal,
   });
 }

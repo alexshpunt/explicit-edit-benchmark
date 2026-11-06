@@ -1,7 +1,7 @@
 # Line difference score
 
 Restoring (`run-canonical`, run version `renderer-canonical-run-v3`) and two-phase
-assembly (`assembly-run`, run version `renderer-assembly-run-v2`) measure a round
+assembly (`assembly-run`, run versions `renderer-assembly-run-v2` and later) measure a round
 by line differences against the trusted endpoint. Earlier policies keep their
 meaning and are not rescored in place: version 2 canonical runs, version 1
 assembly runs and chunk runs counted structural units (described at the end of

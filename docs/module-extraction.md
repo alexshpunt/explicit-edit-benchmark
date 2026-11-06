@@ -53,12 +53,24 @@ identify.
 
 Assembly deliveries hold at most ten items and about 2 kB, as before. They form
 one queue that interleaves regions: the first delivery of every region, then
-every second delivery, and so on. A free slot takes the next delivery. Every
-delivery in every phase and correction starts a new agent with an empty context;
-the general instructions precede its assignment, startup does not count toward
-the 300-second limit, and the agent is closed when its delivery ends. The limit
-bounds a run without cutting off slower models; policy version 1 used 120
-seconds. The
+every second delivery, and so on. A free slot takes the next delivery. The
+agent lifecycle of assembly and extraction is chosen per run:
+
+- `per-delivery` (default): every delivery starts a new agent with an empty
+  context; the general instructions precede its assignment, and the agent is
+  closed when its delivery ends.
+- `persistent`: each of the twenty slots keeps its agent, so the agent takes
+  the next delivery with its whole history, about 27 assembly deliveries per
+  agent. The general instructions precede only its first assignment. A delivery
+  that reaches the limit closes the agent, and the slot starts a new one for its
+  next delivery. Assembly agents are not carried into extraction; with fewer
+  regions than slots, every region still gets its own agent.
+
+Corrections always start a new agent for every assignment. The lifecycle is part
+of the run policy and the report, and usage is recorded once per agent session;
+compare scores only between runs with the same lifecycle. Startup does not count
+toward the 300-second limit. The limit bounds a run without cutting off slower
+models; policy version 1 used 120 seconds. The
 controller never repairs source, regions or placeholders and never rewrites an
 assignment. Placeholders still present after extraction are removed before the
 first capture and counted in the report.
@@ -74,6 +86,7 @@ regions; it and the final files must render the expected images.
 ```sh
 node scripts/module-extraction.mjs assembly-verify FLAT_CASE NEW_REFERENCE
 node scripts/module-extraction.mjs assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --allow-model-calls
+node scripts/module-extraction.mjs assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --agent-lifecycle persistent --allow-model-calls
 node scripts/module-extraction.mjs assembly-probe FLAT_CASE NEW_PROBE --deliveries 40 --config PRIVATE_JSON --allow-model-calls
 node scripts/module-extraction.mjs assembly-probe FLAT_CASE NEW_PROBE --regions frond_noise.h,frond_bvh.cpp --scripted
 ```
