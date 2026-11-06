@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -752,7 +759,7 @@ export async function probeAssembly(
 }
 
 /** The mixed probe's identity: clean source, its tasks and the general prompt. */
-async function mixedProbeIdentity(probe, general, harness) {
+async function mixedProbeIdentity(probe, general, harness, agents = ASSEMBLY_AGENTS) {
   const source = await restoringSourceIdentity();
   assert.equal(source.sourceClean, true, "Mixed probes require clean committed source");
   return {
@@ -762,9 +769,51 @@ async function mixedProbeIdentity(probe, general, harness) {
     counts: probe.counts,
     identities: probe.identities,
     generalSha256: hash(general),
-    agents: ASSEMBLY_AGENTS,
+    agents,
     deadlineSeconds: ASSEMBLY_DELIVERY_DEADLINE_MS / 1000,
     harness,
+  };
+}
+
+/** Sample the resident memory of this process's descendants every five seconds
+ * and report the peak, in megabytes, with the process count at that moment.
+ */
+function sampleTreeMemory() {
+  const peak = { megabytes: 0, processes: 0 };
+  const sample = () => {
+    const parents = new Map(),
+      rss = new Map();
+    for (const pid of readdirSync("/proc")) {
+      if (!/^\d+$/.test(pid)) continue;
+      try {
+        const status = readFileSync(`/proc/${pid}/status`, "utf8");
+        parents.set(Number(pid), Number(/^PPid:\s+(\d+)/m.exec(status)?.[1]));
+        rss.set(Number(pid), Number(/^VmRSS:\s+(\d+)/m.exec(status)?.[1] ?? 0));
+      } catch {
+        // A process that exits between listing and reading has no memory left to count.
+      }
+    }
+    const within = (pid) => {
+      for (let at = parents.get(pid); at; at = parents.get(at)) if (at === process.pid) return true;
+      return false;
+    };
+    let kilobytes = 0,
+      processes = 0;
+    for (const [pid, size] of rss)
+      if (within(pid)) {
+        kilobytes += size;
+        processes++;
+      }
+    if (kilobytes / 1024 > peak.megabytes)
+      Object.assign(peak, { megabytes: Math.round(kilobytes / 1024), processes });
+  };
+  const timer = setInterval(sample, 5000);
+  timer.unref();
+  return {
+    stop() {
+      clearInterval(timer);
+      return peak;
+    },
   };
 }
 
@@ -844,8 +893,9 @@ export async function runMixedProbe(
   casePath,
   outputPath,
   config,
-  { proofPath, counts = {}, signal } = {},
+  { proofPath, counts = {}, agents = ASSEMBLY_AGENTS, signal } = {},
 ) {
+  assert.ok(Number.isInteger(agents) && agents >= 1 && agents <= ASSEMBLY_AGENTS);
   const output = path.resolve(outputPath);
   const probe = await prepareMixedProbe(casePath, counts);
   const general = await loadGeneralPrompt();
@@ -856,21 +906,28 @@ export async function runMixedProbe(
     await mixedProbeIdentity(probe, general, null),
     "The reference proof belongs to other source or tasks",
   );
-  const identity = await mixedProbeIdentity(probe, general, config.harness ?? "baseline-agent");
+  const identity = await mixedProbeIdentity(
+    probe,
+    general,
+    config.harness ?? "baseline-agent",
+    agents,
+  );
   const started = Date.now();
+  const memory = sampleTreeMemory();
   const report = await runAssemblyObservation({
     setup: probe.setup,
     output,
     pools: modelPools(output, config, general),
     identity,
     general,
-    phases: [{ name: "mixed", entries: probe.queue, prompt: (entry) => entry.prompt }],
+    phases: [{ name: "mixed", entries: probe.queue, prompt: (entry) => entry.prompt, agents }],
     start: probe.start,
     reference: probe.expected,
     corrections: false,
     signal,
   });
   const minutes = (Date.now() - started) / 60000;
+  const peakMemory = memory.stop();
   const main = await readFile(path.join(output, "workspace", "main.cpp"), "utf8");
   const grade = gradeMixedProbe(probe, main);
   const build = await measureMain(
@@ -895,6 +952,7 @@ export async function runMixedProbe(
     buildPassed: build.buildPassed,
     resultMatched: build.resultMatched,
     usage,
+    peakMemory,
   };
   await writeFile(path.join(output, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
     flag: "wx",
