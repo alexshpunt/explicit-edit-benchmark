@@ -10,10 +10,11 @@ import {
 import { describeNamed } from "./assembly-prose.mjs";
 
 export const ASSEMBLY_CORRECTION_POLICY = Object.freeze({
-  version: "renderer-assembly-corrections-v1",
+  version: "renderer-assembly-corrections-v2",
   units: "named-units-and-blocks-described-by-problem-and-place",
   text: "only-when-no-exact-copy-exists-anywhere",
   otherLines: "changed-hunks-with-surrounding-lines",
+  renames: "old-names-left-in-code-counted-per-file-before-other-problems",
   otherEntries: LINE_DIFFERENCE_CORRECTION_POLICY.version,
   grouping: "one-file-per-assignment",
   extraFiles: "moves-out-and-deletion-in-one-assignment",
@@ -134,7 +135,13 @@ function occurrenceIndex(candidateTree) {
  * place, never by their text, unless that text exists nowhere in the project.
  * Lines outside units, extra files and other entries are described as they are.
  */
-export function assemblyCorrections(setup, prepared, comparison, candidateTree) {
+export function assemblyCorrections(
+  setup,
+  prepared,
+  comparison,
+  candidateTree,
+  { leftovers = new Map() } = {},
+) {
   assert.equal(comparison.startIdentity, prepared.startIdentity);
   assert.equal(comparison.referenceIdentity, prepared.referenceIdentity);
   const layout = referenceLayout(setup);
@@ -259,6 +266,14 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
     entries.get(file).push(entry);
     for (const id of entry.differenceIds) covered.add(id);
   };
+  // Old names left in code come first: the other problems assume the renames are complete.
+  for (const [file, names] of leftovers)
+    for (const { name, newName, count } of names)
+      add(file, {
+        differenceIds: [],
+        first: true,
+        prose: `The identifier ${code(name)} was renamed to ${code(newName)}, but ${count === 1 ? `1 occurrence of ${code(name)} remains` : `${count} occurrences of ${code(name)} remain`} in the code of ${file}. Replace ${count === 1 ? "it" : "each of them"} with ${code(newName)}. Do not change comments or string and character literals, and do not change longer identifiers that only contain ${code(name)} as a part.`,
+      });
 
   // Destination order keeps the assignments stable and readable.
   const ordered = [...needs.values()].sort(

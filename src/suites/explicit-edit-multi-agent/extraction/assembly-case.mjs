@@ -5,6 +5,7 @@ import { partitionFlatTask } from "./flat-batches.mjs";
 import { loadFlatCase } from "./flat-case.mjs";
 import { scaffoldFlatPlan } from "./flat-scaffold.mjs";
 import { CODE_TRAP_VERSION, applyCodeTraps } from "./code-traps.mjs";
+import { prepareAssemblyRenames, renameIdentifiers } from "./assembly-renames.mjs";
 import { flatVendorContract } from "./flat-vendor-contract.mjs";
 import { symbolSpecifications } from "./symbol-spec.mjs";
 import {
@@ -330,6 +331,10 @@ export function scriptedAssemblyWriter(setup) {
       }
       return main;
     },
+    rename(main, delivery) {
+      const { name, newName } = delivery.rename;
+      return renameIdentifiers(main, new Map([[name, newName]]));
+    },
     extract(tree, extraction) {
       const region = setup.regions.find((candidate) => candidate.file === extraction.file);
       assert.ok(region && !Object.hasOwn(tree, region.file), "Region already extracted");
@@ -376,14 +381,18 @@ export function cleanupAssemblyMarkers(tree, markers) {
   return { tree: cleaned, remaining };
 }
 
-/** Load a verified flat case, add code traps at the chosen level and derive its assembly case. */
-export async function prepareAssemblyCase(casePath, { traps = 0 } = {}) {
+/** Load a verified flat case, add code traps at the chosen level, derive its
+ * assembly case and add renames of the given share of uniquely spelled symbols.
+ */
+export async function prepareAssemblyCase(casePath, { traps = 0, renames = 0 } = {}) {
   const { plan: verified, manifest } = await loadFlatCase(casePath);
   const plan = applyCodeTraps(verified, traps);
+  const setup = await prepareAssemblyPlan(plan);
   return {
     plan,
     manifest,
     traps: { version: CODE_TRAP_VERSION, level: traps, insertions: plan.traps?.insertions ?? 0 },
-    ...(await prepareAssemblyPlan(plan)),
+    ...setup,
+    ...(await prepareAssemblyRenames(setup, renames)),
   };
 }

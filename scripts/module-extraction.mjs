@@ -16,8 +16,8 @@ const help = `Experimental paired-module extraction
   chunk-smoke NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls
   chunk-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls
   chunk-rescore FLAT_CASE SAVED_RUN NEW_OUTPUT
-  assembly-verify FLAT_CASE NEW_RUN [--agent-lifecycle LIFECYCLE] [--traps LEVEL]
-  assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--agent-lifecycle LIFECYCLE] [--traps LEVEL]
+  assembly-verify FLAT_CASE NEW_RUN [--agent-lifecycle LIFECYCLE] [--traps LEVEL] [--renames PERCENT]
+  assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--agent-lifecycle LIFECYCLE] [--traps LEVEL] [--renames PERCENT]
   assembly-probe FLAT_CASE NEW_RUN [--deliveries N] [--regions FILE[,FILE]] [--agent-lifecycle LIFECYCLE] [--traps LEVEL] (--scripted | --config PRIVATE_JSON --allow-model-calls)
 
 Each selected module must have both an original .h and .cpp. Each file is one
@@ -60,6 +60,11 @@ LEVEL 0 to 3 (default 0) adds deterministic code traps to main.cpp before
 assembly: comments, literals and initializers with braces, commented-out copies,
 unused macros and tag-typed overloads. The level is part of the case identity, so
 the reference proof must use the same level.
+PERCENT 0 to 100 (default 0) adds a rename phase between assembly and extraction:
+that share, rounded up, of the functions, types and fields whose identifier
+means one symbol everywhere in the code of main.cpp, most used first, is renamed
+one per delivery. Comments and literals keep the old name. The share is part of
+the case identity, so the reference proof must use the same share.
 assembly-verify is the scripted reference and must report Score 100 from clean
 committed source. assembly-probe runs the first assembly deliveries of the queue
 and/or the extraction of chosen regions, compares the result with the scripted
@@ -151,10 +156,13 @@ async function assemblyCommand(values, positionals) {
   assert.ok(assembly.ASSEMBLY_AGENT_LIFECYCLES.includes(lifecycle), help);
   const traps = values.traps === undefined ? 0 : Number(values.traps);
   assert.ok(Number.isSafeInteger(traps), help);
+  const renames = values.renames === undefined ? 0 : Number(values.renames);
+  assert.ok(Number.isSafeInteger(renames) && (!probe || renames === 0), help);
   if (command === "assembly-verify") {
     const summary = await assembly.verifyAssemblyCase(paths[0], paths[1], {
       lifecycle,
       traps,
+      renames,
       signal,
     });
     console.log(JSON.stringify(summary));
@@ -174,6 +182,7 @@ async function assemblyCommand(values, positionals) {
         proofPath: values.proof,
         lifecycle,
         traps,
+        renames,
         signal,
       });
   const final = report.stages.at(-1);
@@ -186,6 +195,7 @@ async function assemblyCommand(values, positionals) {
       kind: report.kind,
       lifecycle: report.lifecycle,
       traps: report.identity.traps.level,
+      renames: report.identity.renames.selected,
       totalUnits: report.totalUnits,
       deliveries: report.deliveries.length,
       timedOut: report.deliveries.filter((row) => row.status === "timed-out").length,
@@ -228,10 +238,16 @@ try {
       scripted: { type: "boolean" },
       "agent-lifecycle": { type: "string" },
       traps: { type: "string" },
+      renames: { type: "string" },
     },
   });
   if (!positionals[0]?.startsWith("assembly-"))
-    assert.ok(values["agent-lifecycle"] === undefined && values.traps === undefined, help);
+    assert.ok(
+      values["agent-lifecycle"] === undefined &&
+        values.traps === undefined &&
+        values.renames === undefined,
+      help,
+    );
   if (values.help) console.log(help);
   else if (positionals[0]?.startsWith("chunk-")) await chunkCommand(values, positionals);
   else if (positionals[0]?.startsWith("assembly-")) await assemblyCommand(values, positionals);

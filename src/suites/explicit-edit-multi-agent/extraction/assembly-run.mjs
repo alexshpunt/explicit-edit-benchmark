@@ -40,6 +40,7 @@ import {
   scriptedAssemblyWriter,
 } from "./assembly-case.mjs";
 import { ASSEMBLY_CORRECTION_POLICY, assemblyCorrections } from "./assembly-corrections.mjs";
+import { ASSEMBLY_RENAME_VERSION, renameLeftovers } from "./assembly-renames.mjs";
 import { integrationPrompt, loadGeneralPrompt, physicalUnits } from "./chunk-run.mjs";
 import { captureExtractionState } from "./run.mjs";
 
@@ -48,7 +49,7 @@ export const ASSEMBLY_AGENTS = 20;
 /** Long enough that slower models are not cut off, short enough to bound a run. */
 export const ASSEMBLY_DELIVERY_DEADLINE_MS = 300_000;
 export const ASSEMBLY_AGENT_LIFECYCLES = AGENT_LIFECYCLES;
-const ASSEMBLY_POLICY_VERSION = "renderer-assembly-policy-v6";
+const ASSEMBLY_POLICY_VERSION = "renderer-assembly-policy-v7";
 
 /** The lifecycle of assembly and extraction agents is part of the run policy, so
  * scores from per-delivery and persistent runs are never compared as one kind.
@@ -60,7 +61,9 @@ export function assemblyRunPolicy(lifecycle = "per-delivery") {
   return Object.freeze({
     version: ASSEMBLY_POLICY_VERSION,
     case: ASSEMBLY_CASE_VERSION,
-    phases: Object.freeze(["assembly", "extraction"]),
+    // The rename phase runs only for a case with renames.
+    phases: Object.freeze(["assembly", "rename", "extraction"]),
+    renames: ASSEMBLY_RENAME_VERSION,
     agents: ASSEMBLY_AGENTS,
     lifecycle,
     queue: AGENT_QUEUE_POLICIES[lifecycle],
@@ -97,6 +100,7 @@ export async function assemblyRunIdentity(setup, general, { requireClean = true 
     source,
     planSha256: setup.manifest.planSha256,
     traps: setup.traps,
+    renames: renameSummary(setup),
     caseIdentities: setup.identities,
     generalSha256: hash(general),
     policy: ASSEMBLY_RUN_POLICY.version,
@@ -303,9 +307,21 @@ async function runAssemblyObservation({
         extraUnits: physicalUnits(state.physicalDiagnostics),
       });
       // Probes compare with a partial reference and issue no corrections.
-      assignments = corrections
-        ? assemblyCorrections(setup, prepared, structure, state.completeTree)
-        : [];
+      if (corrections) {
+        // Old names left in code get one rename instruction instead of a hunk per line.
+        const { tree, leftovers } = renameLeftovers(state.completeTree, setup.renames.selected);
+        assignments = assemblyCorrections(
+          setup.reference,
+          prepared,
+          leftovers.size
+            ? compareLineDifferences(prepared, tree, {
+                extraUnits: physicalUnits(state.physicalDiagnostics),
+              })
+            : structure,
+          tree,
+          { leftovers },
+        );
+      } else assignments = [];
     }
     await assertCandidateUnchanged(workspace, state.candidate, { signal: abort });
     let integration,
@@ -434,7 +450,8 @@ function referencePools(workspace, setup) {
   let serial = 0,
     active = 0,
     maxActive = 0,
-    extracted = 0;
+    extracted = 0,
+    renamed = 0;
   const write = (file, content) => {
     const target = path.join(workspace, file);
     mkdirSync(path.dirname(target), { recursive: true });
@@ -443,7 +460,7 @@ function referencePools(workspace, setup) {
   };
   return {
     mode: "scripted-reference",
-    stats: () => ({ moved: writer.removed(), extracted, maxActive }),
+    stats: () => ({ moved: writer.removed(), renamed, extracted, maxActive }),
     create: (phase) => ({
       async createDriver() {
         const id = ++serial;
@@ -457,7 +474,7 @@ function referencePools(workspace, setup) {
       },
       async execute(_driver, _prompt, { item, index }) {
         assert.ok(
-          ["assembly", "extraction"].includes(phase),
+          ["assembly", "rename", "extraction"].includes(phase),
           "The reference received a correction",
         );
         active++;
@@ -467,7 +484,10 @@ function referencePools(workspace, setup) {
           // Synchronous reads and writes keep each scripted delivery atomic in the event loop.
           const main = readFileSync(path.join(workspace, "main.cpp"), "utf8");
           if (phase === "assembly") write("main.cpp", writer.assemble(main, item.items));
-          else {
+          else if (phase === "rename") {
+            write("main.cpp", writer.rename(main, item));
+            renamed++;
+          } else {
             const tree = writer.extract({ "main.cpp": main }, item);
             write(item.file, tree[item.file]);
             write("main.cpp", tree["main.cpp"]);
@@ -486,18 +506,27 @@ function referencePools(workspace, setup) {
 function observationPhases(setup) {
   return [
     { name: "assembly", entries: setup.deliveries, prompt: (delivery) => delivery.prompt },
+    ...(setup.renameDeliveries.length
+      ? [{ name: "rename", entries: setup.renameDeliveries, prompt: (entry) => entry.prompt }]
+      : []),
     { name: "extraction", entries: setup.extractions, prompt: (entry) => entry.prompt },
   ];
+}
+
+/** The rename share and selection are part of the case identity. */
+function renameSummary(setup) {
+  const { version, percent, eligible, selected } = setup.renames;
+  return { version, percent, eligible, selected: selected.length };
 }
 
 /** Model-free proof that the measured route reaches the trusted endpoint with Score 100. */
 export async function verifyAssemblyCase(
   casePath,
   outputPath,
-  { lifecycle = "per-delivery", traps = 0, signal } = {},
+  { lifecycle = "per-delivery", traps = 0, renames = 0, signal } = {},
 ) {
   const output = path.resolve(outputPath);
-  const setup = await prepareAssemblyCase(casePath, { traps });
+  const setup = await prepareAssemblyCase(casePath, { traps, renames });
   const general = await loadGeneralPrompt();
   const identity = await assemblyRunIdentity(setup, general);
   const pools = referencePools(path.join(output, "workspace"), setup);
@@ -541,11 +570,15 @@ export async function verifyAssemblyCase(
     identity,
     lifecycle,
     traps: setup.traps,
+    renames: renameSummary(setup),
     status:
       report.passed &&
       report.score.score === 100 &&
       stats.moved === setup.items.length &&
+      stats.renamed === setup.renameDeliveries.length &&
       stats.extracted === setup.regions.length &&
+      (!setup.renameDeliveries.length ||
+        agentsOf("rename") === expectedAgents(setup.renameDeliveries.length)) &&
       stats.maxActive === ASSEMBLY_AGENTS &&
       agentsOf("assembly") === expectedAgents(setup.deliveries.length) &&
       agentsOf("extraction") === expectedAgents(setup.extractions.length) &&
@@ -563,6 +596,8 @@ export async function verifyAssemblyCase(
     extracted: stats.extracted,
     maxActive: stats.maxActive,
     assemblyAgents: agentsOf("assembly"),
+    renamed: stats.renamed,
+    renameAgents: setup.renameDeliveries.length ? agentsOf("rename") : 0,
     extractionAgents: agentsOf("extraction"),
     remainingMarkers: report.remainingMarkers,
     score: report.score.score,
@@ -608,10 +643,10 @@ export async function runAssemblyModel(
   casePath,
   outputPath,
   config,
-  { proofPath, lifecycle = "per-delivery", traps = 0, signal } = {},
+  { proofPath, lifecycle = "per-delivery", traps = 0, renames = 0, signal } = {},
 ) {
   const output = path.resolve(outputPath);
-  const setup = await prepareAssemblyCase(casePath, { traps });
+  const setup = await prepareAssemblyCase(casePath, { traps, renames });
   const general = await loadGeneralPrompt();
   const identity = await assemblyRunIdentity(setup, general);
   const proof = JSON.parse(await readFile(proofPath, "utf8"));
