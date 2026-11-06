@@ -30,8 +30,8 @@ export function renameIdentifiers(text, names) {
  * function body and outside the standard library, or null for everything else.
  */
 export function renameKind(usr) {
-  if (typeof usr !== "string" || /^c:[^@]*@\d/.test(usr) || usr.includes("@N@std")) return null;
-  if (/@E@\w+@\w+$|@EA@/.test(usr)) return null;
+  if (typeof usr !== "string" || /^c:[^@]*@\d|^c:@N@std@/.test(usr)) return null;
+  if (/@E@\w+@\w+$|@EA@\w*$/.test(usr)) return null;
   if (/@FI@\w+$/.test(usr)) return "field";
   if (/@(S|ST>[^@]*|U|E|T|SA|UA)@\w+$/.test(usr)) return "type";
   // Parameter types follow a function's name; a local static variable follows them after "#@".
