@@ -73,13 +73,19 @@ test("traps inside units move with them; traps between units stay in the source"
   assert.match(twice.text, /\n {2}\/\/ \}; the unit does not end here \{\n/);
   assert.match(twice.text, /\n {2}\(void\)"\}; \{";\n/);
   assert.match(twice.text, /\n {2}\(void\)R"trap\(\};\n\{\)trap";\n/);
-  assert.match(twice.text, /\[\[maybe_unused\]\] const int explicit_edit_trap_\d+\[\] = \{0, 1\};\n\}$/);
+  assert.match(
+    twice.text,
+    /\[\[maybe_unused\]\] const int explicit_edit_trap_\d+\[\] = \{0, 1\};\n\}$/,
+  );
   assert.match(pair.text, /\n {2}\/\/ \};\n\};$/);
   assert.equal(real.text, "using Real = float;", "Unnamed blocks keep their text");
   // Between units: a comment, a commented copy, an initializer, a raw string and a macro.
   const before = main.slice(0, twice.start);
   assert.match(before, /\/\/ \}; \{\n/);
-  assert.match(before, /\/\*\ninline float twice\(float x\) \{\n {2}return x \* 2\.0f;\n\}\n\*\/\n/);
+  assert.match(
+    before,
+    /\/\*\ninline float twice\(float x\) \{\n {2}return x \* 2\.0f;\n\}\n\*\/\n/,
+  );
   assert.match(before, /static const int explicit_edit_trap_\d+\[\] = \{1, 2\};\n/);
   assert.match(before, /R"trap\(\n\};\n\)trap";\n/);
   assert.match(before, /#define EXPLICIT_EDIT_TRAP_\d+\(x\) \{ x; \}\n/);
@@ -90,7 +96,10 @@ test("traps inside units move with them; traps between units stay in the source"
     after,
     /struct ExplicitEditTrapTag\d+ \{\};\ninline float twice\(float x, ExplicitEditTrapTag\d+\) \{/,
   );
-  assert.match(main.slice(trapped.tasks[1].fragments[0].end), /int answer\(ExplicitEditTrapTag\d+\)/);
+  assert.match(
+    main.slice(trapped.tasks[1].fragments[0].end),
+    /int answer\(ExplicitEditTrapTag\d+\)/,
+  );
   assert.deepEqual(trapped.traps.level, 1);
 });
 

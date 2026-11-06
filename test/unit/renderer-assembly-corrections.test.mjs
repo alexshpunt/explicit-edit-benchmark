@@ -129,9 +129,23 @@ test("units that moved together are described as one run", () => {
 test("a neighbour with several copies in the file is named with its copy number", () => {
   const declaration = "inline float half(float x);";
   const units = [
-    named("c-1", "c.h", "function declaration", "inline float half(float x)", declaration, slot(3, 1)),
+    named(
+      "c-1",
+      "c.h",
+      "function declaration",
+      "inline float half(float x)",
+      declaration,
+      slot(3, 1),
+    ),
     named("c-2", "c.h", "struct", "struct Pair", B.trimEnd(), slot(3, 2)),
-    named("c-3", "c.h", "function declaration", "inline float half(float x)", declaration, slot(3, 3)),
+    named(
+      "c-3",
+      "c.h",
+      "function declaration",
+      "inline float half(float x)",
+      declaration,
+      slot(3, 3),
+    ),
     named("c-4", "c.h", "function", "float twice(float x)", A.trimEnd(), slot(3, 4)),
   ];
   const region = {
@@ -140,9 +154,16 @@ test("a neighbour with several copies in the file is named with its copy number"
     body: units.map(({ marker }) => `${marker}\n`).join(""),
     items: units,
   };
-  const local = { items: units, regions: [region], trees: { final: { "main.cpp": MAIN, "c.h": fill(region) } } };
+  const local = {
+    items: units,
+    regions: [region],
+    trees: { final: { "main.cpp": MAIN, "c.h": fill(region) } },
+  };
   const reference = prepareLineDifferences({ "main.cpp": A + B + MAIN }, local.trees.final);
-  const candidate = { "main.cpp": `${MAIN}${A}`, "c.h": `#pragma once\n${declaration}\n${B}${declaration}\n` };
+  const candidate = {
+    "main.cpp": `${MAIN}${A}`,
+    "c.h": `#pragma once\n${declaration}\n${B}${declaration}\n`,
+  };
   const [{ prompt }] = assemblyCorrections(
     local,
     reference,

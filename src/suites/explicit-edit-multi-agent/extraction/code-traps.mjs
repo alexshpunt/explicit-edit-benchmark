@@ -23,7 +23,8 @@ const RATES = Object.freeze({
 });
 
 const hash = (value) => createHash("sha256").update(value).digest();
-const draw = (kind, id) => hash(`${CODE_TRAP_VERSION}\u0000${kind}\u0000${id}`).readUInt16BE(0) % 100;
+const draw = (kind, id) =>
+  hash(`${CODE_TRAP_VERSION}\u0000${kind}\u0000${id}`).readUInt16BE(0) % 100;
 
 /** Text outside comments and literals, with protected spans blanked to spaces. */
 function code(text) {
@@ -107,11 +108,9 @@ export function applyCodeTraps(plan, level = 0, { rates = RATES } = {}) {
           });
       }
       if ((kind === "record" || kind === "enum") && tail.trim() === "};" && text.includes("\n"))
-        if (chosen("memberComment", id))
-          insertions.push({ at: closing, text: `${inner}// };\n` });
+        if (chosen("memberComment", id)) insertions.push({ at: closing, text: `${inner}// };\n` });
       if (!lineStart) continue;
-      if (chosen("betweenComment", id))
-        insertions.push({ at: start, text: `// }; {\n` });
+      if (chosen("betweenComment", id)) insertions.push({ at: start, text: `// }; {\n` });
       // Unnamed blocks are found by their text, so only named units get a commented copy.
       if (
         kind !== "other" &&
@@ -146,7 +145,9 @@ export function applyCodeTraps(plan, level = 0, { rates = RATES } = {}) {
       }
     }
   // Insertions at a unit's start precede it; insertions at its end follow it.
-  insertions.sort((left, right) => left.at - right.at || Number(!left.after) - Number(!right.after));
+  insertions.sort(
+    (left, right) => left.at - right.at || Number(!left.after) - Number(!right.after),
+  );
   let next = "",
     position = 0;
   for (const insertion of insertions) {
