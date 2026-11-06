@@ -86,6 +86,23 @@ agent lifecycle of assembly and extraction is chosen per run:
   next delivery. Assembly agents are not carried into extraction; with fewer
   regions than slots, every region still gets its own agent.
 
+A case can carry code traps for agents that cut text by pattern instead of by
+unit. `--traps LEVEL` (0 to 3, default 0) adds them deterministically to
+`main.cpp` before the case is derived; each level step adds a fixed share of
+eligible units per trap kind, so level 2 adds about 1,000 insertions to this
+case. Traps inside a unit move with it: comments, unused string and raw string
+literals and an unused local initializer containing `};` and `{` before a
+function's closing line, and a `// };` comment before the closing `};` of a
+struct, class, union or enum. Traps between units stay in `main.cpp`: comment
+lines with braces, a commented-out copy of the following function, struct or
+enum, unused initializers and raw strings ending in `};`, unused macros with
+braces, and an overload of the preceding free function that takes an extra
+unused tag type, so no existing call can select it. Unnamed blocks get no
+commented-out copy, because they are identified by their text. The level, the
+trap version and the number of insertions are part of the case identity, and the
+scripted reference proves that the trapped assembled unity build and the final
+files build and render the expected images.
+
 Corrections always start a new agent for every assignment. The lifecycle is part
 of the run policy and the report, and usage is recorded once per agent session;
 compare scores only between runs with the same lifecycle. Startup does not count
