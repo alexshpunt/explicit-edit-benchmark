@@ -43,7 +43,7 @@ test("a struct that lost its closing lines costs only the lines that differ", ()
     finalBuildPassed: false,
     finalImageMatched: null,
   });
-  assert.equal(score.version, "renderer-line-difference-score-v1");
+  assert.equal(score.version, "renderer-line-difference-score-v2");
   assert.equal(score.structural.rawBalance, 6);
 });
 
