@@ -156,7 +156,11 @@ export function renameProse({ name, newName, kind }) {
  */
 export async function prepareAssemblyRenames(setup, percent) {
   assert.ok(Number.isInteger(percent) && percent >= 0 && percent <= 100, "Invalid rename share");
-  const reference = { regions: setup.regions, items: setup.items, trees: { final: setup.trees.final } };
+  const reference = {
+    regions: setup.regions,
+    items: setup.items,
+    trees: { final: setup.trees.final },
+  };
   if (percent === 0)
     return {
       renames: { version: ASSEMBLY_RENAME_VERSION, percent, eligible: 0, selected: [] },
@@ -173,7 +177,14 @@ export async function prepareAssemblyRenames(setup, percent) {
   const selected = assignNames(
     unique
       .slice(0, count)
-      .map(({ name, kind, uses, usr }) => ({ name, kind, uses, family: usr, scope: "", role: kind })),
+      .map(({ name, kind, uses, usr }) => ({
+        name,
+        kind,
+        uses,
+        family: usr,
+        scope: "",
+        role: kind,
+      })),
     used,
   ).map(({ name, newName, kind, uses }) => ({ name, newName, kind, uses }));
   const names = new Map(selected.map(({ name, newName }) => [name, newName]));

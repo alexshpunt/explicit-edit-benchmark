@@ -131,7 +131,10 @@ test("the scripted route through assembly, renames and extraction reaches the re
   // The renamed view describes the renamed reference, so it needs no correction.
   const prepared = prepareLineDifferences(setup.trees.markerFree, renamed.trees.final);
   const exact = compareLineDifferences(prepared, renamed.trees.final);
-  assert.deepEqual(assemblyCorrections(renamed.reference, prepared, exact, renamed.trees.final), []);
+  assert.deepEqual(
+    assemblyCorrections(renamed.reference, prepared, exact, renamed.trees.final),
+    [],
+  );
 });
 
 test("old names left in code become one rename instruction per name and file", async () => {
@@ -144,7 +147,10 @@ test("old names left in code become one rename instruction per name and file", a
   };
   const { tree, leftovers } = renameLeftovers(candidate, renamed.renames.selected);
   assert.deepEqual(tree, renamed.trees.final);
-  assert.deepEqual([...leftovers], [["a.h", [{ name: "Shape", newName: shape.newName, count: 1 }]]]);
+  assert.deepEqual(
+    [...leftovers],
+    [["a.h", [{ name: "Shape", newName: shape.newName, count: 1 }]]],
+  );
   const prepared = prepareLineDifferences(setup.trees.markerFree, renamed.trees.final);
   const assignments = assemblyCorrections(
     renamed.reference,
