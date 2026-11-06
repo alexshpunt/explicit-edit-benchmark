@@ -310,7 +310,11 @@ export async function prepareMixedProbe(casePath, options = {}) {
   const expected = cleanupAssemblyMarkers({ "main.cpp": main }, setup.markers).tree;
 
   const assignments = [
-    ...renames.map((rename) => ({ id: `rename-${rename.kind}-${rename.name}`, rename, prompt: renameProse(rename) })),
+    ...renames.map((rename) => ({
+      id: `rename-${rename.kind}-${rename.name}`,
+      rename,
+      prompt: renameProse(rename),
+    })),
   ];
   // Spread the renames through the move queue so they run while units move.
   const queue = [];
@@ -363,8 +367,9 @@ const lines = (text) =>
  * occurrence drops a line and an extra one adds a line. Moves never change line text.
  */
 export function gradeMixedProbe(probe, candidateMain) {
-  const candidate = cleanupAssemblyMarkers({ "main.cpp": candidateMain }, probe.setup.markers)
-    .tree["main.cpp"];
+  const candidate = cleanupAssemblyMarkers({ "main.cpp": candidateMain }, probe.setup.markers).tree[
+    "main.cpp"
+  ];
   const expected = probe.expected["main.cpp"];
   const byNewName = new Map(probe.renames.map((rename) => [rename.newName, rename]));
   const undo = (text, except) =>
