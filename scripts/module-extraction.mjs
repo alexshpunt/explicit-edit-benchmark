@@ -16,9 +16,9 @@ const help = `Experimental paired-module extraction
   chunk-smoke NEW_OUTPUT --config PRIVATE_JSON --allow-model-calls
   chunk-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls
   chunk-rescore FLAT_CASE SAVED_RUN NEW_OUTPUT
-  assembly-verify FLAT_CASE NEW_RUN [--agent-lifecycle LIFECYCLE]
-  assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--agent-lifecycle LIFECYCLE]
-  assembly-probe FLAT_CASE NEW_RUN [--deliveries N] [--regions FILE[,FILE]] [--agent-lifecycle LIFECYCLE] (--scripted | --config PRIVATE_JSON --allow-model-calls)
+  assembly-verify FLAT_CASE NEW_RUN [--agent-lifecycle LIFECYCLE] [--traps LEVEL]
+  assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--agent-lifecycle LIFECYCLE] [--traps LEVEL]
+  assembly-probe FLAT_CASE NEW_RUN [--deliveries N] [--regions FILE[,FILE]] [--agent-lifecycle LIFECYCLE] [--traps LEVEL] (--scripted | --config PRIVATE_JSON --allow-model-calls)
 
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
@@ -56,6 +56,10 @@ difference score is computed. LIFECYCLE is per-delivery (default: a new agent fo
 every delivery) or persistent (each of the twenty slots keeps its agent and its
 context for the next delivery and starts a new agent only after a timeout). The
 lifecycle is part of the report policy; compare scores only within one lifecycle.
+LEVEL 0 to 3 (default 0) adds deterministic code traps to main.cpp before
+assembly: comments, literals and initializers with braces, commented-out copies,
+unused macros and tag-typed overloads. The level is part of the case identity, so
+the reference proof must use the same level.
 assembly-verify is the scripted reference and must report Score 100 from clean
 committed source. assembly-probe runs the first assembly deliveries of the queue
 and/or the extraction of chosen regions, compares the result with the scripted
@@ -145,8 +149,14 @@ async function assemblyCommand(values, positionals) {
   const signal = controller.signal;
   const lifecycle = values["agent-lifecycle"] ?? "per-delivery";
   assert.ok(assembly.ASSEMBLY_AGENT_LIFECYCLES.includes(lifecycle), help);
+  const traps = values.traps === undefined ? 0 : Number(values.traps);
+  assert.ok(Number.isSafeInteger(traps), help);
   if (command === "assembly-verify") {
-    const summary = await assembly.verifyAssemblyCase(paths[0], paths[1], { lifecycle, signal });
+    const summary = await assembly.verifyAssemblyCase(paths[0], paths[1], {
+      lifecycle,
+      traps,
+      signal,
+    });
     console.log(JSON.stringify(summary));
     if (summary.status !== "pass") process.exitCode = 1;
     return;
@@ -157,11 +167,13 @@ async function assemblyCommand(values, positionals) {
         regions: values.regions ? values.regions.split(",") : [],
         scripted: values.scripted === true,
         lifecycle,
+        traps,
         signal,
       })
     : await assembly.runAssemblyModel(paths[0], paths[1], config, {
         proofPath: values.proof,
         lifecycle,
+        traps,
         signal,
       });
   const final = report.stages.at(-1);
@@ -173,6 +185,7 @@ async function assemblyCommand(values, positionals) {
       status: report.status,
       kind: report.kind,
       lifecycle: report.lifecycle,
+      traps: report.identity.traps.level,
       totalUnits: report.totalUnits,
       deliveries: report.deliveries.length,
       timedOut: report.deliveries.filter((row) => row.status === "timed-out").length,
@@ -214,10 +227,11 @@ try {
       regions: { type: "string" },
       scripted: { type: "boolean" },
       "agent-lifecycle": { type: "string" },
+      traps: { type: "string" },
     },
   });
   if (!positionals[0]?.startsWith("assembly-"))
-    assert.equal(values["agent-lifecycle"], undefined, help);
+    assert.ok(values["agent-lifecycle"] === undefined && values.traps === undefined, help);
   if (values.help) console.log(help);
   else if (positionals[0]?.startsWith("chunk-")) await chunkCommand(values, positionals);
   else if (positionals[0]?.startsWith("assembly-")) await assemblyCommand(values, positionals);

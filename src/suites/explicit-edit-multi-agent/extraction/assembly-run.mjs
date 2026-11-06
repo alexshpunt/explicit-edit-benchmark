@@ -96,6 +96,7 @@ export async function assemblyRunIdentity(setup, general, { requireClean = true 
   return {
     source,
     planSha256: setup.manifest.planSha256,
+    traps: setup.traps,
     caseIdentities: setup.identities,
     generalSha256: hash(general),
     policy: ASSEMBLY_RUN_POLICY.version,
@@ -493,10 +494,10 @@ function observationPhases(setup) {
 export async function verifyAssemblyCase(
   casePath,
   outputPath,
-  { lifecycle = "per-delivery", signal } = {},
+  { lifecycle = "per-delivery", traps = 0, signal } = {},
 ) {
   const output = path.resolve(outputPath);
-  const setup = await prepareAssemblyCase(casePath);
+  const setup = await prepareAssemblyCase(casePath, { traps });
   const general = await loadGeneralPrompt();
   const identity = await assemblyRunIdentity(setup, general);
   const pools = referencePools(path.join(output, "workspace"), setup);
@@ -539,6 +540,7 @@ export async function verifyAssemblyCase(
     version: ASSEMBLY_RUN_VERSION,
     identity,
     lifecycle,
+    traps: setup.traps,
     status:
       report.passed &&
       report.score.score === 100 &&
@@ -606,10 +608,10 @@ export async function runAssemblyModel(
   casePath,
   outputPath,
   config,
-  { proofPath, lifecycle = "per-delivery", signal } = {},
+  { proofPath, lifecycle = "per-delivery", traps = 0, signal } = {},
 ) {
   const output = path.resolve(outputPath);
-  const setup = await prepareAssemblyCase(casePath);
+  const setup = await prepareAssemblyCase(casePath, { traps });
   const general = await loadGeneralPrompt();
   const identity = await assemblyRunIdentity(setup, general);
   const proof = JSON.parse(await readFile(proofPath, "utf8"));
@@ -640,12 +642,19 @@ export async function probeAssembly(
   casePath,
   outputPath,
   config,
-  { deliveries = 0, regions = [], scripted = false, lifecycle = "per-delivery", signal } = {},
+  {
+    deliveries = 0,
+    regions = [],
+    scripted = false,
+    lifecycle = "per-delivery",
+    traps = 0,
+    signal,
+  } = {},
 ) {
   assert.ok(Number.isSafeInteger(deliveries) && deliveries >= 0);
   assert.ok(Array.isArray(regions));
   const output = path.resolve(outputPath);
-  const setup = await prepareAssemblyCase(casePath);
+  const setup = await prepareAssemblyCase(casePath, { traps });
   assert.ok(deliveries <= setup.deliveries.length, "Too many probe deliveries");
   const extractions = regions.map((file) => {
     const entry = setup.extractions.find((candidate) => candidate.file === file);

@@ -4,6 +4,7 @@ import { treeIdentity } from "../generation/generator.mjs";
 import { partitionFlatTask } from "./flat-batches.mjs";
 import { loadFlatCase } from "./flat-case.mjs";
 import { scaffoldFlatPlan } from "./flat-scaffold.mjs";
+import { CODE_TRAP_VERSION, applyCodeTraps } from "./code-traps.mjs";
 import { flatVendorContract } from "./flat-vendor-contract.mjs";
 import { symbolSpecifications } from "./symbol-spec.mjs";
 import {
@@ -375,8 +376,14 @@ export function cleanupAssemblyMarkers(tree, markers) {
   return { tree: cleaned, remaining };
 }
 
-/** Load a verified flat case and derive its assembly case. */
-export async function prepareAssemblyCase(casePath) {
-  const { plan, manifest } = await loadFlatCase(casePath);
-  return { plan, manifest, ...(await prepareAssemblyPlan(plan)) };
+/** Load a verified flat case, add code traps at the chosen level and derive its assembly case. */
+export async function prepareAssemblyCase(casePath, { traps = 0 } = {}) {
+  const { plan: verified, manifest } = await loadFlatCase(casePath);
+  const plan = applyCodeTraps(verified, traps);
+  return {
+    plan,
+    manifest,
+    traps: { version: CODE_TRAP_VERSION, level: traps, insertions: plan.traps?.insertions ?? 0 },
+    ...(await prepareAssemblyPlan(plan)),
+  };
 }
