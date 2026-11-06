@@ -141,15 +141,25 @@ test("old names left in code become one rename instruction per name and file", a
   const setup = await prepareAssemblyPlan(fixture());
   const renamed = await prepareAssemblyRenames(setup, 100);
   const shape = renamed.renames.selected.find(({ name }) => name === "Shape");
+  // An unterminated raw string before the old name does not hide it; a comment keeps its name.
+  const header = renamed.trees.final["a.h"];
   const candidate = {
     ...renamed.trees.final,
-    "a.h": renamed.trees.final["a.h"].replace(shape.newName, "Shape"),
+    "a.h": `const char* broken = R"x(\n${header.replace(shape.newName, "Shape")}// Shape stays\n`,
   };
-  const { tree, leftovers } = renameLeftovers(candidate, renamed.renames.selected);
-  assert.deepEqual(tree, renamed.trees.final);
+  const { tree, leftovers } = renameLeftovers(
+    candidate,
+    renamed.renames.selected,
+    renamed.trees.final,
+  );
+  assert.deepEqual(tree, {
+    ...renamed.trees.final,
+    "a.h": `const char* broken = R"x(\n${header}// Shape stays\n`,
+  });
+  const line = header.split("\n").findIndex((text) => text.includes(shape.newName)) + 2;
   assert.deepEqual(
     [...leftovers],
-    [["a.h", [{ name: "Shape", newName: shape.newName, count: 1 }]]],
+    [["a.h", [{ name: "Shape", newName: shape.newName, count: 1, lines: [line] }]]],
   );
   const prepared = prepareLineDifferences(setup.trees.markerFree, renamed.trees.final);
   const assignments = assemblyCorrections(
@@ -163,7 +173,7 @@ test("old names left in code become one rename instruction per name and file", a
   assert.match(
     assignments[0].prompt,
     new RegExp(
-      `1\\. The identifier \`Shape\` was renamed to \`${shape.newName}\`, but 1 occurrence of \`Shape\` remains in the code of a\\.h\\. Replace it with`,
+      `1\\. The identifier \`Shape\` was renamed to \`${shape.newName}\`, but 1 occurrence of \`Shape\` remains in the code of a\\.h, on line ${line} at the time of the check\\. Replace it with`,
     ),
   );
 });

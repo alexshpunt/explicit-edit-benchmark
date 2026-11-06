@@ -15,7 +15,7 @@ export const ASSEMBLY_CORRECTION_POLICY = Object.freeze({
   neighbours: "copy-number-when-repeated-and-current-line-when-in-place",
   text: "only-when-no-exact-copy-exists-anywhere",
   otherLines: "changed-hunks-with-surrounding-lines",
-  renames: "old-names-left-in-code-counted-per-file-before-other-problems",
+  renames: "old-names-on-lines-that-match-the-reference-once-renamed-first-per-file",
   otherEntries: LINE_DIFFERENCE_CORRECTION_POLICY.version,
   grouping: "one-file-per-assignment",
   extraFiles: "moves-out-and-deletion-in-one-assignment",
@@ -285,12 +285,19 @@ export function assemblyCorrections(
   };
   // Old names left in code come first: the other problems assume the renames are complete.
   for (const [file, names] of leftovers)
-    for (const { name, newName, count } of names)
+    for (const { name, newName, count, lines } of names) {
+      const where =
+        lines.length === 1
+          ? `on line ${lines[0]}`
+          : lines.length <= 20
+            ? `on lines ${lines.slice(0, -1).join(", ")} and ${lines.at(-1)}`
+            : `on ${lines.length} lines from line ${lines[0]} to line ${lines.at(-1)}`;
       add(file, {
         differenceIds: [],
         first: true,
-        prose: `The identifier ${code(name)} was renamed to ${code(newName)}, but ${count === 1 ? `1 occurrence of ${code(name)} remains` : `${count} occurrences of ${code(name)} remain`} in the code of ${file}. Replace ${count === 1 ? "it" : "each of them"} with ${code(newName)}. Do not change comments or string and character literals, and do not change longer identifiers that only contain ${code(name)} as a part.`,
+        prose: `The identifier ${code(name)} was renamed to ${code(newName)}, but ${count === 1 ? `1 occurrence of ${code(name)} remains` : `${count} occurrences of ${code(name)} remain`} in the code of ${file}, ${where} at the time of the check. Replace ${count === 1 ? "it" : "each of them"} with ${code(newName)}. Comments and string and character literals keep their text, and longer identifiers that only contain ${code(name)} as a part stay unchanged.`,
       });
+    }
 
   // Destination order keeps the assignments stable and readable.
   const ordered = [...needs.values()].sort(

@@ -114,27 +114,55 @@ export async function uniqueSpellings(main) {
   return { unique, refused, shared };
 }
 
-/** Count the old names still used in the code of each text file and return the
- * tree as it would be with those renames complete. Line numbers do not change.
+/** Count the old names left in each text file and return the tree as it would be
+ * with those renames complete. A candidate line counts only when it differs from
+ * every reference line and renaming its old names gives a reference line. This
+ * needs no lexer, so an unterminated literal left by another edit cannot hide
+ * the code after it, and comments that keep an old name are never touched.
+ * Line numbers do not change.
  */
-export function renameLeftovers(tree, selected) {
+export function renameLeftovers(tree, selected, reference) {
   const names = new Map(selected.map(({ name, newName }) => [name, newName]));
   const leftovers = new Map();
   const renamed = {};
+  if (!names.size) return { tree: { ...tree }, leftovers };
+  const wanted = new Set();
+  for (const text of Object.values(reference))
+    if (typeof text === "string") for (const line of text.split("\n")) wanted.add(line.trimEnd());
+  const pattern = new RegExp(`\\b(?:${[...names.keys()].join("|")})\\b`, "g");
   for (const [file, text] of Object.entries(tree)) {
     renamed[file] = text;
-    if (typeof text !== "string" || !names.size) continue;
+    if (typeof text !== "string") continue;
     const counts = new Map();
-    for (const token of cppTokens(text))
-      if (names.has(token.text)) counts.set(token.text, (counts.get(token.text) ?? 0) + 1);
+    const at = new Map();
+    const lines = text.split("\n").map((line, index) => {
+      if (wanted.has(line.trimEnd())) return line;
+      const found = [];
+      const next = line.replace(pattern, (name) => {
+        found.push(name);
+        return names.get(name);
+      });
+      if (!found.length || !wanted.has(next.trimEnd())) return line;
+      for (const name of found) {
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+        if (!at.has(name)) at.set(name, new Set());
+        at.get(name).add(index + 1);
+      }
+      return next;
+    });
     if (!counts.size) continue;
     leftovers.set(
       file,
       selected
         .filter(({ name }) => counts.has(name))
-        .map(({ name, newName }) => ({ name, newName, count: counts.get(name) })),
+        .map(({ name, newName }) => ({
+          name,
+          newName,
+          count: counts.get(name),
+          lines: [...at.get(name)],
+        })),
     );
-    renamed[file] = renameIdentifiers(text, names);
+    renamed[file] = lines.join("\n");
   }
   return { tree: renamed, leftovers };
 }

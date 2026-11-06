@@ -309,7 +309,11 @@ async function runAssemblyObservation({
       // Probes compare with a partial reference and issue no corrections.
       if (corrections) {
         // Old names left in code get one rename instruction instead of a hunk per line.
-        const { tree, leftovers } = renameLeftovers(state.completeTree, setup.renames.selected);
+        const { tree, leftovers } = renameLeftovers(
+          state.completeTree,
+          setup.renames.selected,
+          reference,
+        );
         assignments = assemblyCorrections(
           setup.reference,
           prepared,

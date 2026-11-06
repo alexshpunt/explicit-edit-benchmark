@@ -121,12 +121,15 @@ vocabulary and appear nowhere in the source, including comments. Each delivery
 asks one agent to rename one identifier in the code of `main.cpp` and to keep
 comments and literals unchanged; it names no position, so it stays valid after an
 imperfect assembly. The final reference carries the new names; the assembled
-reference does not. Before corrections, the controller counts old names still
-used in the code of each file. Each count becomes one instruction at the top of
-that file's correction, and the other problems are described as if the renames
-were complete, so a missed rename does not turn into one line hunk per use. The
-share, the number of qualifying spellings and the number of renames are part of
-the case identity.
+reference does not. Before corrections, the controller looks for old names in
+each file: a line counts when it differs from every reference line and renaming
+its old names gives a reference line. This needs no lexer, so a literal that an
+earlier edit left unterminated cannot hide the code after it, and a comment that
+keeps an old name is not counted. Each name becomes one instruction with its
+count and lines at the top of that file's correction, and the other problems are
+described as if the renames were complete, so a missed rename does not turn into
+one line hunk per use. The share, the number of qualifying spellings and the
+number of renames are part of the case identity.
 
 Corrections always start a new agent for every assignment. The lifecycle is part
 of the run policy and the report, and usage is recorded once per agent session;
