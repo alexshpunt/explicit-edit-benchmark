@@ -28,14 +28,14 @@ Moving a line costs two: its removal and its insertion. Because the diff is
 minimal, a block moved past fewer lines than it holds costs the lines it crossed
 instead.
 
-| Candidate                                         |   Differences |
-| ------------------------------------------------- | ------------: |
-| A 10-line function moved exactly as required      |             0 |
-| The same move not done                            |            20 |
-| A copy inserted, original not removed             |            10 |
-| One line of the function changed after the move   |             2 |
-| A struct cut short, its last two lines left behind |             4 |
-| A helper script left in the workspace (5 lines)   |             6 |
+| Candidate                                          | Differences |
+| -------------------------------------------------- | ----------: |
+| A 10-line function moved exactly as required       |           0 |
+| The same move not done                             |          20 |
+| A copy inserted, original not removed              |          10 |
+| One line of the function changed after the move    |           2 |
+| A struct cut short, its last two lines left behind |           4 |
+| A helper script left in the workspace (5 lines)    |           6 |
 
 A broken brace therefore costs the lines that actually differ; syntax errors do
 not spread to the rest of the file. Comparison never refuses a candidate.

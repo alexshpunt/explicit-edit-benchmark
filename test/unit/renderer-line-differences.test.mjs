@@ -10,7 +10,9 @@ import { lineDifferenceCorrections } from "../../src/suites/explicit-edit-multi-
 const structBody = "struct Ctx {\n  int a = {};\n  int b = 0;\n};\n";
 const tail = Array.from({ length: 50 }, (_, index) => `int f${index}();\n`).join("");
 // The moved block crosses more lines than it holds, so the cheapest diff moves the block.
-const start = { "main.cpp": `#pragma region a.h\n#pragma endregion\n${tail}${structBody}int g();\n` };
+const start = {
+  "main.cpp": `#pragma region a.h\n#pragma endregion\n${tail}${structBody}int g();\n`,
+};
 const reference = {
   "main.cpp": `#pragma region a.h\n${structBody}int g();\n#pragma endregion\n${tail}`,
 };
@@ -46,10 +48,13 @@ test("a struct that lost its closing lines costs only the lines that differ", ()
 });
 
 test("missing, extra and non-UTF-8 files are differences, order matters", () => {
-  const prepared = prepareLineDifferences({ "main.cpp": "int a;\n" }, {
-    "main.cpp": "int b;\nint c;\n",
-    "a.h": "#pragma once\n",
-  });
+  const prepared = prepareLineDifferences(
+    { "main.cpp": "int a;\n" },
+    {
+      "main.cpp": "int b;\nint c;\n",
+      "a.h": "#pragma once\n",
+    },
+  );
   const result = compareLineDifferences(prepared, {
     "main.cpp": "int c;\nint b;\n",
     "tool.py": "print(1)\n",
@@ -73,12 +78,18 @@ test("corrections describe each hunk in prose with its surrounding lines", () =>
   );
   const [main, script] = assignments.map(({ prompt }) => prompt);
   assert.ok(main.startsWith("Correct the project file main.cpp."));
-  assert.ok(main.includes("right after these lines:\n```\n#pragma region a.h\nstruct Ctx {\n  int a = {};\n```"));
+  assert.ok(
+    main.includes(
+      "right after these lines:\n```\n#pragma region a.h\nstruct Ctx {\n  int a = {};\n```",
+    ),
+  );
   assert.ok(main.includes("Add these lines:\n```\n  int b = 0;\n};\n```"));
   assert.ok(main.includes("Remove these lines:\n```\n  int b = 0;\n};\n```"));
-  assert.ok(main.includes("right after these lines:\n```\nint f47();\nint f48();\nint f49();\n```"));
+  assert.ok(
+    main.includes("right after these lines:\n```\nint f47();\nint f48();\nint f49();\n```"),
+  );
   assert.ok(script.startsWith("Delete the file move.py."));
-  assert.ok(!main.includes("\u0000") && !main.includes("{\""));
+  assert.ok(!main.includes("\u0000") && !main.includes('{"'));
   assert.deepEqual(
     assignments.flatMap(({ differenceIds }) => differenceIds).sort(),
     [...result.differenceIds].sort(),
