@@ -163,12 +163,17 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
       needs.get(owner.id).hunks.add(hunk);
     });
   }
+  // A copy is out of place when the comparison removes any of its lines; the
+  // others may only match unrelated lines by chance. A copy inside correctly
+  // placed code keeps all its lines and is never moved or removed.
   const extra = (occurrence) =>
-    occurrence.lines.every(({ line }) => removed.get(occurrence.file)?.has(line));
+    occurrence.lines.some(({ line }) => removed.get(occurrence.file)?.has(line));
   const claimed = new Set();
   const claim = (occurrence) => {
     for (const { line } of occurrence.lines) claimed.add(`${occurrence.file}:${line}`);
-    return occurrence.lines.map(({ line }) => removed.get(occurrence.file).get(line));
+    return occurrence.lines
+      .map(({ line }) => removed.get(occurrence.file).get(line))
+      .filter((id) => id !== undefined);
   };
   const free = (occurrence) =>
     extra(occurrence) &&
@@ -275,7 +280,7 @@ export function assemblyCorrections(setup, prepared, comparison, candidateTree) 
   for (const [file, lines] of index.files) {
     if (!reference(file)) continue;
     for (const [at, line] of lines.entries()) {
-      if (!removed.get(file)?.has(line.line) || claimed.has(`${file}:${line.line}`)) continue;
+      if (claimed.has(`${file}:${line.line}`)) continue;
       for (const unitId of layout.starting.get(line.text) ?? []) {
         const item = items.get(unitId);
         const unit = layout.unitLines.get(unitId);
