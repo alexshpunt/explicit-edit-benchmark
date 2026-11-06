@@ -33,8 +33,10 @@ export function renameKind(usr) {
   if (typeof usr !== "string" || /^c:[^@]*@\d/.test(usr) || usr.includes("@N@std")) return null;
   if (/@E@\w+@\w+$|@EA@/.test(usr)) return null;
   if (/@FI@\w+$/.test(usr)) return "field";
-  if (/@(F|FT)@[^@]*$/.test(usr)) return "function";
   if (/@(S|ST>[^@]*|U|E|T|SA|UA)@\w+$/.test(usr)) return "type";
+  // Parameter types follow a function's name; a local static variable follows them after "#@".
+  const at = Math.max(usr.lastIndexOf("@F@"), usr.lastIndexOf("@FT@"));
+  if (at >= 0 && !usr.slice(at).includes("#@")) return "function";
   return null;
 }
 
