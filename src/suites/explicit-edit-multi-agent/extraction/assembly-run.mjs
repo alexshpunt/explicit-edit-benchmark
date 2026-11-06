@@ -661,14 +661,7 @@ export async function runAssemblyModel(
   casePath,
   outputPath,
   config,
-  {
-    proofPath,
-    lifecycle = "per-delivery",
-    traps = 0,
-    renames = 0,
-    renameAgents = 20,
-    signal,
-  } = {},
+  { proofPath, lifecycle = "per-delivery", traps = 0, renames = 0, renameAgents = 20, signal } = {},
 ) {
   const output = path.resolve(outputPath);
   const setup = await prepareAssemblyCase(casePath, { traps, renames, renameAgents });

@@ -159,8 +159,7 @@ async function assemblyCommand(values, positionals) {
   assert.ok(Number.isSafeInteger(traps), help);
   const renames = values.renames === undefined ? 0 : Number(values.renames);
   assert.ok(Number.isSafeInteger(renames) && (!probe || renames === 0), help);
-  const renameAgents =
-    values["rename-agents"] === undefined ? 20 : Number(values["rename-agents"]);
+  const renameAgents = values["rename-agents"] === undefined ? 20 : Number(values["rename-agents"]);
   assert.ok(Number.isSafeInteger(renameAgents) && (renames > 0 || renameAgents === 20), help);
   if (command === "assembly-verify") {
     const summary = await assembly.verifyAssemblyCase(paths[0], paths[1], {
