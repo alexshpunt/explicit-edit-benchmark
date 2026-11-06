@@ -770,6 +770,7 @@ async function mixedProbeIdentity(probe, general, harness) {
 
 /** Build one main.cpp and render both scenes. */
 async function measureMain(directory, main, expectedPixels, signal) {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
   await writeTree(path.join(directory, "source"), { "main.cpp": main });
   const candidate = await captureCandidate(
     path.join(directory, "source"),
