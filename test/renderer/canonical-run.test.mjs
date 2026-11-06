@@ -261,7 +261,7 @@ for (const scenario of [
                 command += "\n" + replacePixels("pixels[i] = float(", "pixels[i] = float(;");
             } else {
               assert.equal(stage, "structural-correction");
-              assert.ok(delivered.includes('Correct the structure of the project file "main.cpp"'));
+              assert.ok(delivered.includes("Correct the project file main.cpp"));
               assert.equal(/JSON|location\.path/.test(delivered), false);
               command = writeCommand(
                 "main.cpp",
