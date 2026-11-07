@@ -31,7 +31,7 @@ const code = (text) => {
 const words = (text) => new Set(text.match(/[A-Za-z_]\w*/g) ?? []);
 
 /** Line starts of a text, to convert offsets into LSP positions. */
-function positions(text) {
+export function positions(text) {
   const starts = [0];
   for (let index = 0; index < text.length; index++)
     if (text[index] === "\n") starts.push(index + 1);
@@ -48,7 +48,7 @@ function positions(text) {
 }
 
 /** Apply compiler edits and map each old offset to its new offset. */
-function applyEdits(text, edits) {
+export function applyEdits(text, edits) {
   const ordered = [...edits].sort((left, right) => left.start - right.start);
   let result = "",
     position = 0;
@@ -384,6 +384,7 @@ const CONCURRENT = "Several agents are editing main.cpp at the same time. It con
  * task, without anything about other agents.
  */
 export function isolatedPrompt(entry) {
+  if (entry.task === "hard") return entry.prompt;
   if (entry.task === "rename") return renameProse(entry.rename, { isolated: true });
   assert.ok(entry.prompt.startsWith(CONCURRENT), "Unexpected move prose");
   return "main.cpp contains" + entry.prompt.slice(CONCURRENT.length);

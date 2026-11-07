@@ -21,8 +21,8 @@ const help = `Experimental paired-module extraction
   assembly-probe FLAT_CASE NEW_RUN [--deliveries N] [--regions FILE[,FILE]] [--agent-lifecycle LIFECYCLE] [--traps LEVEL] (--scripted | --config PRIVATE_JSON --allow-model-calls)
   mixed-verify FLAT_CASE NEW_RUN [--deliveries N]
   mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--deliveries N] [--agents N]
-  snapshot-verify FLAT_CASE NEW_RUN [--agents N]
-  snapshot-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--agents N]
+  snapshot-verify FLAT_CASE NEW_RUN [--pool mixed|hard] [--agents N]
+  snapshot-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--pool mixed|hard] [--agents N]
 
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
@@ -87,8 +87,11 @@ of main.cpp. Before a task the copy receives the reference state of every task
 finished so far; afterwards it must equal that state plus the task, and the task's
 reference result joins the shared state whether the agent passed or not. There is
 no recovery. snapshot-verify proves the tasks in several finishing orders, builds
-the final reference and runs scripted participants; the proof's agent count must
-match the run's.
+the final reference and runs scripted participants; the proof's pool and agent
+count must match the run's. --pool hard (default mixed) gives only hard tasks:
+renames of one overload, field or local variable among same-named symbols and
+swaps of an overload's first two parameters with its calls' arguments, ten
+minutes per task.
 Use fresh ignored output directories and the shared renderer lock on a capable worker.
 See docs/multi-agent.md for shared renderer prerequisites.
 `;
@@ -204,6 +207,7 @@ async function snapshotCommand(values, positionals) {
   } else assert.ok(!values.config && !values["allow-model-calls"] && !values.proof, help);
   const agents = values.agents === undefined ? 20 : Number(values.agents);
   assert.ok(Number.isSafeInteger(agents), help);
+  const pool = values.pool ?? "mixed";
   const snapshot =
     await import("../src/suites/explicit-edit-multi-agent/extraction/snapshot-run.mjs");
   const signal = controller.signal;
@@ -212,9 +216,9 @@ async function snapshotCommand(values, positionals) {
         paths[0],
         paths[1],
         JSON.parse(await readFile(values.config, "utf8")),
-        { proofPath: values.proof, agents, signal },
+        { proofPath: values.proof, pool, agents, signal },
       )
-    : await snapshot.verifySnapshotRun(paths[0], paths[1], { agents, signal });
+    : await snapshot.verifySnapshotRun(paths[0], paths[1], { pool, agents, signal });
   const { identity: _identity, ...rest } = summary;
   console.log(JSON.stringify(rest));
   if (!run && summary.status !== "pass") process.exitCode = 1;
@@ -334,6 +338,7 @@ try {
       traps: { type: "string" },
       renames: { type: "string" },
       "rename-agents": { type: "string" },
+      pool: { type: "string" },
     },
   });
   if (!positionals[0]?.startsWith("assembly-"))

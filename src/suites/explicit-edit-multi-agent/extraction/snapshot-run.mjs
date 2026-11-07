@@ -6,17 +6,19 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { chunkModelDrivers } from "../execution/chunk-model-drivers.mjs";
 import { runAgentQueue } from "../execution/fresh-agent-queue.mjs";
 import { restoringSourceIdentity } from "../execution/restoring-identity.mjs";
-import {
-  ASSEMBLY_AGENTS,
-  ASSEMBLY_DELIVERY_DEADLINE_MS,
-  measureMain,
-  sampleTreeMemory,
-} from "./assembly-run.mjs";
+import { ASSEMBLY_AGENTS, measureMain, sampleTreeMemory } from "./assembly-run.mjs";
 import { cleanupAssemblyMarkers } from "./assembly-case.mjs";
 import { loadGeneralPrompt } from "./chunk-run.mjs";
+import { HARD_POOL_VERSION, prepareHardPool } from "./hard-pool.mjs";
 import { MIXED_PROBE_VERSION, isolatedPrompt, prepareMixedProbe } from "./mixed-probe.mjs";
 
-export const SNAPSHOT_RUN_VERSION = "renderer-snapshot-run-v1";
+export const SNAPSHOT_RUN_VERSION = "renderer-snapshot-run-v2";
+/** Ten minutes per task: a timeout should mean a stuck agent, not a careful one. */
+export const SNAPSHOT_DELIVERY_DEADLINE_MS = 600_000;
+export const SNAPSHOT_POOLS = Object.freeze({
+  mixed: prepareMixedProbe,
+  hard: prepareHardPool,
+});
 const ORDERS = 6;
 
 const hash = (data) => createHash("sha256").update(data).digest("hex");
@@ -28,7 +30,7 @@ const normal = (text) =>
     .filter(Boolean)
     .join("\n");
 export const sameText = (left, right) => normal(left) === normal(right);
-const kindOf = (entry) => (entry.task === "move" ? "move" : entry.rename.kind);
+const kindOf = (entry) => entry.kind ?? (entry.task === "move" ? "move" : entry.rename.kind);
 
 /** A deterministic order of the queue for the proof: a seeded shuffle. */
 function shuffled(items, seed) {
@@ -42,18 +44,19 @@ function shuffled(items, seed) {
   return order;
 }
 
-async function snapshotIdentity(probe, general, harness, agents) {
+async function snapshotIdentity(pool, probe, general, harness, agents) {
   const source = await restoringSourceIdentity();
   assert.equal(source.sourceClean, true, "Snapshot runs require clean committed source");
   return {
     version: SNAPSHOT_RUN_VERSION,
-    probe: MIXED_PROBE_VERSION,
+    pool,
+    probe: pool === "hard" ? HARD_POOL_VERSION : MIXED_PROBE_VERSION,
     source,
     planSha256: probe.setup.manifest.planSha256,
     counts: probe.counts,
     identities: probe.identities,
     generalSha256: hash(general),
-    deadlineSeconds: ASSEMBLY_DELIVERY_DEADLINE_MS / 1000,
+    deadlineSeconds: SNAPSHOT_DELIVERY_DEADLINE_MS / 1000,
     lifecycle: "persistent",
     agents,
     harness,
@@ -196,7 +199,7 @@ function modelPool(output, config, general) {
       pools.get(driver).execute(driver, prompt, {
         signal,
         session,
-        timeoutMs: ASSEMBLY_DELIVERY_DEADLINE_MS,
+        timeoutMs: SNAPSHOT_DELIVERY_DEADLINE_MS,
       }),
     usage: (driver) => pools.get(driver)?.usage(driver) ?? null,
     async cleanup() {
@@ -214,13 +217,14 @@ function modelPool(output, config, general) {
 export async function verifySnapshotRun(
   casePath,
   outputPath,
-  { agents = ASSEMBLY_AGENTS, signal } = {},
+  { pool: kind = "mixed", agents = ASSEMBLY_AGENTS, signal } = {},
 ) {
   const output = path.resolve(outputPath);
   await mkdir(output, { mode: 0o700 });
-  const probe = await prepareMixedProbe(casePath);
+  assert.ok(Object.hasOwn(SNAPSHOT_POOLS, kind), `Unknown task pool ${kind}`);
+  const probe = await SNAPSHOT_POOLS[kind](casePath);
   const general = await loadGeneralPrompt();
-  const identity = await snapshotIdentity(probe, general, null, agents);
+  const identity = await snapshotIdentity(kind, probe, general, null, agents);
   const problems = [];
   for (let seed = 0; seed < ORDERS; seed++) {
     const order = seed === 0 ? probe.queue : shuffled(probe.queue, seed);
@@ -231,7 +235,15 @@ export async function verifySnapshotRun(
       const next = probe.snapshot(done);
       const before = base.split("\n"),
         after = next.split("\n");
-      if (entry.task === "move") {
+      if (entry.task === "hard") {
+        // A hard task changes only lines that mention its symbol; the line count stays.
+        const changed = before.filter((line, at) => line !== after[at]);
+        const ok =
+          before.length === after.length &&
+          changed.length > 0 &&
+          changed.every((line) => new RegExp(`\\b${entry.name}\\b`).test(line));
+        if (!ok) problems.push(`order ${seed}: ${entry.id}`);
+      } else if (entry.task === "move") {
         const items = entry.items;
         const ok =
           items.every((item) => base.includes(item.marker) && !next.includes(item.marker)) &&
@@ -297,21 +309,23 @@ export async function runSnapshotModel(
   casePath,
   outputPath,
   config,
-  { proofPath, agents = ASSEMBLY_AGENTS, signal } = {},
+  { proofPath, pool: kind = "mixed", agents = ASSEMBLY_AGENTS, signal } = {},
 ) {
   assert.ok(Number.isInteger(agents) && agents >= 1 && agents <= ASSEMBLY_AGENTS);
   const output = path.resolve(outputPath);
   await mkdir(output, { mode: 0o700 });
-  const probe = await prepareMixedProbe(casePath);
+  assert.ok(Object.hasOwn(SNAPSHOT_POOLS, kind), `Unknown task pool ${kind}`);
+  const probe = await SNAPSHOT_POOLS[kind](casePath);
   const general = await loadGeneralPrompt();
   const proof = JSON.parse(await readFile(proofPath, "utf8"));
   assert.equal(proof.status, "pass", "The reference proof did not pass");
   assert.deepEqual(
     proof.identity,
-    await snapshotIdentity(probe, general, null, agents),
+    await snapshotIdentity(kind, probe, general, null, agents),
     "The reference proof belongs to other source, tasks or agent count",
   );
   const identity = await snapshotIdentity(
+    kind,
     probe,
     general,
     config.harness ?? "baseline-agent",
