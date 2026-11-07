@@ -237,7 +237,12 @@ export async function prepareHardPool(casePath, options = {}) {
         ? [task.unit.start, task.unit.start + start.slice(task.unit.start).indexOf("{")]
         : (task.quoted ?? null);
     for (const candidate of candidates) {
-      const limit = { overload: counts.overloads, swap: counts.swaps, field: counts.fields, local: counts.locals }[candidate.kind];
+      const limit = {
+        overload: counts.overloads,
+        swap: counts.swaps,
+        field: counts.fields,
+        local: counts.locals,
+      }[candidate.kind];
       if (tasks.filter((task) => task.kind === candidate.kind).length >= limit) continue;
       // One task per spelling: no prompt names a symbol that another task renames or reorders.
       if (spellings.has(candidate.name)) continue;
@@ -257,7 +262,12 @@ export async function prepareHardPool(casePath, options = {}) {
     // Fresh names for renames; then each task alone must keep the project compiling.
     const renames = tasks.filter((task) => task.kind !== "swap");
     const named = assignNames(
-      renames.map((task) => ({ name: task.name, family: task.usr, scope: "", role: task.role === "local" ? "local" : task.role })),
+      renames.map((task) => ({
+        name: task.name,
+        family: task.usr,
+        scope: "",
+        role: task.role === "local" ? "local" : task.role,
+      })),
       new Set(start.match(/[A-Za-z_]\w*/g)),
     );
     renames.forEach((task, index) => {
