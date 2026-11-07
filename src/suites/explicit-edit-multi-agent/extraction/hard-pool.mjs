@@ -100,11 +100,6 @@ export async function prepareHardPool(casePath, options = {}) {
     if (brace < 0 || !text.slice(0, brace).includes("(")) return null;
     return publicSignature(text.slice(0, brace).replace(/\/\/[^\n]*/g, ""));
   };
-  const lineAt = (offset) => {
-    const from = start.lastIndexOf("\n", offset - 1) + 1;
-    const to = start.indexOf("\n", offset);
-    return start.slice(from, to < 0 ? start.length : to);
-  };
 
   const candidates = [];
   const directory = await mkdtemp(path.join(os.tmpdir(), "hard-pool-"));
