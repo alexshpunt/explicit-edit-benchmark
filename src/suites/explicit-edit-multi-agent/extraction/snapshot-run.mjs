@@ -147,7 +147,13 @@ function scriptedPool(output) {
     async createDriver(session) {
       const workspace = path.join(output, "agents", `session-${session}`, "workspace");
       await mkdir(workspace, { recursive: true, mode: 0o700 });
-      return { workspace, async terminate() {} };
+      return {
+        workspace,
+        closed: false,
+        async terminate() {
+          this.closed = true;
+        },
+      };
     },
     async execute(driver, prompt, { expected, index }) {
       assert.ok(prompt.length > 0);

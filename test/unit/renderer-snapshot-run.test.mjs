@@ -26,7 +26,13 @@ function pool(root, wrong = new Set()) {
     async createDriver(session) {
       const workspace = path.join(root, `session-${session}`);
       await mkdir(workspace, { recursive: true });
-      return { workspace, async terminate() {} };
+      return {
+        workspace,
+        closed: false,
+        async terminate() {
+          this.closed = true;
+        },
+      };
     },
     async execute(driver, prompt, { entry, expected }) {
       const file = path.join(driver.workspace, "main.cpp");
