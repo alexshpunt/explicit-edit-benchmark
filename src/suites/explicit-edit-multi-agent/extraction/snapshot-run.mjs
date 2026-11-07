@@ -326,9 +326,12 @@ export async function runSnapshotModel(
     agents,
     signal,
   });
-  const usage = { input: 0, output: 0, cacheRead: 0, cost: 0 };
-  for (const { usage: session } of run.sessions)
-    for (const key of Object.keys(usage)) usage[key] += session?.[key] ?? 0;
+  // A provider that reports no usage leaves it unknown, not zero.
+  const reported = run.sessions.filter(({ usage: session }) => session);
+  const usage = reported.length ? { input: 0, output: 0, cacheRead: 0, cost: 0 } : null;
+  for (const { usage: session } of reported)
+    for (const key of Object.keys(usage)) usage[key] += session[key] ?? 0;
+  if (usage) usage.sessions = `${reported.length}/${run.sessions.length}`;
   const summary = {
     version: SNAPSHOT_RUN_VERSION,
     identity,
