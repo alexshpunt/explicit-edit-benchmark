@@ -100,8 +100,14 @@ export async function runSnapshotQueue({ probe, output, pool, agents, signal }) 
           expected,
         });
         row.status = outcome.status;
-        row.passed =
-          outcome.status === "settled" && sameText(await readFile(file, "utf8"), expected);
+        const result = await readFile(file, "utf8");
+        row.passed = outcome.status === "settled" && sameText(result, expected);
+        // A failed result is kept: the copy is overwritten by the agent's next task.
+        if (!row.passed) {
+          await mkdir(path.join(output, "failed"), { recursive: true, mode: 0o700 });
+          await writeFile(path.join(output, "failed", `${entry.id}.cpp`), result);
+          await writeFile(path.join(output, "failed", `${entry.id}.expected.cpp`), expected);
+        }
       } catch (error) {
         row.status = "error";
         row.passed = false;
