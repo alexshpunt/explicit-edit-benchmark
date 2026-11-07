@@ -14,7 +14,7 @@ import { renameKind } from "./assembly-renames.mjs";
 import { loadFlatCase } from "./flat-case.mjs";
 import { applyEdits, positions } from "./mixed-probe.mjs";
 
-export const HARD_POOL_VERSION = "renderer-hard-pool-v1";
+export const HARD_POOL_VERSION = "renderer-hard-pool-v2";
 export const HARD_POOL_DEFAULTS = Object.freeze({
   overloads: 60,
   swaps: 40,
@@ -164,14 +164,27 @@ export async function prepareHardPool(casePath, options = {}) {
             continue;
           const base = { name, usr: group.usr, uses: edits.length, others, edits };
           if (kind === "overload") {
-            const pattern = new RegExp(`^[\\w\\s:&*<>,]*\\b${name}\\s*\\([^()]*\\)`);
-            const named = edits.find((edit) => pattern.test(lineAt(edit.start).trim()));
+            // A declaration: only type words before the name on its line, then a
+            // parameter list that may continue over several lines.
+            const declarationAt = (edit) => {
+              const lineStart = start.lastIndexOf("\n", edit.start - 1) + 1;
+              const before = start.slice(lineStart, edit.start);
+              const first = /^\s*(\w+)/.exec(before)?.[1];
+              if (!/^\s*([\w:<>,&*]+\s+)+[&*]*$/.test(before)) return null;
+              if (["return", "else", "case", "throw", "co_return", "new", "delete"].includes(first))
+                return null;
+              let open = edit.start + name.length;
+              while (/\s/.test(start[open])) open++;
+              if (start[open] !== "(") return null;
+              const list = parenthesizedItems(start, open, protectedTokens);
+              return list && { lineStart, close: list.close };
+            };
+            const named = edits.find(declarationAt);
             if (!named) continue;
-            const declaration = lineAt(named.start).trim();
-            const signature = declaration.slice(0, declaration.indexOf(")") + 1);
-            // The prompt quotes this line, so no other task may change it.
-            const lineStart = start.lastIndexOf("\n", named.start - 1) + 1;
-            base.quoted = [lineStart, lineStart + lineAt(named.start).length];
+            const { lineStart, close } = declarationAt(named);
+            const signature = publicSignature(start.slice(lineStart, close + 1));
+            // The prompt quotes this declaration, so no other task may change it.
+            base.quoted = [lineStart, close + 1];
             candidates.push({ ...base, kind: "overload", role: "function", signature });
             // A swap needs every occurrence to open a call or declaration with two or more items.
             const lists = edits.map((edit) => {
@@ -221,8 +234,13 @@ export async function prepareHardPool(casePath, options = {}) {
       session.close();
     }
 
-    // Harder first: more uses of other symbols with the same spelling.
-    candidates.sort((a, b) => b.others - a.others || b.uses - a.uses || (a.name < b.name ? -1 : 1));
+    // Harder first: many uses of the target and many of its same-spelled siblings,
+    // so neither a short list nor one dominant meaning gives the answer away.
+    const difficulty = (task) => Math.min(task.uses, task.others);
+    candidates.sort(
+      (a, b) =>
+        difficulty(b) - difficulty(a) || b.uses - a.uses || (a.name < b.name ? -1 : 1),
+    );
     const tasks = [];
     const taken = [];
     const spellings = new Set();
