@@ -330,7 +330,13 @@ export async function calibrationMatrix(runDirectories) {
         const row = rows.get(id);
         return [
           label,
-          !row ? "missing" : row.passed ? "solved" : row.status === "timed-out" ? "timed-out" : "failed",
+          !row
+            ? "missing"
+            : row.passed
+              ? "solved"
+              : row.status === "timed-out"
+                ? "timed-out"
+                : "failed",
         ];
       }),
     );

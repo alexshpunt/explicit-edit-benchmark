@@ -238,8 +238,7 @@ export async function prepareHardPool(casePath, options = {}) {
     // so neither a short list nor one dominant meaning gives the answer away.
     const difficulty = (task) => Math.min(task.uses, task.others);
     candidates.sort(
-      (a, b) =>
-        difficulty(b) - difficulty(a) || b.uses - a.uses || (a.name < b.name ? -1 : 1),
+      (a, b) => difficulty(b) - difficulty(a) || b.uses - a.uses || (a.name < b.name ? -1 : 1),
     );
     const tasks = [];
     const taken = [];
