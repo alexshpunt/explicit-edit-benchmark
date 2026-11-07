@@ -209,7 +209,8 @@ async function snapshotCommand(values, positionals) {
       scores.push(score);
       console.log(JSON.stringify({ run: directory, model: summary.model ?? null, ...score }));
     }
-    if (scores.length > 1) console.log(JSON.stringify({ combined: snapshot.combineScores(scores) }));
+    if (scores.length > 1)
+      console.log(JSON.stringify({ combined: snapshot.combineScores(scores) }));
     return;
   }
   if (command === "snapshot-matrix") {
