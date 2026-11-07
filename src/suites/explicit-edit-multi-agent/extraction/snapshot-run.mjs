@@ -314,63 +314,46 @@ export async function verifySnapshotRun(
   return summary;
 }
 
-/** The snapshot score. Exact tasks dominate: the solved share enters squared, so
- * giving up cannot pay off. Efficiency per solved task only adjusts the result:
- * uncached input tokens, output tokens and agent time (the sum of task durations,
- * independent of how many agents ran at once), each as the reference value divided
- * by the run's value, clamped, weighted and combined geometrically, then softened.
- * Cached reads are not scored. The reference is Terra 6.1 low with Bash and the
- * toolchain on the hard pool (`hard-terra-low-04`): input 5,935, output 362 tokens
- * and 13.4 agent seconds per solved task.
+/** The snapshot result is three separate numbers, never combined: tasks done
+ * exactly, output tokens per task and agent seconds per task. Both rates divide by
+ * every task of the set, solved or not, so they compare runs over the same work.
+ * Agent seconds are the sum of task durations, independent of how many agents ran
+ * at once. Unknown provider usage stays unknown.
  */
-export const SNAPSHOT_SCORE_POLICY = Object.freeze({
-  version: "renderer-snapshot-score-v1",
-  accuracyExponent: 2,
-  efficiencyExponent: 0.25,
-  weights: Object.freeze({ input: 0.25, output: 0.5, time: 0.25 }),
-  clamp: Object.freeze([0.25, 4]),
-  reference: Object.freeze({ input: 5935, output: 362, seconds: 13.4 }),
-});
+export const SNAPSHOT_SCORE_VERSION = "renderer-snapshot-score-v2";
 
 /** Score one run from its summary and delivery rows. */
-export function snapshotScore(summary, rows, policy = SNAPSHOT_SCORE_POLICY) {
+export function snapshotScore(summary, rows) {
   const solved = rows.filter((row) => row.passed).length;
-  const accuracy = solved / rows.length;
   const seconds =
     rows.reduce((sum, row) => sum + (new Date(row.ended) - new Date(row.started)), 0) / 1000;
-  const perSolved = solved
-    ? {
-        input: summary.usage ? summary.usage.input / solved : null,
-        output: summary.usage ? summary.usage.output / solved : null,
-        seconds: seconds / solved,
-      }
-    : null;
-  const [low, high] = policy.clamp;
-  const ratio = (reference, value) => Math.min(high, Math.max(low, reference / value));
-  const factors = perSolved && {
-    input: perSolved.input === null ? null : ratio(policy.reference.input, perSolved.input),
-    output: perSolved.output === null ? null : ratio(policy.reference.output, perSolved.output),
-    time: ratio(policy.reference.seconds, perSolved.seconds),
-  };
-  // Unknown usage leaves its factors out and renormalizes the remaining weights.
-  const known = factors ? Object.entries(factors).filter(([, value]) => value !== null) : [];
-  const weight = known.reduce((sum, [key]) => sum + policy.weights[key], 0);
-  const efficiency = known.length
-    ? Math.exp(
-        known.reduce((sum, [key, value]) => sum + policy.weights[key] * Math.log(value), 0) /
-          weight,
-      )
-    : 0;
-  const score = 100 * accuracy ** policy.accuracyExponent * efficiency ** policy.efficiencyExponent;
   return {
-    policy: policy.version,
+    version: SNAPSHOT_SCORE_VERSION,
     solved,
     total: rows.length,
-    accuracy,
-    perSolved,
-    factors,
-    efficiency,
-    score,
+    solvedPercent: (100 * solved) / rows.length,
+    outputTokensPerTask: summary.usage ? summary.usage.output / rows.length : null,
+    secondsPerTask: seconds / rows.length,
+  };
+}
+
+/** Several runs of one configuration: the mean of each number and its range. */
+export function combineScores(scores) {
+  const spread = (key) => {
+    const values = scores.map((score) => score[key]);
+    if (values.some((value) => value === null)) return null;
+    return {
+      mean: values.reduce((sum, value) => sum + value, 0) / values.length,
+      min: Math.min(...values),
+      max: Math.max(...values),
+    };
+  };
+  return {
+    version: SNAPSHOT_SCORE_VERSION,
+    runs: scores.length,
+    solvedPercent: spread("solvedPercent"),
+    outputTokensPerTask: spread("outputTokensPerTask"),
+    secondsPerTask: spread("secondsPerTask"),
   };
 }
 

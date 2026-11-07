@@ -172,6 +172,60 @@ extraction alone starts from the assembled reference. It compares the result wit
 the scripted outcome of the same assignments and reports disagreements without
 corrections, build or Score.
 
+## Isolated snapshot runs
+
+On one shared file, races decide results: a partial read and write once cut
+`main.cpp` from 30,858 to 3,365 lines. The `snapshot-*` commands remove races.
+Persistent agents work in parallel, each in its own copy of `main.cpp`, and keep
+their sessions. Before a task, the agent's copy receives the reference snapshot:
+the start file plus the reference results of every task finished so far. After
+the task, the copy must equal that snapshot plus the task, ignoring blank lines
+and spaces at line ends; anything else, including changes outside the task,
+fails. There is no recovery. The task's reference result then joins the shared
+state, whether the agent passed or not, so no agent output is ever merged.
+Prompts carry only the task, nothing about other agents. Each task has ten
+minutes. Failed results are kept under `failed/`.
+
+Every task applies exactly to any snapshot the run can reach. `snapshot-verify`
+proves this in six finishing orders, builds and renders the final reference and
+runs scripted participants in their own copies; the proof's pool and agent count
+must match the run's.
+
+`--pool mixed` gives the mixed probe: block moves of whole regions with their
+project includes, renames of uniquely spelled symbols, of one overload or field
+among same-named symbols and of one function's parameter. `--pool hard` gives
+only tasks that need C++ semantics, all on the original `main.cpp`, so every
+snapshot compiles: renames of one overload among same-named functions, swaps of
+an overload's first two parameters together with its calls' arguments, renames
+of one field among same-named fields and of a local variable whose name other
+functions also use. Each reference comes from clangd on the start file; each
+task alone passes `clang++ -fsyntax-only`. No task edits or quotes text that
+another task edits, and a local qualifies only when no other variable in its
+function has the same spelling. Overloads and swaps are ranked by traps: calls
+of sibling overloads that still compile when renamed or swapped like the target,
+counted with one compile per candidate, so the compiler cannot reveal the
+mistake.
+
+A participant config can set `toolchain: "hidden"`: the sandbox then hides clang,
+clangd, gcc, libclang, LLVM, the Python clang bindings and pip; Bash, Python and
+the usual text tools stay.
+
+`snapshot-score` gives three separate numbers per run and never combines them:
+the share of tasks done exactly, output tokens per task and agent seconds per
+task. Both rates divide by every task of the set, so a failed task is not free;
+agent seconds are the sum of task durations, independent of how many agents ran
+at once. Cached reads and input tokens are not scored, and neither is cost,
+because providers do not report it reliably. Given several runs of one
+configuration, it adds their mean and range; repeated runs of one configuration
+have differed by one or two tasks. `snapshot-matrix` records which run solved which task.
+
+Calibration on the hard pool (130 tasks, 10 agents, toolchain hidden): Muse 1.3
+Contributor high 98.5% exact, 579 output tokens and 139 seconds per task; Sol 6.1
+low 97.7%, 344 and 15 seconds; DeepSeek Flash 96.9%, 752 and 44 seconds; Terra 6.1
+low 96.2%, 330 and 12 seconds; Luna 6 low 53.1%, 561 and 16 seconds. With the
+toolchain, Terra and Sol solved two tasks more each: frontier models resolve
+overloads with or without a compiler.
+
 ## Flat CPU diagnostic profile
 
 The separate `flat-prepare` profile derives an active CPU-only source from an

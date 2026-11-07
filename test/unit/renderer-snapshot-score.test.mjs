@@ -1,38 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  SNAPSHOT_SCORE_POLICY,
+  combineScores,
   snapshotScore,
 } from "../../src/suites/explicit-edit-multi-agent/extraction/snapshot-run.mjs";
 
-const { reference } = SNAPSHOT_SCORE_POLICY;
 const rows = (solved, total, seconds) =>
   Array.from({ length: total }, (_, index) => ({
     passed: index < solved,
     started: new Date(0).toISOString(),
     ended: new Date(seconds * 1000).toISOString(),
   }));
-const usage = (solved, scale = 1) => ({
-  input: reference.input * solved * scale,
-  output: reference.output * solved * scale,
+
+test("a run gives three separate numbers over every task of the set", () => {
+  const score = snapshotScore({ usage: { output: 4000 } }, rows(9, 10, 12));
+  assert.equal(score.solved, 9);
+  assert.equal(score.solvedPercent, 90);
+  // Rates divide by all ten tasks, so a failed task is not free.
+  assert.equal(score.outputTokensPerTask, 400);
+  assert.equal(score.secondsPerTask, 12);
+  assert.equal(snapshotScore({ usage: null }, rows(9, 10, 12)).outputTokensPerTask, null);
 });
 
-test("the reference efficiency leaves only the squared solved share", () => {
-  const score = snapshotScore({ usage: usage(100) }, rows(100, 100, reference.seconds));
-  assert.equal(score.efficiency, 1);
-  assert.equal(score.score, 100);
-  const missed = snapshotScore({ usage: usage(90) }, rows(90, 100, (reference.seconds * 90) / 100));
-  assert.ok(Math.abs(missed.score - 81) < 1e-9);
-});
-
-test("efficiency adjusts but cannot buy back missed tasks", () => {
-  const cheap = snapshotScore({ usage: usage(100, 0.5) }, rows(100, 100, reference.seconds / 2));
-  assert.ok(Math.abs(cheap.score - 100 * 2 ** 0.25) < 1e-9);
-  // Giving up early: few tasks, little spent.
-  const quitter = snapshotScore({ usage: usage(20, 0.1) }, rows(20, 100, reference.seconds / 50));
-  assert.ok(quitter.score < 6);
-  // Unknown usage scores time alone.
-  const unknown = snapshotScore({ usage: null }, rows(100, 100, reference.seconds));
-  assert.deepEqual(unknown.factors, { input: null, output: null, time: 1 });
-  assert.equal(unknown.score, 100);
+test("repeated runs report the mean and range of each number", () => {
+  const combined = combineScores([
+    snapshotScore({ usage: { output: 4000 } }, rows(9, 10, 10)),
+    snapshotScore({ usage: { output: 2000 } }, rows(7, 10, 20)),
+  ]);
+  assert.deepEqual(combined.solvedPercent, { mean: 80, min: 70, max: 90 });
+  assert.deepEqual(combined.outputTokensPerTask, { mean: 300, min: 200, max: 400 });
+  assert.deepEqual(combined.secondsPerTask, { mean: 15, min: 10, max: 20 });
+  assert.equal(
+    combineScores([snapshotScore({ usage: null }, rows(1, 2, 1))]).outputTokensPerTask,
+    null,
+  );
 });

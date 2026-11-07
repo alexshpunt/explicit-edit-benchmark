@@ -94,9 +94,10 @@ count must match the run's. --pool hard (default mixed) gives only hard tasks:
 renames of one overload, field or local variable among same-named symbols and
 swaps of an overload's first two parameters with its calls' arguments, ten
 minutes per task. snapshot-matrix writes which run solved which task.
-snapshot-score prints 100 x (solved share)^2 x efficiency^0.25, where efficiency
-compares uncached input tokens, output tokens and agent time per solved task with
-the reference run; the reference itself scores 100 x its solved share squared.
+snapshot-score prints three separate numbers per run: the share of tasks done
+exactly, output tokens per task and agent seconds per task, both rates over every
+task of the set. Given several runs of one configuration, it adds their mean and
+range.
 Use fresh ignored output directories and the shared renderer lock on a capable worker.
 See docs/multi-agent.md for shared renderer prerequisites.
 `;
@@ -200,12 +201,15 @@ async function snapshotCommand(values, positionals) {
     assert.ok(paths.length >= 1, help);
     const snapshot =
       await import("../src/suites/explicit-edit-multi-agent/extraction/snapshot-run.mjs");
+    const scores = [];
     for (const directory of paths) {
       const summary = JSON.parse(await readFile(`${directory}/summary.json`, "utf8"));
       const rows = JSON.parse(await readFile(`${directory}/deliveries.json`, "utf8"));
       const score = snapshot.snapshotScore(summary, rows);
+      scores.push(score);
       console.log(JSON.stringify({ run: directory, model: summary.model ?? null, ...score }));
     }
+    if (scores.length > 1) console.log(JSON.stringify({ combined: snapshot.combineScores(scores) }));
     return;
   }
   if (command === "snapshot-matrix") {
