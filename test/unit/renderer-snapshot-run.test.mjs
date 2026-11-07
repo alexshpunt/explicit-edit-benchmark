@@ -14,7 +14,7 @@ const probe = {
   queue: ids.map((id) => ({
     id,
     task: "move",
-    prompt: `Several agents are editing main.cpp at the same time. Add ${id}.`,
+    prompt: `Several agents are editing main.cpp at the same time. It contains a list. Add ${id}.`,
   })),
   snapshot: (done) => ["start", ...ids.filter((id) => done.has(id))].join("\n") + "\n",
 };

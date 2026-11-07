@@ -378,16 +378,15 @@ export async function prepareMixedProbe(casePath, options = {}) {
   };
 }
 
-const ISOLATED =
-  "main.cpp in your working directory holds the current state of the project, including the work other agents have finished since your last assignment. Make the change below in it.";
-const CONCURRENT = "Several agents are editing main.cpp at the same time. ";
+const CONCURRENT = "Several agents are editing main.cpp at the same time. It contains";
 
-/** The prose of one queue entry for an agent that works in its own copy. */
+/** The prose of one queue entry for an agent that works in its own copy: only the
+ * task, without anything about other agents.
+ */
 export function isolatedPrompt(entry) {
-  if (entry.task === "rename")
-    return [ISOLATED, renameProse(entry.rename, { isolated: true })].join("\n\n");
+  if (entry.task === "rename") return renameProse(entry.rename, { isolated: true });
   assert.ok(entry.prompt.startsWith(CONCURRENT), "Unexpected move prose");
-  return [ISOLATED, entry.prompt.slice(CONCURRENT.length)].join("\n\n");
+  return "main.cpp contains" + entry.prompt.slice(CONCURRENT.length);
 }
 
 /** One rename assignment in prose. */
