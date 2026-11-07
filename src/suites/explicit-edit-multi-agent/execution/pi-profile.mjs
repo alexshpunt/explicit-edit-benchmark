@@ -21,6 +21,7 @@ export async function resolvePiParticipantProfile(config) {
     "modelsFile",
     "envFile",
     "harness",
+    "toolchain",
   ]);
   assert.ok(
     Object.keys(config).every((key) => keys.has(key)),
@@ -35,6 +36,10 @@ export async function resolvePiParticipantProfile(config) {
   assert.ok(
     ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(config.thinking),
     "Explicit thinking level is required",
+  );
+  assert.ok(
+    config.toolchain === undefined || config.toolchain === "hidden",
+    "The toolchain is either available or hidden",
   );
   const harness = config.harness === undefined ? "baseline-agent" : config.harness;
   assert.ok(

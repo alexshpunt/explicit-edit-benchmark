@@ -403,6 +403,7 @@ export async function runSnapshotModel(
     identity,
     model: config.model,
     thinking: config.thinking,
+    toolchain: config.toolchain ?? "available",
     minutes: Number(((Date.now() - started) / 60000).toFixed(2)),
     agents: run.agents,
     maxLive: run.maxLive,

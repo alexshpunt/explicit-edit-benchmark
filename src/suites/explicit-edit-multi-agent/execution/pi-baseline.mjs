@@ -11,6 +11,7 @@ import { assertProcessBoundary, waitForProcessBoundaryExit } from "./process-bou
 import { resolvePiParticipantProfile } from "./pi-profile.mjs";
 import { isTerminalProviderError } from "./provider-recovery.mjs";
 import { missingProfileTools } from "../../../../scripts/pi-codemode-profile.mjs";
+import { hiddenToolchainArgs } from "./toolchain-mask.mjs";
 export { startPiParticipant as startBaseline };
 
 /** Sum finalized native Pi usage. Missing observations remain unknown, not zero. */
@@ -164,6 +165,8 @@ export async function startPiParticipant(
     "--chdir",
     "/workspace",
   ];
+  // An experiment without compilers or language servers: Bash, Python and editors only.
+  if (config.toolchain === "hidden") args.push(...(await hiddenToolchainArgs()));
   if (feedbackDirectory) args.push("--ro-bind", path.resolve(feedbackDirectory), "/feedback");
   if (onRecovery) args.push("--setenv", "RENDERER_PI_RECOVERY", "controller");
   args.push(
