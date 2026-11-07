@@ -314,6 +314,57 @@ export async function verifySnapshotRun(
   return summary;
 }
 
+/** The snapshot score. Exact tasks dominate: the solved share enters squared, so
+ * giving up cannot pay off. Efficiency per solved task only adjusts the result:
+ * uncached input tokens, output tokens and agent time (the sum of task durations,
+ * independent of how many agents ran at once), each as the reference value divided
+ * by the run's value, clamped, weighted and combined geometrically, then softened.
+ * Cached reads are not scored. The reference is Terra 6.1 low with Bash and the
+ * toolchain on the hard pool (`hard-terra-low-04`): input 5,935, output 362 tokens
+ * and 13.4 agent seconds per solved task.
+ */
+export const SNAPSHOT_SCORE_POLICY = Object.freeze({
+  version: "renderer-snapshot-score-v1",
+  accuracyExponent: 2,
+  efficiencyExponent: 0.25,
+  weights: Object.freeze({ input: 0.25, output: 0.5, time: 0.25 }),
+  clamp: Object.freeze([0.25, 4]),
+  reference: Object.freeze({ input: 5935, output: 362, seconds: 13.4 }),
+});
+
+/** Score one run from its summary and delivery rows. */
+export function snapshotScore(summary, rows, policy = SNAPSHOT_SCORE_POLICY) {
+  const solved = rows.filter((row) => row.passed).length;
+  const accuracy = solved / rows.length;
+  const seconds = rows.reduce((sum, row) => sum + (new Date(row.ended) - new Date(row.started)), 0) / 1000;
+  const perSolved = solved
+    ? {
+        input: summary.usage ? summary.usage.input / solved : null,
+        output: summary.usage ? summary.usage.output / solved : null,
+        seconds: seconds / solved,
+      }
+    : null;
+  const [low, high] = policy.clamp;
+  const ratio = (reference, value) => Math.min(high, Math.max(low, reference / value));
+  const factors = perSolved && {
+    input: perSolved.input === null ? null : ratio(policy.reference.input, perSolved.input),
+    output: perSolved.output === null ? null : ratio(policy.reference.output, perSolved.output),
+    time: ratio(policy.reference.seconds, perSolved.seconds),
+  };
+  // Unknown usage leaves its factors out and renormalizes the remaining weights.
+  const known = factors ? Object.entries(factors).filter(([, value]) => value !== null) : [];
+  const weight = known.reduce((sum, [key]) => sum + policy.weights[key], 0);
+  const efficiency = known.length
+    ? Math.exp(
+        known.reduce((sum, [key, value]) => sum + policy.weights[key] * Math.log(value), 0) /
+          weight,
+      )
+    : 0;
+  const score =
+    100 * accuracy ** policy.accuracyExponent * efficiency ** policy.efficiencyExponent;
+  return { policy: policy.version, solved, total: rows.length, accuracy, perSolved, factors, efficiency, score };
+}
+
 /** Which run solved which task: one row per task with each run's outcome and the
  * number of runs that solved it. Runs are labelled by their directory names.
  */

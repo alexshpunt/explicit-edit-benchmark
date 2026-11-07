@@ -24,6 +24,7 @@ const help = `Experimental paired-module extraction
   snapshot-verify FLAT_CASE NEW_RUN [--pool mixed|hard] [--agents N]
   snapshot-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--pool mixed|hard] [--agents N]
   snapshot-matrix NEW_OUTPUT_JSON SNAPSHOT_RUN...
+  snapshot-score SNAPSHOT_RUN...
 
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
@@ -93,6 +94,9 @@ count must match the run's. --pool hard (default mixed) gives only hard tasks:
 renames of one overload, field or local variable among same-named symbols and
 swaps of an overload's first two parameters with its calls' arguments, ten
 minutes per task. snapshot-matrix writes which run solved which task.
+snapshot-score prints 100 x (solved share)^2 x efficiency^0.25, where efficiency
+compares uncached input tokens, output tokens and agent time per solved task with
+the reference run; the reference itself scores 100 x its solved share squared.
 Use fresh ignored output directories and the shared renderer lock on a capable worker.
 See docs/multi-agent.md for shared renderer prerequisites.
 `;
@@ -192,6 +196,18 @@ async function mixedCommand(values, positionals) {
 
 async function snapshotCommand(values, positionals) {
   const [command, ...paths] = positionals;
+  if (command === "snapshot-score") {
+    assert.ok(paths.length >= 1, help);
+    const snapshot =
+      await import("../src/suites/explicit-edit-multi-agent/extraction/snapshot-run.mjs");
+    for (const directory of paths) {
+      const summary = JSON.parse(await readFile(`${directory}/summary.json`, "utf8"));
+      const rows = JSON.parse(await readFile(`${directory}/deliveries.json`, "utf8"));
+      const score = snapshot.snapshotScore(summary, rows);
+      console.log(JSON.stringify({ run: directory, model: summary.model ?? null, ...score }));
+    }
+    return;
+  }
   if (command === "snapshot-matrix") {
     assert.ok(paths.length >= 2, help);
     const snapshot =
