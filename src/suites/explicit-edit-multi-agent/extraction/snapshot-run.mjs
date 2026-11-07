@@ -236,12 +236,22 @@ export async function verifySnapshotRun(
       const before = base.split("\n"),
         after = next.split("\n");
       if (entry.task === "hard") {
-        // A hard task changes only lines that mention its symbol; the line count stays.
+        // A rename changes only lines that mention its symbol; a swap only reorders
+        // text, possibly across the lines of a long call. The line count stays.
         const changed = before.filter((line, at) => line !== after[at]);
+        const words = (lines) =>
+          lines
+            .join("\n")
+            .split(/[^A-Za-z_0-9]+/)
+            .filter(Boolean)
+            .sort()
+            .join(" ");
         const ok =
           before.length === after.length &&
           changed.length > 0 &&
-          changed.every((line) => new RegExp(`\\b${entry.name}\\b`).test(line));
+          (entry.kind === "swap"
+            ? words(changed) === words(after.filter((line, at) => line !== before[at]))
+            : changed.every((line) => new RegExp(`\\b${entry.name}\\b`).test(line)));
         if (!ok) problems.push(`order ${seed}: ${entry.id}`);
       } else if (entry.task === "move") {
         const items = entry.items;
