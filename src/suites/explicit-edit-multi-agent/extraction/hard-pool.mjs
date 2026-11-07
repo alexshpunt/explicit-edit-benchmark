@@ -264,7 +264,8 @@ export async function prepareHardPool(casePath, options = {}) {
       } catch (error) {
         const lines = new Set();
         const pattern = new RegExp(`${label}\\.cpp:(\\d+):\\d+: error:`, "g");
-        for (const match of String(error.stderr ?? "").matchAll(pattern)) lines.add(Number(match[1]));
+        for (const match of String(error.stderr ?? "").matchAll(pattern))
+          lines.add(Number(match[1]));
         return lines;
       } finally {
         await rm(file, { force: true });
@@ -281,7 +282,10 @@ export async function prepareHardPool(casePath, options = {}) {
           const sibling = [];
           for (const call of task.siblingCalls ?? []) {
             if (task.kind === "overload") {
-              sibling.push({ call, edits: [{ start: call, old: task.name, new: `${task.name}_trap` }] });
+              sibling.push({
+                call,
+                edits: [{ start: call, old: task.name, new: `${task.name}_trap` }],
+              });
               continue;
             }
             let open = call + task.name.length;
