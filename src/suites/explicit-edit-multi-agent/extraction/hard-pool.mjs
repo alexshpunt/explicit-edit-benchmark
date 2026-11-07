@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,20 +15,21 @@ import { renameKind } from "./assembly-renames.mjs";
 import { loadFlatCase } from "./flat-case.mjs";
 import { applyEdits, positions } from "./mixed-probe.mjs";
 
-export const HARD_POOL_VERSION = "renderer-hard-pool-v3";
+export const HARD_POOL_VERSION = "renderer-hard-pool-v4";
 export const HARD_POOL_DEFAULTS = Object.freeze({
   overloads: 60,
-  swaps: 40,
+  swaps: 60,
   fields: 5,
-  locals: 10,
+  locals: 5,
   // Overload and swap candidates whose traps are counted, hardest by use counts first.
-  trapChecks: 300,
+  trapChecks: 700,
 });
 const FLAGS = ["-std=c++17", "-pthread"];
 const IDENTIFIER = /^[A-Za-z_]\w*$/;
 const REFUSAL = /^(Cannot rename symbol|Rename crosses fixed source boundary|No semantic edits)/;
 const KEEP = "Comments and string literals stay unchanged, and so does all other code.";
 const run = promisify(execFile);
+const hash = (text) => createHash("sha256").update(text).digest("hex");
 
 const code = (text) => {
   assert.ok(!text.includes("`"), "Unsupported inline code");
@@ -346,8 +348,9 @@ export async function prepareHardPool(casePath, options = {}) {
         local: counts.locals,
       }[candidate.kind];
       if (tasks.filter((task) => task.kind === candidate.kind).length >= limit) continue;
-      // One task per spelling: no prompt names a symbol that another task renames or reorders.
-      if (spellings.has(candidate.name)) continue;
+      // One task per symbol. Tasks on other overloads of the same spelling stay apart
+      // because no task may change text that another task edits or quotes.
+      if (spellings.has(candidate.usr)) continue;
       const ranges = rangesOf(candidate);
       const header = quoted(candidate);
       if (overlaps(header ? [...ranges, header] : ranges)) continue;
@@ -357,7 +360,7 @@ export async function prepareHardPool(casePath, options = {}) {
       )
         continue;
       tasks.push(candidate);
-      spellings.add(candidate.name);
+      spellings.add(candidate.usr);
       taken.push(...ranges, ...(header ? [header] : []));
     }
 
@@ -402,7 +405,7 @@ export async function prepareHardPool(casePath, options = {}) {
     const kept = tasks.filter((_task, index) => checked[index]);
 
     const queue = kept.map((task) => ({
-      id: `${task.kind}-${task.name}`,
+      id: `${task.kind}-${task.name}-${hash(task.usr).slice(0, 6)}`,
       task: "hard",
       kind: task.kind,
       name: task.name,
