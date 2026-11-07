@@ -122,8 +122,7 @@ export async function prepareMixedProbe(casePath, options = {}) {
   }
   assert.ok(total > 0, "No region fits the move budget");
   // A unit with an identical copy could be moved from either place; only one result is right.
-  const unambiguous = (item) =>
-    (item.copies ?? 1) === 1 && start.split(item.text).length - 1 === 1;
+  const unambiguous = (item) => (item.copies ?? 1) === 1 && start.split(item.text).length - 1 === 1;
   const moves = setup.deliveries.filter(
     (delivery) => selected.has(delivery.file) && delivery.items.every(unambiguous),
   );

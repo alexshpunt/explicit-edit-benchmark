@@ -69,7 +69,11 @@ export async function runSnapshotQueue({ probe, output, pool, agents, signal }) 
   const done = new Set();
   const rows = [],
     sessions = [];
-  const { results, maxLive, agents: started } = await runAgentQueue(probe.queue, {
+  const {
+    results,
+    maxLive,
+    agents: started,
+  } = await runAgentQueue(probe.queue, {
     lifecycle: "persistent",
     maxAgents: agents,
     signal,
@@ -96,7 +100,8 @@ export async function runSnapshotQueue({ probe, output, pool, agents, signal }) 
           expected,
         });
         row.status = outcome.status;
-        row.passed = outcome.status === "settled" && sameText(await readFile(file, "utf8"), expected);
+        row.passed =
+          outcome.status === "settled" && sameText(await readFile(file, "utf8"), expected);
       } catch (error) {
         row.status = "error";
         row.passed = false;
@@ -106,10 +111,7 @@ export async function runSnapshotQueue({ probe, output, pool, agents, signal }) 
         row.ended = new Date().toISOString();
         // The reference result joins the shared state atomically, pass or fail.
         done.add(entry.id);
-        await writeFile(
-          path.join(output, "deliveries.json"),
-          JSON.stringify(rows, null, 2) + "\n",
-        );
+        await writeFile(path.join(output, "deliveries.json"), JSON.stringify(rows, null, 2) + "\n");
       }
       return outcome;
     },
@@ -197,7 +199,11 @@ function modelPool(output, config, general) {
  * reference, which builds and renders the expected images, and scripted persistent
  * participants in their own copies pass every task.
  */
-export async function verifySnapshotRun(casePath, outputPath, { agents = ASSEMBLY_AGENTS, signal } = {}) {
+export async function verifySnapshotRun(
+  casePath,
+  outputPath,
+  { agents = ASSEMBLY_AGENTS, signal } = {},
+) {
   const output = path.resolve(outputPath);
   await mkdir(output, { mode: 0o700 });
   const probe = await prepareMixedProbe(casePath);
@@ -293,7 +299,12 @@ export async function runSnapshotModel(
     await snapshotIdentity(probe, general, null, agents),
     "The reference proof belongs to other source, tasks or agent count",
   );
-  const identity = await snapshotIdentity(probe, general, config.harness ?? "baseline-agent", agents);
+  const identity = await snapshotIdentity(
+    probe,
+    general,
+    config.harness ?? "baseline-agent",
+    agents,
+  );
   const started = Date.now();
   const memory = sampleTreeMemory();
   const run = await runSnapshotQueue({
