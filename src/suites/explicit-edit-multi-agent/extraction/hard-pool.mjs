@@ -18,8 +18,8 @@ export const HARD_POOL_VERSION = "renderer-hard-pool-v2";
 export const HARD_POOL_DEFAULTS = Object.freeze({
   overloads: 60,
   swaps: 40,
-  fields: 6,
-  locals: 20,
+  fields: 5,
+  locals: 10,
 });
 const FLAGS = ["-std=c++17", "-pthread"];
 const IDENTIFIER = /^[A-Za-z_]\w*$/;
