@@ -208,7 +208,12 @@ export async function prepareHardPool(casePath, options = {}) {
                   list.items.length >= 2 &&
                   list.items.every((item) => !/(^|[^=!<>])=($|[^=])/.test(item.text)),
               ) &&
-              new Set(lists.map((list) => list.items.length)).size === 1
+              new Set(lists.map((list) => list.items.length)).size === 1 &&
+              // A call nested in another call's first two arguments would swap twice.
+              lists
+                .map(({ items: [first, second] }) => [first.start, second.end])
+                .sort((a, b) => a[0] - b[0])
+                .every((span, at, spans) => at === 0 || spans[at - 1][1] <= span[0])
             ) {
               const swapEdits = lists.flatMap(({ items: [first, second] }) => [
                 { start: first.start, old: first.text, new: second.text },
