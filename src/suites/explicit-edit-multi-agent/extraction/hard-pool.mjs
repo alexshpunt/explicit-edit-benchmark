@@ -14,12 +14,14 @@ import { renameKind } from "./assembly-renames.mjs";
 import { loadFlatCase } from "./flat-case.mjs";
 import { applyEdits, positions } from "./mixed-probe.mjs";
 
-export const HARD_POOL_VERSION = "renderer-hard-pool-v2";
+export const HARD_POOL_VERSION = "renderer-hard-pool-v3";
 export const HARD_POOL_DEFAULTS = Object.freeze({
   overloads: 60,
   swaps: 40,
   fields: 5,
   locals: 10,
+  // Overload and swap candidates whose traps are counted, hardest by use counts first.
+  trapChecks: 300,
 });
 const FLAGS = ["-std=c++17", "-pthread"];
 const IDENTIFIER = /^[A-Za-z_]\w*$/;
@@ -185,6 +187,11 @@ export async function prepareHardPool(casePath, options = {}) {
             const signature = publicSignature(start.slice(lineStart, close + 1));
             // The prompt quotes this declaration, so no other task may change it.
             base.quoted = [lineStart, close + 1];
+            // Calls of the other overloads: a wrong rename of one of them may still compile.
+            base.siblingCalls = [...groups.values()]
+              .filter((other) => other !== group && renameKind(other.usr) === "function")
+              .flatMap((other) => other.offsets)
+              .filter((offset) => !declarationAt({ start: offset }));
             candidates.push({ ...base, kind: "overload", role: "function", signature });
             // A swap needs every occurrence to open a call or declaration with two or more items.
             const lists = edits.map((edit) => {
@@ -226,6 +233,9 @@ export async function prepareHardPool(casePath, options = {}) {
               !edits.every((edit) => edit.start >= unit.start && edit.start < unit.end)
             )
               continue;
+            // Another variable with the same spelling in this function would make the task ambiguous.
+            const inUnit = offsets.filter((offset) => offset >= unit.start && offset < unit.end);
+            if (inUnit.length !== edits.length) continue;
             candidates.push({ ...base, kind: "local", role: "local", signature, unit });
           }
         }
@@ -234,11 +244,82 @@ export async function prepareHardPool(casePath, options = {}) {
       session.close();
     }
 
-    // Harder first: many uses of the target and many of its same-spelled siblings,
-    // so neither a short list nor one dominant meaning gives the answer away.
+    // Many uses of the target and of its same-spelled siblings, so neither a short
+    // list nor one dominant meaning gives the answer away.
     const difficulty = (task) => Math.min(task.uses, task.others);
     candidates.sort(
       (a, b) => difficulty(b) - difficulty(a) || b.uses - a.uses || (a.name < b.name ? -1 : 1),
+    );
+    // Traps: calls of sibling overloads that still compile when renamed or swapped
+    // like the target, so the compiler cannot reveal the mistake. Counted with one
+    // compile per candidate that applies the target's edits to every sibling call too.
+    const errorLines = async (text, label) => {
+      const file = path.join(directory, `${label}.cpp`);
+      await writeFile(file, text);
+      try {
+        await run("clang++", [...FLAGS, "-fsyntax-only", "-ferror-limit=0", file], {
+          maxBuffer: 1 << 26,
+        });
+        return new Set();
+      } catch (error) {
+        const lines = new Set();
+        const pattern = new RegExp(`${label}\\.cpp:(\\d+):\\d+: error:`, "g");
+        for (const match of String(error.stderr ?? "").matchAll(pattern)) lines.add(Number(match[1]));
+        return lines;
+      } finally {
+        await rm(file, { force: true });
+      }
+    };
+    const toPosition = positions(start);
+    const lineOf = (offset) => toPosition(offset).line + 1;
+    const trapped = candidates
+      .filter((task) => task.kind === "overload" || task.kind === "swap")
+      .slice(0, counts.trapChecks);
+    for (let index = 0; index < trapped.length; index += 8)
+      await Promise.all(
+        trapped.slice(index, index + 8).map(async (task, offset) => {
+          const sibling = [];
+          for (const call of task.siblingCalls ?? []) {
+            if (task.kind === "overload") {
+              sibling.push({ call, edits: [{ start: call, old: task.name, new: `${task.name}_trap` }] });
+              continue;
+            }
+            let open = call + task.name.length;
+            while (/\s/.test(start[open])) open++;
+            const list = start[open] === "(" && parenthesizedItems(start, open, protectedTokens);
+            if (!list || list.items.length < 2) continue;
+            const [first, second] = list.items;
+            sibling.push({
+              call,
+              edits: [
+                { start: first.start, old: first.text, new: second.text },
+                { start: second.start, old: second.text, new: first.text },
+              ],
+            });
+          }
+          const own =
+            task.kind === "overload"
+              ? task.edits.map((edit) => ({ ...edit, new: `${task.name}_trap` }))
+              : task.edits;
+          let text;
+          try {
+            text = applyEdits(start, [...own, ...sibling.flatMap(({ edits }) => edits)]).text;
+          } catch (error) {
+            // Nested calls make sibling swaps overlap; such a candidate is not counted.
+            if (!/Overlapping rename edits/.test(error?.message ?? "")) throw error;
+            task.traps = 0;
+            return;
+          }
+          const errors = await errorLines(text, `trap-${index + offset}`);
+          task.traps = sibling.filter(({ call }) => !errors.has(lineOf(call))).length;
+        }),
+      );
+    candidates.sort(
+      (a, b) =>
+        (b.traps ?? 0) - (a.traps ?? 0) ||
+        difficulty(b) - difficulty(a) ||
+        b.uses - a.uses ||
+        (a.name < b.name ? -1 : 1),
     );
     const tasks = [];
     const taken = [];
@@ -322,6 +403,8 @@ export async function prepareHardPool(casePath, options = {}) {
       kind: task.kind,
       name: task.name,
       newName: task.newName ?? null,
+      uses: task.uses,
+      traps: task.traps ?? null,
       prompt: hardProse(task),
       edits: task.edits,
     }));
