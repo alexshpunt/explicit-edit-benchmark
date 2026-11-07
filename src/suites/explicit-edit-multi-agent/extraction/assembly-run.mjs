@@ -778,7 +778,7 @@ async function mixedProbeIdentity(probe, general, harness, agents = ASSEMBLY_AGE
 /** Sample the resident memory of this process's descendants every five seconds
  * and report the peak, in megabytes, with the process count at that moment.
  */
-function sampleTreeMemory() {
+export function sampleTreeMemory() {
   const peak = { megabytes: 0, processes: 0 };
   const sample = () => {
     const parents = new Map(),
@@ -818,7 +818,7 @@ function sampleTreeMemory() {
 }
 
 /** Build one main.cpp and render both scenes. */
-async function measureMain(directory, main, expectedPixels, signal) {
+export async function measureMain(directory, main, expectedPixels, signal) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await writeTree(path.join(directory, "source"), { "main.cpp": main });
   const candidate = await captureCandidate(

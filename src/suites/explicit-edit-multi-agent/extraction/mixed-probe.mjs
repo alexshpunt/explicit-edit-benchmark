@@ -10,7 +10,7 @@ import { cleanupAssemblyMarkers, prepareAssemblyCase } from "./assembly-case.mjs
 import { describeNamed } from "./assembly-prose.mjs";
 import { renameKind, uniqueSpellings } from "./assembly-renames.mjs";
 
-export const MIXED_PROBE_VERSION = "renderer-mixed-probe-v1";
+export const MIXED_PROBE_VERSION = "renderer-mixed-probe-v2";
 export const MIXED_PROBE_DEFAULTS = Object.freeze({
   moves: 80,
   unique: 6,
@@ -121,7 +121,12 @@ export async function prepareMixedProbe(casePath, options = {}) {
     total += size;
   }
   assert.ok(total > 0, "No region fits the move budget");
-  const moves = setup.deliveries.filter((delivery) => selected.has(delivery.file));
+  // A unit with an identical copy could be moved from either place; only one result is right.
+  const unambiguous = (item) =>
+    (item.copies ?? 1) === 1 && start.split(item.text).length - 1 === 1;
+  const moves = setup.deliveries.filter(
+    (delivery) => selected.has(delivery.file) && delivery.items.every(unambiguous),
+  );
   const moved = new Set(moves.flatMap((delivery) => delivery.items.map((item) => item.id)));
   const reserved = new Set();
   for (const delivery of moves) for (const word of words(delivery.prompt)) reserved.add(word);
@@ -308,26 +313,39 @@ export async function prepareMixedProbe(casePath, options = {}) {
   const fresh = new Set(renames.map(({ newName }) => newName));
   assert.equal(fresh.size, renames.length, "Rename targets collide");
 
-  // Reference: all renames on the start file, then the moves of the renamed units.
-  const allEdits = renames.flatMap((rename) =>
-    rename.edits.map((edit) => ({ ...edit, new: rename.newName })),
-  );
-  const renamed = applyEdits(start, allEdits);
+  /** The reference state after a set of finished tasks: their renames on the start
+   * file, then their moves of the renamed units. Unfinished units keep their places
+   * and placeholders. The result depends only on the set, not on finishing order.
+   */
+  const renameId = (rename) => `rename-${rename.kind}-${rename.name}`;
+  const snapshot = (done) => {
+    const renamed = applyEdits(
+      start,
+      renames
+        .filter((rename) => done.has(renameId(rename)))
+        .flatMap((rename) => rename.edits.map((edit) => ({ ...edit, new: rename.newName }))),
+    );
+    const pieces = moves
+      .filter((delivery) => done.has(delivery.id))
+      .flatMap((delivery) => delivery.items)
+      .map((item) => {
+        const from = renamed.map(item.start + shift),
+          to = renamed.map(item.end + shift);
+        return { item, from, to, text: renamed.text.slice(from, to) };
+      });
+    let main = renamed.text;
+    for (const piece of [...pieces].sort((a, b) => b.from - a.from))
+      main = main.slice(0, piece.from) + main.slice(piece.to);
+    for (const piece of pieces) {
+      const at = main.indexOf(piece.item.marker);
+      assert.ok(at >= 0 && at === main.lastIndexOf(piece.item.marker), "Marker changed");
+      main = main.slice(0, at) + piece.text + main.slice(at + piece.item.marker.length);
+    }
+    return main;
+  };
   const movedItems = moves.flatMap((delivery) => delivery.items);
-  const pieces = movedItems.map((item) => {
-    const from = renamed.map(item.start + shift),
-      to = renamed.map(item.end + shift);
-    return { item, from, to, text: renamed.text.slice(from, to) };
-  });
-  let main = renamed.text;
-  for (const piece of [...pieces].sort((a, b) => b.from - a.from))
-    main = main.slice(0, piece.from) + main.slice(piece.to);
-  for (const piece of pieces) {
-    const at = main.indexOf(piece.item.marker);
-    assert.ok(at >= 0 && at === main.lastIndexOf(piece.item.marker), "Marker changed");
-    main = main.slice(0, at) + piece.text + main.slice(at + piece.item.marker.length);
-  }
-  const expected = cleanupAssemblyMarkers({ "main.cpp": main }, setup.markers).tree;
+  const all = new Set([...moves.map(({ id }) => id), ...renames.map(renameId)]);
+  const expected = cleanupAssemblyMarkers({ "main.cpp": snapshot(all) }, setup.markers).tree;
 
   const assignments = [
     ...renames.map((rename) => ({
@@ -356,12 +374,25 @@ export async function prepareMixedProbe(casePath, options = {}) {
     queue,
     moves: movedItems,
     renames: renames.map(({ edits, ...rename }) => ({ ...rename, edits: edits.length })),
+    snapshot,
     identities: { start: treeIdentity({ "main.cpp": start }), expected: treeIdentity(expected) },
   };
 }
 
+const ISOLATED =
+  "main.cpp in your working directory holds the current state of the project, including the work other agents have finished since your last assignment. Make the change below in it.";
+const CONCURRENT = "Several agents are editing main.cpp at the same time. ";
+
+/** The prose of one queue entry for an agent that works in its own copy. */
+export function isolatedPrompt(entry) {
+  if (entry.task === "rename")
+    return [ISOLATED, renameProse(entry.rename, { isolated: true })].join("\n\n");
+  assert.ok(entry.prompt.startsWith(CONCURRENT), "Unexpected move prose");
+  return [ISOLATED, entry.prompt.slice(CONCURRENT.length)].join("\n\n");
+}
+
 /** One rename assignment in prose. */
-export function renameProse(rename) {
+export function renameProse(rename, { isolated = false } = {}) {
   const { name, newName } = rename;
   const ask =
     rename.kind === "unique"
@@ -371,7 +402,7 @@ export function renameProse(rename) {
         : rename.role === "field"
           ? `In main.cpp, rename the field ${code(name)} of the struct ${code(rename.container.replace(/::$/, ""))} to ${code(newName)}. Change its declaration and every place in the code that refers to this field. Other structs also have fields named ${code(name)}; those fields and every use of them stay unchanged.`
           : `In main.cpp, rename the overload ${code(rename.signature)} of the function ${code(name)} to ${code(newName)}. Change its declarations, its definition and every call that resolves to this overload. The other overloads of ${code(name)} and every call to them stay unchanged.`;
-  return [SHARED, ask, KEEP].join("\n\n");
+  return [...(isolated ? [] : [SHARED]), ask, KEEP].join("\n\n");
 }
 
 const lines = (text) =>
