@@ -336,7 +336,8 @@ export const SNAPSHOT_SCORE_POLICY = Object.freeze({
 export function snapshotScore(summary, rows, policy = SNAPSHOT_SCORE_POLICY) {
   const solved = rows.filter((row) => row.passed).length;
   const accuracy = solved / rows.length;
-  const seconds = rows.reduce((sum, row) => sum + (new Date(row.ended) - new Date(row.started)), 0) / 1000;
+  const seconds =
+    rows.reduce((sum, row) => sum + (new Date(row.ended) - new Date(row.started)), 0) / 1000;
   const perSolved = solved
     ? {
         input: summary.usage ? summary.usage.input / solved : null,
@@ -360,9 +361,17 @@ export function snapshotScore(summary, rows, policy = SNAPSHOT_SCORE_POLICY) {
           weight,
       )
     : 0;
-  const score =
-    100 * accuracy ** policy.accuracyExponent * efficiency ** policy.efficiencyExponent;
-  return { policy: policy.version, solved, total: rows.length, accuracy, perSolved, factors, efficiency, score };
+  const score = 100 * accuracy ** policy.accuracyExponent * efficiency ** policy.efficiencyExponent;
+  return {
+    policy: policy.version,
+    solved,
+    total: rows.length,
+    accuracy,
+    perSolved,
+    factors,
+    efficiency,
+    score,
+  };
 }
 
 /** Which run solved which task: one row per task with each run's outcome and the
