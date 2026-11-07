@@ -314,6 +314,42 @@ export async function verifySnapshotRun(
   return summary;
 }
 
+/** Which run solved which task: one row per task with each run's outcome and the
+ * number of runs that solved it. Runs are labelled by their directory names.
+ */
+export async function calibrationMatrix(runDirectories) {
+  const runs = [];
+  for (const directory of runDirectories) {
+    const rows = JSON.parse(await readFile(path.join(directory, "deliveries.json"), "utf8"));
+    runs.push({ label: path.basename(directory), rows: new Map(rows.map((row) => [row.id, row])) });
+  }
+  const ids = [...new Set(runs.flatMap(({ rows }) => [...rows.keys()]))].sort();
+  const tasks = ids.map((id) => {
+    const outcomes = Object.fromEntries(
+      runs.map(({ label, rows }) => {
+        const row = rows.get(id);
+        return [
+          label,
+          !row ? "missing" : row.passed ? "solved" : row.status === "timed-out" ? "timed-out" : "failed",
+        ];
+      }),
+    );
+    const solved = Object.values(outcomes).filter((outcome) => outcome === "solved").length;
+    return { id, kind: runs.find(({ rows }) => rows.has(id)).rows.get(id).kind, solved, outcomes };
+  });
+  const histogram = {};
+  for (const task of tasks) histogram[task.solved] = (histogram[task.solved] ?? 0) + 1;
+  return {
+    runs: runs.map(({ label, rows }) => ({
+      label,
+      solved: [...rows.values()].filter((row) => row.passed).length,
+      total: rows.size,
+    })),
+    histogram,
+    tasks,
+  };
+}
+
 /** One observation with models. There is no recovery: each task gets one delivery. */
 export async function runSnapshotModel(
   casePath,
@@ -359,6 +395,8 @@ export async function runSnapshotModel(
   const summary = {
     version: SNAPSHOT_RUN_VERSION,
     identity,
+    model: config.model,
+    thinking: config.thinking,
     minutes: Number(((Date.now() - started) / 60000).toFixed(2)),
     agents: run.agents,
     maxLive: run.maxLive,

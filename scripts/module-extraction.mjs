@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 const help = `Experimental paired-module extraction
@@ -23,6 +23,7 @@ const help = `Experimental paired-module extraction
   mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--deliveries N] [--agents N]
   snapshot-verify FLAT_CASE NEW_RUN [--pool mixed|hard] [--agents N]
   snapshot-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--pool mixed|hard] [--agents N]
+  snapshot-matrix NEW_OUTPUT_JSON SNAPSHOT_RUN...
 
 Each selected module must have both an original .h and .cpp. Each file is one
 complete assignment. Required header-only and vendor dependencies are additional
@@ -91,7 +92,7 @@ the final reference and runs scripted participants; the proof's pool and agent
 count must match the run's. --pool hard (default mixed) gives only hard tasks:
 renames of one overload, field or local variable among same-named symbols and
 swaps of an overload's first two parameters with its calls' arguments, ten
-minutes per task.
+minutes per task. snapshot-matrix writes which run solved which task.
 Use fresh ignored output directories and the shared renderer lock on a capable worker.
 See docs/multi-agent.md for shared renderer prerequisites.
 `;
@@ -191,6 +192,15 @@ async function mixedCommand(values, positionals) {
 
 async function snapshotCommand(values, positionals) {
   const [command, ...paths] = positionals;
+  if (command === "snapshot-matrix") {
+    assert.ok(paths.length >= 2, help);
+    const snapshot =
+      await import("../src/suites/explicit-edit-multi-agent/extraction/snapshot-run.mjs");
+    const matrix = await snapshot.calibrationMatrix(paths.slice(1));
+    await writeFile(paths[0], JSON.stringify(matrix, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+    console.log(JSON.stringify({ runs: matrix.runs, histogram: matrix.histogram }));
+    return;
+  }
   assert.ok(["snapshot-verify", "snapshot-run"].includes(command) && paths.length === 2, help);
   for (const option of ["modules", "generation", "task", "from-run", "source-receipt"])
     assert.equal(values[option], undefined, help);
