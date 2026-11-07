@@ -4,7 +4,8 @@ import path from "node:path";
 /** Compilers, language servers and their libraries an agent could use to resolve
  * C++ semantics. The dynamic loader, the assembler and the linker stay available.
  */
-const BINARY = /^(clang|clangd|clang-.*|clang\+\+.*|g\+\+.*|gcc.*|c\+\+|cc|cpp(-.*)?|x86_64-linux-gnu-(g\+\+|gcc|cpp|c\+\+).*|llvm-.*|asan_symbolize.*|cmake|pip3?)$/;
+const BINARY =
+  /^(clang|clangd|clang-.*|clang\+\+.*|g\+\+.*|gcc.*|c\+\+|cc|cpp(-.*)?|x86_64-linux-gnu-(g\+\+|gcc|cpp|c\+\+).*|llvm-.*|asan_symbolize.*|cmake|pip3?)$/;
 const LIBRARY = /^(libclang.*\.so.*|libLLVM.*\.so.*)$/;
 const DIRECTORIES = [
   "/usr/lib/gcc",
