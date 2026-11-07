@@ -214,8 +214,10 @@ the usual text tools stay.
 the share of tasks done exactly, output tokens per task and agent seconds per
 task. Both rates divide by every task of the set, so a failed task is not free;
 agent seconds are the sum of task durations, independent of how many agents ran
-at once. Cached reads and input tokens are not scored, and neither is cost,
-because providers do not report it reliably. Given several runs of one
+at once. Uncached input tokens per task are shown beside the three numbers but
+not scored, because how much input a provider caches depends on the provider as
+much as on the model; total tokens and the run's wall time are for reference.
+Cost is not scored, because providers do not report it reliably. Given several runs of one
 configuration, it adds their mean and range; repeated runs of one configuration
 have differed by one or two tasks. `snapshot-matrix` records which run solved which task.
 

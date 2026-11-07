@@ -316,11 +316,13 @@ export async function verifySnapshotRun(
 
 /** The snapshot result is three separate numbers, never combined: tasks done
  * exactly, output tokens per task and agent seconds per task. Both rates divide by
- * every task of the set, solved or not, so they compare runs over the same work.
- * Agent seconds are the sum of task durations, independent of how many agents ran
- * at once. Unknown provider usage stays unknown.
+ * every task of the set, solved or not. Agent seconds are the sum of task
+ * durations, independent of how many agents ran at once. Uncached input tokens per
+ * task are shown beside them, not scored: how much input a provider caches depends
+ * on the provider as much as on the model. Totals and the run's wall time are for
+ * reference. Unknown provider usage stays unknown.
  */
-export const SNAPSHOT_SCORE_VERSION = "renderer-snapshot-score-v2";
+export const SNAPSHOT_SCORE_VERSION = "renderer-snapshot-score-v3";
 
 /** Score one run from its summary and delivery rows. */
 export function snapshotScore(summary, rows) {
@@ -334,6 +336,16 @@ export function snapshotScore(summary, rows) {
     solvedPercent: (100 * solved) / rows.length,
     outputTokensPerTask: summary.usage ? summary.usage.output / rows.length : null,
     secondsPerTask: seconds / rows.length,
+    shown: {
+      uncachedInputTokensPerTask: summary.usage ? summary.usage.input / rows.length : null,
+    },
+    totals: {
+      inputTokens: summary.usage?.input ?? null,
+      cachedInputTokens: summary.usage?.cacheRead ?? null,
+      outputTokens: summary.usage?.output ?? null,
+      agentSeconds: seconds,
+      wallMinutes: summary.minutes ?? null,
+    },
   };
 }
 

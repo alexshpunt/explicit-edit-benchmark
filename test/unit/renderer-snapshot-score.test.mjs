@@ -20,6 +20,19 @@ test("a run gives three separate numbers over every task of the set", () => {
   assert.equal(score.outputTokensPerTask, 400);
   assert.equal(score.secondsPerTask, 12);
   assert.equal(snapshotScore({ usage: null }, rows(9, 10, 12)).outputTokensPerTask, null);
+  // Uncached input is shown per task; totals are for reference.
+  const shown = snapshotScore(
+    { usage: { input: 1000, output: 4000, cacheRead: 9000 }, minutes: 2 },
+    rows(9, 10, 12),
+  );
+  assert.equal(shown.shown.uncachedInputTokensPerTask, 100);
+  assert.deepEqual(shown.totals, {
+    inputTokens: 1000,
+    cachedInputTokens: 9000,
+    outputTokens: 4000,
+    agentSeconds: 120,
+    wallMinutes: 2,
+  });
 });
 
 test("repeated runs report the mean and range of each number", () => {
