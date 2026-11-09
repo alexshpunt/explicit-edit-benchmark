@@ -91,6 +91,13 @@ export async function startPiParticipant(
   ]) {
     if (config[key]) await copyFile(config[key], path.join(state, "pi", name));
   }
+  // Tools that look up the current user, such as Pi Agent IDE's shared language
+  // servers, need an account entry; only the sandbox user's own entry is visible.
+  const accounts = path.join(state, "accounts");
+  await mkdir(accounts);
+  const [uid, gid] = [process.getuid(), process.getgid()];
+  await writeFile(path.join(accounts, "passwd"), `agent:x:${uid}:${gid}::/state/home:/bin/bash\n`);
+  await writeFile(path.join(accounts, "group"), `agent:x:${gid}:\n`);
   const observer = path.join(state, "observer");
   await mkdir(observer);
   await copyFile(
@@ -149,6 +156,12 @@ export async function startPiParticipant(
     "--ro-bind",
     "/etc/ssl/certs",
     "/etc/ssl/certs",
+    "--ro-bind",
+    path.join(accounts, "passwd"),
+    "/etc/passwd",
+    "--ro-bind",
+    path.join(accounts, "group"),
+    "/etc/group",
     "--proc",
     "/proc",
     "--dev",
