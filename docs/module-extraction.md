@@ -180,8 +180,8 @@ agent starts for each task, at most `--agents` at once. All agents of a run work
 in one sandbox: they share its processes and its `/tmp`, so a language server one
 agent's tools start, such as the shared clangd of Pi Agent IDE, serves every
 agent. Each agent keeps only its own Pi state directory. When an agent closes or
-times out, its own processes are killed; a shared language-server host stays
-until the run ends. The summary counts every move and rename as one check and
+times out, the commands it still runs are killed. Processes it detached, such as
+the shared language-server host, keep running until the run ends. The summary counts every move and rename as one check and
 adds build and render of the final file, tokens, wall time and peak memory.
 `mixed-verify` is the model-free proof.
 
