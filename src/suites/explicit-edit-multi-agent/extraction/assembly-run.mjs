@@ -30,6 +30,7 @@ import {
   releaseCandidateWorkspace,
 } from "../execution/candidate-evidence.mjs";
 import { chunkModelDrivers } from "../execution/chunk-model-drivers.mjs";
+import { SHARED_SANDBOX_POLICY, startSharedSandbox } from "../execution/shared-sandbox.mjs";
 import { runCorrectionSchedule } from "../execution/correction-schedule.mjs";
 import {
   AGENT_LIFECYCLES,
@@ -642,12 +643,14 @@ export async function verifyAssemblyCase(
   return summary;
 }
 
-function modelPools(output, config, general) {
+function modelPools(output, config, general, { sharedSandbox } = {}) {
   const workspace = path.join(output, "workspace");
   return {
     mode: "model",
     create(phase) {
-      const drivers = chunkModelDrivers(path.join(output, phase), workspace, config, general);
+      const drivers = chunkModelDrivers(path.join(output, phase), workspace, config, general, {
+        sharedSandbox,
+      });
       // The general instructions precede the first assignment of every session.
       return {
         usage: drivers.usage,
@@ -759,7 +762,13 @@ export async function probeAssembly(
 }
 
 /** The mixed probe's identity: clean source, its tasks and the general prompt. */
-async function mixedProbeIdentity(probe, general, harness, agents = ASSEMBLY_AGENTS) {
+async function mixedProbeIdentity(
+  probe,
+  general,
+  harness,
+  agents = ASSEMBLY_AGENTS,
+  sandbox = null,
+) {
   const source = await restoringSourceIdentity();
   assert.equal(source.sourceClean, true, "Mixed probes require clean committed source");
   return {
@@ -772,6 +781,7 @@ async function mixedProbeIdentity(probe, general, harness, agents = ASSEMBLY_AGE
     agents,
     deadlineSeconds: ASSEMBLY_DELIVERY_DEADLINE_MS / 1000,
     harness,
+    sandbox,
   };
 }
 
@@ -911,21 +921,31 @@ export async function runMixedProbe(
     general,
     config.harness ?? "baseline-agent",
     agents,
+    SHARED_SANDBOX_POLICY,
   );
   const started = Date.now();
   const memory = sampleTreeMemory();
-  const report = await runAssemblyObservation({
-    setup: probe.setup,
-    output,
-    pools: modelPools(output, config, general),
-    identity,
-    general,
-    phases: [{ name: "mixed", entries: probe.queue, prompt: (entry) => entry.prompt, agents }],
-    start: probe.start,
-    reference: probe.expected,
-    corrections: false,
-    signal,
-  });
+  // All agents of the run work in one sandbox, started with the first agent.
+  /** @type {ReturnType<typeof startSharedSandbox> | undefined} */
+  let sandbox;
+  const sharedSandbox = () => (sandbox ??= startSharedSandbox(path.join(output, "sandbox")));
+  let report;
+  try {
+    report = await runAssemblyObservation({
+      setup: probe.setup,
+      output,
+      pools: modelPools(output, config, general, { sharedSandbox }),
+      identity,
+      general,
+      phases: [{ name: "mixed", entries: probe.queue, prompt: (entry) => entry.prompt, agents }],
+      start: probe.start,
+      reference: probe.expected,
+      corrections: false,
+      signal,
+    });
+  } finally {
+    if (sandbox) await (await sandbox).stop();
+  }
   const minutes = (Date.now() - started) / 60000;
   const peakMemory = memory.stop();
   const main = await readFile(path.join(output, "workspace", "main.cpp"), "utf8");
@@ -944,6 +964,7 @@ export async function runMixedProbe(
     version: MIXED_PROBE_VERSION,
     identity,
     status: report.status,
+    sandbox: SHARED_SANDBOX_POLICY,
     minutes: Number(minutes.toFixed(2)),
     deliveries: rows.length,
     timedOut: rows.filter((row) => row.status === "timed-out").length,

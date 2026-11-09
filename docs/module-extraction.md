@@ -172,6 +172,24 @@ extraction alone starts from the assembled reference. It compares the result wit
 the scripted outcome of the same assignments and reports disagreements without
 corrections, build or Score.
 
+## Shared-file mixed probe
+
+`mixed-run` gives the mixed tasks to concurrent agents that all edit the same
+`main.cpp`: no copies, no merging and no protection against overwrites. A new
+agent starts for each task, at most `--agents` at once. All agents of a run work
+in one sandbox: they share its processes and its `/tmp`, so a language server one
+agent's tools start, such as the shared clangd of Pi Agent IDE, serves every
+agent. Each agent keeps only its own Pi state directory. When an agent closes or
+times out, its own processes are killed; a shared language-server host stays
+until the run ends. The summary counts every move and rename as one check and
+adds build and render of the final file, tokens, wall time and peak memory.
+`mixed-verify` is the model-free proof.
+
+```sh
+node scripts/module-extraction.mjs mixed-verify FLAT_CASE NEW_REFERENCE
+node scripts/module-extraction.mjs mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --agents 10 --allow-model-calls
+```
+
 ## Isolated snapshot runs
 
 On one shared file, races decide results: a partial read and write once cut

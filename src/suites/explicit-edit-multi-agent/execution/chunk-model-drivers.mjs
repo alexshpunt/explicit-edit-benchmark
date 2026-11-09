@@ -10,9 +10,16 @@ export const CHUNK_PROVIDER_RETRY_LIMIT = 3;
 
 /** Isolated native Pi participants for chunk teams. Provider cooldown happens before
  * the delivery deadline starts; the general instructions precede a session's first
- * assignment only.
+ * assignment only. With sharedSandbox, a function that resolves to the started team
+ * sandbox, every participant joins that sandbox.
  */
-export function chunkModelDrivers(output, workspace, config, generalPrompt) {
+export function chunkModelDrivers(
+  output,
+  workspace,
+  config,
+  generalPrompt,
+  { sharedSandbox } = {},
+) {
   assert.equal(typeof generalPrompt, "string");
   const states = new Map(),
     retries = new Map(),
@@ -30,10 +37,12 @@ export function chunkModelDrivers(output, workspace, config, generalPrompt) {
       const state = path.join(output, `session-${session}`);
       states.set(state, null);
       retries.set(session, 0);
+      const sandbox = sharedSandbox ? await sharedSandbox() : undefined;
       const driver = await startPiParticipant(workspace, state, config, {
         signal,
         eventsFile: state + "-events.jsonl",
-        enforceProcessBoundary: true,
+        enforceProcessBoundary: !sandbox,
+        sharedSandbox: sandbox,
         disableAutoRetry: true,
         onRecovery: (request) => {
           const count = retries.get(session) + 1;

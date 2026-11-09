@@ -12,6 +12,7 @@ import { resolvePiParticipantProfile } from "./pi-profile.mjs";
 import { isTerminalProviderError } from "./provider-recovery.mjs";
 import { missingProfileTools } from "../../../../scripts/pi-codemode-profile.mjs";
 import { hiddenToolchainArgs } from "./toolchain-mask.mjs";
+import { killProcesses, participantTree, readProcessTable } from "./shared-sandbox.mjs";
 export { startPiParticipant as startBaseline };
 
 /** Sum finalized native Pi usage. Missing observations remain unknown, not zero. */
@@ -39,6 +40,8 @@ export function finalizedUsage(events) {
 
 /** Start exactly one isolated Pi process. Only declared runtime and authentication files are mounted.
  * Call close in finally. Cancellation kills the PID namespace before returning.
+ * With sharedSandbox the process joins that team sandbox instead: it shares the
+ * team's processes and /tmp, and closing it kills only its own processes.
  */
 export async function startPiParticipant(
   workspace,
@@ -52,9 +55,14 @@ export async function startPiParticipant(
     onRecovery,
     onProviderFailure,
     disableAutoRetry = false,
+    sharedSandbox,
   } = {},
 ) {
   signal?.throwIfAborted();
+  assert.ok(
+    !sharedSandbox || !enforceProcessBoundary,
+    "A shared sandbox has no participant namespace boundary",
+  );
   const profile = await resolvePiParticipantProfile(config);
   const { runtime, version } = profile;
   assert.ok(onRecovery === undefined || typeof onRecovery === "function");
@@ -94,8 +102,8 @@ export async function startPiParticipant(
     path.join(observer, "pi-codemode-profile.mjs"),
   );
   const args = [
-    "--unshare-user",
-    "--unshare-pid",
+    // A shared sandbox supplies the user and PID namespaces when Bubblewrap joins it.
+    ...(sharedSandbox ? [] : ["--unshare-user", "--unshare-pid"]),
     "--unshare-ipc",
     "--unshare-uts",
     "--new-session",
@@ -145,8 +153,7 @@ export async function startPiParticipant(
     "/proc",
     "--dev",
     "/dev",
-    "--tmpfs",
-    "/tmp",
+    ...(sharedSandbox ? ["--bind", sharedSandbox.tmp, "/tmp"] : ["--tmpfs", "/tmp"]),
     "--ro-bind",
     runtime,
     "/runtime",
@@ -210,12 +217,30 @@ export async function startPiParticipant(
     "/state/pi/sessions",
   );
   signal?.throwIfAborted();
-  if (enforceProcessBoundary) args.unshift("--info-fd", "3");
-  const child = spawn("bwrap", args, {
+  const reportsPid = enforceProcessBoundary || Boolean(sharedSandbox);
+  if (reportsPid) args.unshift("--info-fd", "3");
+  const [executable, executableArgs] = sharedSandbox
+    ? sharedSandbox.joinCommand(args)
+    : ["bwrap", args];
+  const child = spawn(executable, executableArgs, {
     detached: true,
-    stdio: enforceProcessBoundary ? ["pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+    stdio: reportsPid ? ["pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
     env: { PATH: "/usr/bin:/bin" },
   });
+  // In a shared sandbox, Bubblewrap's child is the Pi process itself.
+  let sharedPid;
+  if (sharedSandbox) {
+    let information = "";
+    child.stdio[3].on("data", (bytes) => {
+      information += bytes;
+    });
+    child.stdio[3].once("end", () => {
+      const pid = JSON.parse(information || "{}")["child-pid"];
+      if (Number.isSafeInteger(pid) && pid > 0) sharedPid = pid;
+    });
+  }
+  const ownProcesses = () =>
+    sharedPid === undefined ? [] : participantTree(readProcessTable(), sharedPid);
   const namespace = Promise.withResolvers();
   namespace.promise.catch(() => {});
   let processIdentity, namespaceHandle, namespaceLabel;
@@ -567,6 +592,8 @@ export async function startPiParticipant(
   };
   const kill = () => {
     if (stopped || child.exitCode !== null || child.signalCode !== null) return;
+    // Pi's own processes would outlive Bubblewrap in the team's PID namespace.
+    if (sharedSandbox) killProcesses(ownProcesses());
     try {
       process.kill(-child.pid, "SIGKILL");
     } catch (error) {
@@ -585,6 +612,8 @@ export async function startPiParticipant(
       return;
     }
     closing = true;
+    // Processes Pi leaves behind are re-parented when it exits, so list them first.
+    const leftovers = sharedSandbox ? ownProcesses() : [];
     child.stdin.end();
     let timer;
     await Promise.race([
@@ -598,6 +627,7 @@ export async function startPiParticipant(
     ]);
     clearTimeout(timer);
     await exited;
+    if (sharedSandbox) killProcesses(leftovers);
     fail(new ExecutionFailure("driver_exit", "Pi closed"));
   };
   const idleState = async () => {

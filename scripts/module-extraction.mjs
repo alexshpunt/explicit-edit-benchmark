@@ -83,7 +83,9 @@ spelled symbols, of one field or overload among same-named symbols and of one
 function's parameter. Every move and rename is one check; the summary adds build
 and render, tokens, cost and wall time. The harness comes from the private
 config, so one proof serves every harness. --agents (1 to 20, default 20) limits
-the agents working at once. mixed-verify is the model-free proof.
+the agents working at once. All agents of a run share one sandbox: its processes,
+its /tmp and a language server any of them starts. mixed-verify is the model-free
+proof.
 Snapshot commands run the mixed tasks with persistent agents, each in its own copy
 of main.cpp. Before a task the copy receives the reference state of every task
 finished so far; afterwards it must equal that state plus the task, and the task's
