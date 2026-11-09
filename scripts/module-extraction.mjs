@@ -20,7 +20,7 @@ const help = `Experimental paired-module extraction
   assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--agent-lifecycle LIFECYCLE] [--traps LEVEL] [--renames PERCENT [--rename-agents N]]
   assembly-probe FLAT_CASE NEW_RUN [--deliveries N] [--regions FILE[,FILE]] [--agent-lifecycle LIFECYCLE] [--traps LEVEL] (--scripted | --config PRIVATE_JSON --allow-model-calls)
   mixed-verify FLAT_CASE NEW_RUN [--deliveries N]
-  mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--deliveries N] [--agents N]
+  mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--deliveries N] [--agents N] [--sandbox separate|shared]
   snapshot-verify FLAT_CASE NEW_RUN [--pool mixed|hard] [--agents N]
   snapshot-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--pool mixed|hard] [--agents N]
   snapshot-matrix NEW_OUTPUT_JSON SNAPSHOT_RUN...
@@ -83,9 +83,10 @@ spelled symbols, of one field or overload among same-named symbols and of one
 function's parameter. Every move and rename is one check; the summary adds build
 and render, tokens, cost and wall time. The harness comes from the private
 config, so one proof serves every harness. --agents (1 to 20, default 20) limits
-the agents working at once. All agents of a run share one sandbox: its processes,
-its /tmp and a language server any of them starts. mixed-verify is the model-free
-proof.
+the agents working at once. --sandbox separate (default) gives every agent its
+own sandbox; --sandbox shared puts all agents of a run in one sandbox, with its
+processes, its /tmp and a language server any of them starts. mixed-verify is the
+model-free proof.
 Snapshot commands run the mixed tasks with persistent agents, each in its own copy
 of main.cpp. Before a task the copy receives the reference state of every task
 finished so far; afterwards it must equal that state plus the task, and the task's
@@ -178,6 +179,8 @@ async function mixedCommand(values, positionals) {
     assert.equal(typeof values.proof, "string", help);
   } else assert.ok(!values.config && !values["allow-model-calls"] && !values.proof, help);
   const counts = values.deliveries === undefined ? {} : { moves: Number(values.deliveries) };
+  const sandbox = values.sandbox ?? "separate";
+  assert.ok(["separate", "shared"].includes(sandbox), help);
   assert.ok(run || values.agents === undefined, help);
   const agents = values.agents === undefined ? 20 : Number(values.agents);
   assert.ok(counts.moves === undefined || Number.isSafeInteger(counts.moves), help);
@@ -189,7 +192,7 @@ async function mixedCommand(values, positionals) {
         paths[0],
         paths[1],
         JSON.parse(await readFile(values.config, "utf8")),
-        { proofPath: values.proof, counts, agents, signal },
+        { proofPath: values.proof, counts, agents, sandbox, signal },
       )
     : await assembly.verifyMixedProbe(paths[0], paths[1], { counts, signal });
   const { identity: _identity, ...rest } = summary;
@@ -372,8 +375,10 @@ try {
       renames: { type: "string" },
       "rename-agents": { type: "string" },
       pool: { type: "string" },
+      sandbox: { type: "string" },
     },
   });
+  if (positionals[0] !== "mixed-run") assert.equal(values.sandbox, undefined, help);
   if (!positionals[0]?.startsWith("assembly-"))
     assert.ok(
       values["agent-lifecycle"] === undefined &&

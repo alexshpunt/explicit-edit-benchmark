@@ -176,19 +176,33 @@ corrections, build or Score.
 
 `mixed-run` gives the mixed tasks to concurrent agents that all edit the same
 `main.cpp`: no copies, no merging and no protection against overwrites. A new
-agent starts for each task, at most `--agents` at once. All agents of a run work
-in one sandbox: they share its processes and its `/tmp`, so a language server one
-agent's tools start, such as the shared clangd of Pi Agent IDE, serves every
-agent. Each agent keeps only its own Pi state directory. When an agent closes or
-times out, the commands it still runs are killed. Processes it detached, such as
-the shared language-server host, keep running until the run ends. The summary counts every move and rename as one check and
+agent starts for each task, at most `--agents` at once.
+
+`--sandbox` chooses how agents are isolated. `separate`, the default, gives every
+agent its own sandbox with its own processes and `/tmp`, so each agent starts
+its own language server. With `shared`, all agents of a run work in one sandbox:
+they share its processes and its `/tmp`, so a language server one agent's tools
+start, such as the shared clangd of Pi Agent IDE, serves every agent. Each agent
+keeps only its own Pi state directory. When an agent closes or times out, the
+commands it still runs are killed. Processes it detached, such as the shared
+language-server host, keep running until the run ends. The mode is part of the
+run identity and summary. The summary counts every move and rename as one check and
 adds build and render of the final file, tokens, wall time and peak memory.
 `mixed-verify` is the model-free proof.
 
 ```sh
 node scripts/module-extraction.mjs mixed-verify FLAT_CASE NEW_REFERENCE
-node scripts/module-extraction.mjs mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --agents 10 --allow-model-calls
+node scripts/module-extraction.mjs mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --agents 10 --sandbox shared --allow-model-calls
 ```
+
+Observation with `--sandbox shared`, Terra 6.1 low and 10 agents, five runs per
+harness: Bash only passed 228 of 246 checks on average (205 to 242) and lost or
+duplicated moved blocks in three runs, because agents rewrote the whole file from
+copies read earlier. Pi Agent IDE 0.9.8 without Bash passed 241 on average (238
+to 243), kept every move in every run, and used one clangd per run. It took 4.6
+minutes per run against 2.7 and about twice the uncached input tokens, with the
+same output tokens. Overload renames failed in both harnesses, and no final file
+built.
 
 ## Isolated snapshot runs
 

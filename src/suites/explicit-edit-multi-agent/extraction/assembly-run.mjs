@@ -903,9 +903,11 @@ export async function runMixedProbe(
   casePath,
   outputPath,
   config,
-  { proofPath, counts = {}, agents = ASSEMBLY_AGENTS, signal } = {},
+  { proofPath, counts = {}, agents = ASSEMBLY_AGENTS, sandbox = "separate", signal } = {},
 ) {
   assert.ok(Number.isInteger(agents) && agents >= 1 && agents <= ASSEMBLY_AGENTS);
+  assert.ok(["separate", "shared"].includes(sandbox), `Unknown sandbox mode ${sandbox}`);
+  const shared = sandbox === "shared";
   const output = path.resolve(outputPath);
   const probe = await prepareMixedProbe(casePath, counts);
   const general = await loadGeneralPrompt();
@@ -921,14 +923,16 @@ export async function runMixedProbe(
     general,
     config.harness ?? "baseline-agent",
     agents,
-    SHARED_SANDBOX_POLICY,
+    shared ? SHARED_SANDBOX_POLICY : null,
   );
   const started = Date.now();
   const memory = sampleTreeMemory();
-  // All agents of the run work in one sandbox, started with the first agent.
+  // In shared mode all agents of the run work in one sandbox, started with the first agent.
   /** @type {ReturnType<typeof startSharedSandbox> | undefined} */
-  let sandbox;
-  const sharedSandbox = () => (sandbox ??= startSharedSandbox(path.join(output, "sandbox")));
+  let team;
+  const sharedSandbox = shared
+    ? () => (team ??= startSharedSandbox(path.join(output, "sandbox")))
+    : undefined;
   let report;
   try {
     report = await runAssemblyObservation({
@@ -944,7 +948,7 @@ export async function runMixedProbe(
       signal,
     });
   } finally {
-    if (sandbox) await (await sandbox).stop();
+    if (team) await (await team).stop();
   }
   const minutes = (Date.now() - started) / 60000;
   const peakMemory = memory.stop();
@@ -964,7 +968,7 @@ export async function runMixedProbe(
     version: MIXED_PROBE_VERSION,
     identity,
     status: report.status,
-    sandbox: SHARED_SANDBOX_POLICY,
+    sandbox: shared ? SHARED_SANDBOX_POLICY : "separate",
     minutes: Number(minutes.toFixed(2)),
     deliveries: rows.length,
     timedOut: rows.filter((row) => row.status === "timed-out").length,
