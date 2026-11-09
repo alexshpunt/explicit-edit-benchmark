@@ -43,7 +43,11 @@ test("real Pi agents share one sandbox; closing one kills only its own processes
   const first = await start("first");
   await first.execute("start");
   await first.close();
-  assert.equal(running("shared-server-host.mjs 3072").length, 1, "The shared host survives its agent");
+  assert.equal(
+    running("shared-server-host.mjs 3072").length,
+    1,
+    "The shared host survives its agent",
+  );
 
   const second = await start("second");
   await second.execute("look");
@@ -56,8 +60,16 @@ test("real Pi agents share one sandbox; closing one kills only its own processes
   await second.close();
   await hanging;
   assert.equal(running("sleep 3071").length, 0, "Closing an agent kills its running commands");
-  assert.equal(running("shared-server-host.mjs 3072").length, 1, "Closing an agent keeps the shared host");
+  assert.equal(
+    running("shared-server-host.mjs 3072").length,
+    1,
+    "Closing an agent keeps the shared host",
+  );
 
   await sandbox.stop();
-  assert.equal(running("shared-server-host.mjs 3072").length, 0, "Stopping the sandbox kills everything in it");
+  assert.equal(
+    running("shared-server-host.mjs 3072").length,
+    0,
+    "Stopping the sandbox kills everything in it",
+  );
 });
