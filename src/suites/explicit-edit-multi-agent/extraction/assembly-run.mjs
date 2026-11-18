@@ -895,9 +895,12 @@ export async function verifyMixedProbe(casePath, outputPath, { counts = {}, sign
   return summary;
 }
 
-/** One mixed observation: twenty agents work through the interleaved queue once,
- * without corrections. The summary reports the checks, file integrity, build and
- * render, tokens, cost and wall time.
+/** At most this many mixed-probe agents work at once; memory decides the useful number. */
+export const MIXED_PROBE_MAX_AGENTS = 40;
+
+/** One mixed observation: up to MIXED_PROBE_MAX_AGENTS agents, twenty by default,
+ * work through the interleaved queue once, without corrections. The summary reports
+ * the checks, file integrity, build and render, tokens, cost and wall time.
  */
 export async function runMixedProbe(
   casePath,
@@ -905,7 +908,7 @@ export async function runMixedProbe(
   config,
   { proofPath, counts = {}, agents = ASSEMBLY_AGENTS, sandbox = "separate", signal } = {},
 ) {
-  assert.ok(Number.isInteger(agents) && agents >= 1 && agents <= ASSEMBLY_AGENTS);
+  assert.ok(Number.isInteger(agents) && agents >= 1 && agents <= MIXED_PROBE_MAX_AGENTS);
   assert.ok(["separate", "shared"].includes(sandbox), `Unknown sandbox mode ${sandbox}`);
   const shared = sandbox === "shared";
   const output = path.resolve(outputPath);

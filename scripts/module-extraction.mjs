@@ -82,7 +82,7 @@ N (default 80), so the reference builds, interleaved with renames of uniquely
 spelled symbols, of one field or overload among same-named symbols and of one
 function's parameter. Every move and rename is one check; the summary adds build
 and render, tokens, cost and wall time. The harness comes from the private
-config, so one proof serves every harness. --agents (1 to 20, default 20) limits
+config, so one proof serves every harness. --agents (1 to 40, default 20) limits
 the agents working at once. --sandbox separate (default) gives every agent its
 own sandbox; --sandbox shared puts all agents of a run in one sandbox, with its
 processes, its /tmp and a language server any of them starts. mixed-verify is the
