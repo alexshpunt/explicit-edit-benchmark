@@ -129,7 +129,8 @@ test(
       .split("\n")
       .map((line) => JSON.parse(line));
     const diagnostic = events.find(({ type }) => type === "rpc_record_oversized");
-    assert.ok(events.findIndex(({ type }) => type === "agent_start") < events.indexOf(diagnostic));
+    const started = events.findIndex(({ type }) => type === "agent_start");
+    assert.ok(started >= 0 && started < events.indexOf(diagnostic));
     assert.equal(diagnostic.recordType, "message_update");
     assert.equal(diagnostic.bytes, failed.error.bytes);
     assert.ok(diagnostic.bytes > 32 * 1024 * 1024);
