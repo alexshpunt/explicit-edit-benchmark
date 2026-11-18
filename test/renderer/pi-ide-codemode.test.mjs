@@ -176,8 +176,8 @@ const previous = load("phase");
 if (previous !== ${number <= 4 ? "undefined" : JSON.stringify("first")}) throw Error("Unexpected fixture state");
 const source = await tools.read({ path: "/workspace/item.txt" });
 const selected = await tools.search({ path: source, query: "stage=${previous}" });
-if (!selected.hasMatches || !selected.complete) throw Error("Missing fixture edit selection");
-text(await tools.replace({ path: selected.result, text: "stage=${next}" }));
+if (!selected.matches.length || !selected.complete) throw Error("Missing fixture edit selection");
+text(await tools.replace({ path: selected.id, text: "stage=${next}" }));
 store("phase", "${next}");
 `,
             },
