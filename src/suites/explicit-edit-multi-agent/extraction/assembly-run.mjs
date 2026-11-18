@@ -52,6 +52,8 @@ import { ASSEMBLY_RENAME_VERSION, renameLeftovers } from "./assembly-renames.mjs
 import { integrationPrompt, loadGeneralPrompt, physicalUnits } from "./chunk-run.mjs";
 import { captureExtractionState } from "./run.mjs";
 import { MIXED_PROBE_VERSION, gradeMixedProbe, prepareMixedProbe } from "./mixed-probe.mjs";
+import { sampleHostMemory } from "./mixed-host-memory.mjs";
+import { mixedBehavior } from "./mixed-telemetry.mjs";
 
 export const ASSEMBLY_RUN_VERSION = "renderer-assembly-run-v3";
 export const ASSEMBLY_AGENTS = 20;
@@ -929,40 +931,49 @@ export async function runMixedProbe(
     shared ? SHARED_SANDBOX_POLICY : null,
   );
   const started = Date.now();
-  const memory = sampleTreeMemory();
-  // In shared mode all agents of the run work in one sandbox, started with the first agent.
-  /** @type {ReturnType<typeof startSharedSandbox> | undefined} */
-  let team;
-  const sharedSandbox = shared
-    ? () => (team ??= startSharedSandbox(path.join(output, "sandbox")))
-    : undefined;
-  let report;
+  const host = sampleHostMemory();
+  let report, minutes, peakMemory, grade, build, hostMemory;
   try {
-    report = await runAssemblyObservation({
-      setup: probe.setup,
-      output,
-      pools: modelPools(output, config, general, { sharedSandbox }),
-      identity,
-      general,
-      phases: [{ name: "mixed", entries: probe.queue, prompt: (entry) => entry.prompt, agents }],
-      start: probe.start,
-      reference: probe.expected,
-      corrections: false,
+    const memory = sampleTreeMemory();
+    /** @type {ReturnType<typeof startSharedSandbox> | undefined} */
+    let team;
+    const sharedSandbox = shared
+      ? () => (team ??= startSharedSandbox(path.join(output, "sandbox")))
+      : undefined;
+    try {
+      try {
+        report = await runAssemblyObservation({
+          setup: probe.setup,
+          output,
+          pools: modelPools(output, config, general, { sharedSandbox }),
+          identity,
+          general,
+          phases: [
+            { name: "mixed", entries: probe.queue, prompt: (entry) => entry.prompt, agents },
+          ],
+          start: probe.start,
+          reference: probe.expected,
+          corrections: false,
+          signal,
+        });
+      } finally {
+        if (team) await (await team).stop();
+      }
+    } finally {
+      peakMemory = memory.stop();
+    }
+    minutes = (Date.now() - started) / 60000;
+    const main = await readFile(path.join(output, "workspace", "main.cpp"), "utf8");
+    grade = gradeMixedProbe(probe, main);
+    build = await measureMain(
+      path.join(output, "final-build"),
+      cleanupAssemblyMarkers({ "main.cpp": main }, probe.setup.markers).tree["main.cpp"],
+      probe.setup.manifest.pixels,
       signal,
-    });
+    );
   } finally {
-    if (team) await (await team).stop();
+    hostMemory = host.stop();
   }
-  const minutes = (Date.now() - started) / 60000;
-  const peakMemory = memory.stop();
-  const main = await readFile(path.join(output, "workspace", "main.cpp"), "utf8");
-  const grade = gradeMixedProbe(probe, main);
-  const build = await measureMain(
-    path.join(output, "final-build"),
-    cleanupAssemblyMarkers({ "main.cpp": main }, probe.setup.markers).tree["main.cpp"],
-    probe.setup.manifest.pixels,
-    signal,
-  );
   const usage = { input: 0, output: 0, cacheRead: 0, cost: 0 };
   for (const { usage: session } of report.sessions)
     for (const key of Object.keys(usage)) usage[key] += session?.[key] ?? 0;
@@ -981,6 +992,8 @@ export async function runMixedProbe(
     resultMatched: build.resultMatched,
     usage,
     peakMemory,
+    hostMemory,
+    behavior: await mixedBehavior(output, rows),
   };
   await writeFile(path.join(output, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
     flag: "wx",
