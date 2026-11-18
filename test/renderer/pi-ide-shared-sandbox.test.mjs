@@ -44,7 +44,13 @@ test("Pi Agent IDE agents in one sandbox share one clangd", options, async (t) =
   const provider = await providerFixture(root, (body) =>
     body.messages.at(-1).role === "tool"
       ? {}
-      : { toolCall: { name: "lsp_search", arguments: { calls: "main.cpp#add" } } },
+      : {
+          // lsp_search is deferred behind tool_search; Codemode scripts reach it directly.
+          toolCall: {
+            name: "codemode",
+            arguments: { code: 'text(await tools.lsp_search({ calls: "main.cpp#add" }));' },
+          },
+        },
   );
   t.after(() => provider.close());
   const sandbox = await startSharedSandbox(path.join(root, "sandbox"));

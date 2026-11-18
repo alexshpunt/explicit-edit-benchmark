@@ -11,6 +11,7 @@ const runtime = process.env.RENDERER_PI_IDE_RUNTIME;
 const options = { skip: process.platform !== "linux" || !runtime, timeout: 60000 };
 const requiredTools = [
   "codemode",
+  "tool_search",
   "read",
   "bash",
   "write",

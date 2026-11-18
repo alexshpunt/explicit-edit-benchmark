@@ -4,6 +4,7 @@ import { writeFileSync, writeSync } from "node:fs";
 // tool_search, so they are not part of the active loadout it starts with.
 const ideTools = [
   "codemode",
+  "tool_search",
   "read",
   "write",
   "search",

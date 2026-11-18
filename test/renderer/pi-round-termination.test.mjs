@@ -367,6 +367,7 @@ test(
       const tools = new Set(request.tools.map((tool) => tool.function.name));
       for (const tool of [
         "codemode",
+        "tool_search",
         "read",
         "bash",
         "write",

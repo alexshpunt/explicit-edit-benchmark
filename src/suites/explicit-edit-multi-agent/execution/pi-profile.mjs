@@ -3,12 +3,15 @@ import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { resolveIdePackage } from "../../../../scripts/prepare-benchmark.mjs";
 
-/** Additive tool selections of the IDE harnesses: Codemode joins Pi's default
- * tools, and the variant without Bash also removes Bash.
+/** Additive tool selections of the IDE harnesses: Codemode and tool_search join
+ * Pi's default tools, and the variant without Bash also removes Bash. Pi Agent IDE
+ * keeps some tools (diff, undo, ast_search, lsp_search) deferred behind tool_search
+ * and turns tool_search on in a normal Pi install; the benchmark names it
+ * explicitly because it owns the tool selection.
  */
 const IDE_TOOL_ARGS = Object.freeze({
-  "pi-agent-ide-codemode": ["--tools", "+codemode"],
-  "pi-agent-ide-codemode-no-bash": ["--tools", "+codemode,-bash"],
+  "pi-agent-ide-codemode": ["--tools", "+codemode,+tool_search"],
+  "pi-agent-ide-codemode-no-bash": ["--tools", "+codemode,+tool_search,-bash"],
 });
 
 /** Resolve an isolated native participant without starting a process or reading credentials. */
@@ -96,6 +99,8 @@ export async function resolvePiParticipantProfile(config) {
       "--extension",
       "builtin:codemode",
       "--extension",
+      "builtin:tool-search",
+      "--extension",
       path.posix.join("/runtime", ...path.relative(runtime, entry).split(path.sep)),
       "--extension",
       "/observer/pi-codemode-profile.mjs",
@@ -103,7 +108,7 @@ export async function resolvePiParticipantProfile(config) {
     // The IDE registers its own Bash; only a `-bash` default-tools entry hides it.
     settings:
       harness === "pi-agent-ide-codemode-no-bash"
-        ? { codemode: { mode: "on" }, defaultTools: ["+codemode", "-bash"] }
-        : { codemode: { mode: "on" } },
+        ? { codemode: { mode: "on" }, defaultTools: ["+codemode", "+tool_search", "-bash"] }
+        : { codemode: { mode: "on" }, defaultTools: ["+codemode", "+tool_search"] },
   };
 }

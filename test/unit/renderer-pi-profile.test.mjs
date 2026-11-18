@@ -89,16 +89,21 @@ test("Codemode participants bind the installed IDE source and additive main prof
     kind: "pi-agent-ide-codemode",
     version: `0.9.0+${revision}`,
   });
-  assert.deepEqual(profile.toolArgs, ["--tools", "+codemode"]);
+  assert.deepEqual(profile.toolArgs, ["--tools", "+codemode,+tool_search"]);
   assert.deepEqual(profile.extensionArgs, [
     "--extension",
     "builtin:codemode",
+    "--extension",
+    "builtin:tool-search",
     "--extension",
     "/runtime/node_modules/pi-agent-ide/dist/pi-agent-ide.js",
     "--extension",
     "/observer/pi-codemode-profile.mjs",
   ]);
-  assert.deepEqual(profile.settings, { codemode: { mode: "on" } });
+  assert.deepEqual(profile.settings, {
+    codemode: { mode: "on" },
+    defaultTools: ["+codemode", "+tool_search"],
+  });
 });
 
 test("the IDE variant without Bash removes Bash and must not declare it", async (t) => {
@@ -109,10 +114,10 @@ test("the IDE variant without Bash removes Bash and must not declare it", async 
   });
   assert.equal(profile.baseline, false);
   assert.equal(profile.harness.id, "pi-agent-ide-codemode-no-bash");
-  assert.deepEqual(profile.toolArgs, ["--tools", "+codemode,-bash"]);
+  assert.deepEqual(profile.toolArgs, ["--tools", "+codemode,+tool_search,-bash"]);
   assert.deepEqual(profile.settings, {
     codemode: { mode: "on" },
-    defaultTools: ["+codemode", "-bash"],
+    defaultTools: ["+codemode", "+tool_search", "-bash"],
   });
   const ide = ["codemode", "read", "write", "search", "replace", "insert"];
   const editing = [...ide, "delete", "copy", "move", "tool_search"];
