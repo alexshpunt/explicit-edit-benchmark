@@ -175,6 +175,11 @@ export async function compareMixedRuns(paths) {
   add("Deliveries", (s) => s.deliveries);
   add("Timed out", (s) => s.timedOut);
   add("Checks passed", (s) => s.checks?.all && `${s.checks.all.passed}/${s.checks.all.total}`);
+  add("Verdict", (s) => s.verdict);
+  add("Integrity", (s) =>
+    s.checks?.integrity ? (s.checks.integrity.passed ? "pass" : "fail") : null,
+  );
+  add("Collateral lines", (s) => s.checks?.integrity?.affectedLines);
   add("Minutes", (s) => s.minutes);
   add("Peak process-tree RSS (MiB)", (s) => s.peakMemory?.megabytes);
   add("Min available host memory (MiB)", (s) => s.hostMemory?.minAvailableMiB);

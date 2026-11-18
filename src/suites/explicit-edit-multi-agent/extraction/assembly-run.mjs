@@ -51,7 +51,13 @@ import { ASSEMBLY_CORRECTION_POLICY, assemblyCorrections } from "./assembly-corr
 import { ASSEMBLY_RENAME_VERSION, renameLeftovers } from "./assembly-renames.mjs";
 import { integrationPrompt, loadGeneralPrompt, physicalUnits } from "./chunk-run.mjs";
 import { captureExtractionState } from "./run.mjs";
-import { MIXED_PROBE_VERSION, gradeMixedProbe, prepareMixedProbe } from "./mixed-probe.mjs";
+import {
+  MIXED_INTEGRITY_VERSION,
+  MIXED_PROBE_VERSION,
+  gradeMixedProbe,
+  mixedProbeVerdict,
+  prepareMixedProbe,
+} from "./mixed-probe.mjs";
 import { sampleHostMemory } from "./mixed-host-memory.mjs";
 import { mixedBehavior } from "./mixed-telemetry.mjs";
 
@@ -775,6 +781,7 @@ async function mixedProbeIdentity(
   assert.equal(source.sourceClean, true, "Mixed probes require clean committed source");
   return {
     version: MIXED_PROBE_VERSION,
+    integrityPolicy: MIXED_INTEGRITY_VERSION,
     source,
     planSha256: probe.setup.manifest.planSha256,
     counts: probe.counts,
@@ -873,6 +880,8 @@ export async function verifyMixedProbe(casePath, outputPath, { counts = {}, sign
     status:
       reference.all.passed === reference.all.total &&
       reference.exact &&
+      reference.integrity.passed &&
+      start.integrity.passed &&
       start.all.passed === 0 &&
       build.buildPassed &&
       build.resultMatched
@@ -880,6 +889,7 @@ export async function verifyMixedProbe(casePath, outputPath, { counts = {}, sign
         : "fail",
     deliveries: probe.queue.length,
     checks: { reference: reference.all, start: start.all },
+    integrity: { reference: reference.integrity, start: start.integrity },
     renames: probe.renames.map(({ kind, role, name, newName, edits }) => ({
       kind,
       role,
@@ -987,6 +997,16 @@ export async function runMixedProbe(
     deliveries: rows.length,
     timedOut: rows.filter((row) => row.status === "timed-out").length,
     checks: grade,
+    verdict: mixedProbeVerdict({
+      status: report.status,
+      checks: grade,
+      buildPassed: build.buildPassed,
+      resultMatched: build.resultMatched,
+    }),
+    // Region ownership gives context, not proof of who wrote the lines.
+    integrityRelatedDeliveries: rows
+      .filter(({ file }) => Object.hasOwn(grade.integrity.byRegion, file))
+      .map(({ id, file }) => ({ id, region: file })),
     differences: report.stages.at(-1).structure.differenceIds.length,
     buildPassed: build.buildPassed,
     resultMatched: build.resultMatched,

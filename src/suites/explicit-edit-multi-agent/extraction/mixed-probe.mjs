@@ -9,7 +9,10 @@ import { assignNames } from "../generation/name-vocabulary.mjs";
 import { cleanupAssemblyMarkers, prepareAssemblyCase } from "./assembly-case.mjs";
 import { describeNamed } from "./assembly-prose.mjs";
 import { renameKind, uniqueSpellings } from "./assembly-renames.mjs";
+import { gradeMixedIntegrity } from "./mixed-integrity.mjs";
 
+// Report policy can change without changing the workload shared with snapshot runs.
+export const MIXED_INTEGRITY_VERSION = "renderer-mixed-integrity-v1";
 export const MIXED_PROBE_VERSION = "renderer-mixed-probe-v2";
 export const MIXED_PROBE_DEFAULTS = Object.freeze({
   moves: 80,
@@ -404,6 +407,19 @@ export function renameProse(rename, { isolated = false } = {}) {
   return [...(isolated ? [] : [SHARED]), ask, KEEP].join("\n\n");
 }
 
+/** A completed execution is not a passing observation. Integrity is a gate,
+ * independent of the diagnostic assignment tally and integration results.
+ */
+export function mixedProbeVerdict({ status, checks, buildPassed, resultMatched }) {
+  if (!checks.integrity.passed) return "integrity-failed";
+  return status === "complete" &&
+    checks.all.passed === checks.all.total &&
+    buildPassed &&
+    resultMatched
+    ? "pass"
+    : "incomplete";
+}
+
 const lines = (text) =>
   text
     .split("\n")
@@ -480,6 +496,7 @@ export function gradeMixedProbe(probe, candidateMain) {
     parameters: tally(renames.filter(({ kind }) => kind === "parameter")),
     all: tally([...moves, ...renames]),
     exact: candidate === expected,
+    integrity: gradeMixedIntegrity(expected, candidate, probe),
     lines: { candidate: candidate.split("\n").length, expected: expected.split("\n").length },
     failed: [...moves, ...renames].filter(({ passed }) => !passed).map(({ id }) => id),
   };

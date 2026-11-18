@@ -19,8 +19,13 @@ test(
     await mkdir(".tmp", { recursive: true });
     const root = await mkdtemp(path.resolve(".tmp/mixed-telemetry-pi-"));
     t.after(() => rm(root, { recursive: true, force: true }));
-    const provider = await providerFixture(root, (body) => ({
-      command: body.messages.at(-1).role === "tool" ? undefined : "exit 7",
+    const provider = await providerFixture(root, (body, request) => ({
+      command:
+        body.messages.at(-1).role === "tool"
+          ? undefined
+          : request === 1
+            ? "printf '// unrelated Pi test edit\\n' >> main.cpp; exit 7"
+            : "exit 7",
       usage: {
         prompt_tokens: 20,
         prompt_tokens_details: { cached_tokens: 8 },
@@ -41,6 +46,11 @@ test(
       sandbox: "shared",
     });
     assert.equal(summary.status, "complete");
+    assert.equal(summary.verdict, "integrity-failed");
+    assert.equal(summary.checks.integrity.passed, false);
+    assert.equal(summary.checks.integrity.lines.added, 1);
+    assert.equal(summary.checks.integrity.affectedLines, 1);
+    assert.deepEqual(summary.integrityRelatedDeliveries, []);
     assert.ok(summary.deliveries > 0);
     assert.equal(summary.timedOut, 0);
     assert.equal(summary.behavior.deliveriesWithEvents, summary.deliveries);
