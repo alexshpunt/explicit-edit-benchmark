@@ -18,7 +18,7 @@ jobs:
       - name: Install sandbox and compiler prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap clang clangd build-essential
+          sudo apt-get install -y bubblewrap clang clangd build-essential python3-clang-18
           /usr/bin/clang++ --version | grep 'clang version 18\.'
           clangd-18 --version
       - name: Enable unprivileged Bubblewrap namespaces
