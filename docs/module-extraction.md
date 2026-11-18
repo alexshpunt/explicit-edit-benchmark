@@ -196,9 +196,21 @@ other workloads. An unavailable counter is reported as unknown, not zero.
 
 The move and rename tally does not decide whether a run passes. A completed run
 sets `verdict` to `pass` only if every task check passes, the final file builds
-and renders correctly, and `checks.integrity.passed` is true. Collateral damage
-sets `verdict` to `integrity-failed`; a clean run missing any other condition is
-`incomplete`. The execution status and task tally remain separate.
+and renders correctly, `checks.integrity.passed` is true, and no delivery is
+listed in `failedDeliveries`. Collateral damage sets `verdict` to
+`integrity-failed`; a clean run missing any other condition is `incomplete`.
+The execution status and task tally remain separate.
+
+Pi's RPC reader accepts up to 32 MiB of UTF-8 bytes per line (excluding the LF).
+For a larger line it streams the rest to the line boundary or EOF without
+parsing or retaining the full record. The private session event log records the
+stream, byte count, up to 4 KiB from each end, and the event type, tool name,
+call ID, and RPC ID when visible in the envelope at the start of the record.
+Fields that cannot be recovered are null. If this happens during a mixed delivery, the
+controller records `RPC_RECORD_OVERSIZED` in `report.json` and
+`summary.json`, closes that agent, and continues with the next assignment.
+It neither retries the assignment nor rolls back edits. The task tally, build
+and render still measure the final shared file.
 
 Integrity compares the ordered lines of `main.cpp` with the reference. It ignores
 issued slot markers, blank lines and line-edge whitespace, reverses the requested

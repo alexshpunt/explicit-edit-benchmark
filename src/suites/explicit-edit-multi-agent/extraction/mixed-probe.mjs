@@ -410,9 +410,16 @@ export function renameProse(rename, { isolated = false } = {}) {
 /** A completed execution is not a passing observation. Integrity is a gate,
  * independent of the diagnostic assignment tally and integration results.
  */
-export function mixedProbeVerdict({ status, checks, buildPassed, resultMatched }) {
+export function mixedProbeVerdict({
+  status,
+  checks,
+  buildPassed,
+  resultMatched,
+  failedDeliveries = 0,
+}) {
   if (!checks.integrity.passed) return "integrity-failed";
   return status === "complete" &&
+    failedDeliveries === 0 &&
     checks.all.passed === checks.all.total &&
     buildPassed &&
     resultMatched

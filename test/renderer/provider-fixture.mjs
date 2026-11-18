@@ -40,7 +40,7 @@ export async function providerFixture(
               },
             ],
           }
-        : { content: "done" };
+        : { content: result?.text ?? "done" };
       res.write(
         `data: ${JSON.stringify({ id: `msg-${number}`, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`,
       );

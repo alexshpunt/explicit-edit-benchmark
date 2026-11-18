@@ -74,10 +74,17 @@ test("the integrity gate catches unrelated code moved into a destination region"
   assert.equal(grade.integrity.lines.misplaced, 1);
   assert.equal(grade.integrity.affectedLines, 1);
   assert.deepEqual(grade.integrity.byRegion["a.h"].candidate, { misplaced: 1 });
-  const verdict = (checks) =>
-    mixedProbeVerdict({ status: "complete", checks, buildPassed: true, resultMatched: true });
+  const verdict = (checks, failedDeliveries = 0) =>
+    mixedProbeVerdict({
+      status: "complete",
+      checks,
+      buildPassed: true,
+      resultMatched: true,
+      failedDeliveries,
+    });
   assert.equal(verdict(grade), "integrity-failed");
   assert.equal(verdict(clean), "pass");
+  assert.equal(verdict(clean, 1), "incomplete");
   assert.equal(verdict(gradeMixedProbe(probe, start)), "incomplete");
   assert.equal(clean.integrity.passed, true);
 });

@@ -174,6 +174,7 @@ export async function compareMixedRuns(paths) {
   add("Sandbox", (s) => s.sandbox);
   add("Deliveries", (s) => s.deliveries);
   add("Timed out", (s) => s.timedOut);
+  add("Failed deliveries", (s) => s.failedDeliveries?.length);
   add("Checks passed", (s) => s.checks?.all && `${s.checks.all.passed}/${s.checks.all.total}`);
   add("Verdict", (s) => s.verdict);
   add("Integrity", (s) =>

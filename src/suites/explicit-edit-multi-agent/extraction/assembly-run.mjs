@@ -30,6 +30,7 @@ import {
   releaseCandidateWorkspace,
 } from "../execution/candidate-evidence.mjs";
 import { chunkModelDrivers } from "../execution/chunk-model-drivers.mjs";
+import { OversizedRpcRecord } from "../execution/pi-rpc-lines.mjs";
 import { SHARED_SANDBOX_POLICY, startSharedSandbox } from "../execution/shared-sandbox.mjs";
 import { runCorrectionSchedule } from "../execution/correction-schedule.mjs";
 import {
@@ -260,6 +261,21 @@ async function runAssemblyObservation({
           } catch (error) {
             row.status = "error";
             row.error = { name: error?.name, message: error?.message };
+            // This phase closes every agent before taking another assignment.
+            if (
+              name === "mixed" &&
+              phaseLifecycle === "per-delivery" &&
+              error instanceof OversizedRpcRecord
+            ) {
+              row.error = {
+                ...row.error,
+                code: error.code,
+                category: error.category,
+                stream: error.stream,
+                bytes: error.bytes,
+              };
+              return { status: row.status };
+            }
             throw error;
           } finally {
             row.ended = new Date().toISOString();
@@ -454,7 +470,9 @@ async function runAssemblyObservation({
           exactness: fileExactness(prepared, state.structure),
         },
       ];
-      report.passed = state.structure.differenceIds.length === 0;
+      report.passed =
+        state.structure.differenceIds.length === 0 &&
+        !report.deliveries.some((row) => row.status === "error");
     }
     report.status = "complete";
   } catch (error) {
@@ -988,6 +1006,9 @@ export async function runMixedProbe(
   for (const { usage: session } of report.sessions)
     for (const key of Object.keys(usage)) usage[key] += session?.[key] ?? 0;
   const rows = report.deliveries;
+  const failedDeliveries = rows
+    .filter(({ status }) => status === "error")
+    .map(({ id, session, error }) => ({ id, session, error }));
   const summary = {
     version: MIXED_PROBE_VERSION,
     identity,
@@ -996,8 +1017,10 @@ export async function runMixedProbe(
     minutes: Number(minutes.toFixed(2)),
     deliveries: rows.length,
     timedOut: rows.filter((row) => row.status === "timed-out").length,
+    failedDeliveries,
     checks: grade,
     verdict: mixedProbeVerdict({
+      failedDeliveries: failedDeliveries.length,
       status: report.status,
       checks: grade,
       buildPassed: build.buildPassed,
