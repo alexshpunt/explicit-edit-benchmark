@@ -20,6 +20,8 @@ const help = `Experimental paired-module extraction
   assembly-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--agent-lifecycle LIFECYCLE] [--traps LEVEL] [--renames PERCENT [--rename-agents N]]
   assembly-probe FLAT_CASE NEW_RUN [--deliveries N] [--regions FILE[,FILE]] [--agent-lifecycle LIFECYCLE] [--traps LEVEL] (--scripted | --config PRIVATE_JSON --allow-model-calls)
   mixed-verify FLAT_CASE NEW_RUN [--deliveries N]
+  mixed-rescore SAVED_RUN [--memory-log MEMWATCH_TSV]
+  mixed-compare RUN_OR_SUMMARY RUN_OR_SUMMARY...
   mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--deliveries N] [--agents N] [--sandbox separate|shared]
   snapshot-verify FLAT_CASE NEW_RUN [--pool mixed|hard] [--agents N]
   snapshot-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--pool mixed|hard] [--agents N]
@@ -164,6 +166,23 @@ async function chunkCommand(values, positionals) {
 
 async function mixedCommand(values, positionals) {
   const [command, ...paths] = positionals;
+  if (command === "mixed-rescore" || command === "mixed-compare") {
+    const rescore = command === "mixed-rescore";
+    assert.ok(rescore ? paths.length === 1 : paths.length >= 2, help);
+    assert.ok(
+      Object.keys(values).every((key) => rescore && key === "memory-log"),
+      help,
+    );
+    const telemetry =
+      await import("../src/suites/explicit-edit-multi-agent/extraction/mixed-telemetry.mjs");
+    if (rescore) {
+      const summary = await telemetry.rescoreMixedRun(paths[0], {
+        memoryLog: values["memory-log"],
+      });
+      console.log(JSON.stringify(summary, null, 2));
+    } else console.log(await telemetry.compareMixedRuns(paths));
+    return;
+  }
   assert.ok(["mixed-verify", "mixed-run"].includes(command) && paths.length === 2, help);
   for (const option of ["modules", "generation", "task", "from-run", "source-receipt"])
     assert.equal(values[option], undefined, help);
@@ -376,9 +395,11 @@ try {
       "rename-agents": { type: "string" },
       pool: { type: "string" },
       sandbox: { type: "string" },
+      "memory-log": { type: "string" },
     },
   });
   if (positionals[0] !== "mixed-run") assert.equal(values.sandbox, undefined, help);
+  if (positionals[0] !== "mixed-rescore") assert.equal(values["memory-log"], undefined, help);
   if (!positionals[0]?.startsWith("assembly-"))
     assert.ok(
       values["agent-lifecycle"] === undefined &&

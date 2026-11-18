@@ -187,12 +187,34 @@ keeps only its own Pi state directory. When an agent closes or times out, the
 commands it still runs are killed. Processes it detached, such as the shared
 language-server host, keep running until the run ends. The mode is part of the
 run identity and summary. The summary counts every move and rename as one check and
-adds build and render of the final file, tokens, wall time and peak memory.
+adds build and render of the final file, tokens, wall time and peak process-tree
+RSS. It also samples host memory from the delivery phase through the final build
+and render: minimum available memory and peak swap growth over the first sample
+(in MiB), and the Linux kernel's OOM kill counter delta. Host values can reflect
+other workloads. An unavailable counter is reported as unknown, not zero.
 `mixed-verify` is the model-free proof.
 
 ```sh
 node scripts/module-extraction.mjs mixed-verify FLAT_CASE NEW_REFERENCE
 node scripts/module-extraction.mjs mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --agents 10 --sandbox shared --allow-model-calls
+```
+
+The summary's `behavior` comes from native Pi events. It counts finalized
+assistant responses with nonzero token usage, completed top-level tool calls,
+tool errors by tool and kind, and direct reads of `docs:` guides. Nested Codemode
+calls are not counted. Token counts separate uncached input, cache-read input,
+and output. The per-delivery average includes timed-out deliveries with events;
+deliveries with no events are marked unknown and excluded from the denominator.
+
+To compare runs without model calls or builds, pass run directories or JSON
+summaries. `mixed-rescore` writes an augmented copy of a saved summary to stdout.
+It reads the saved Pi events without editing the run or regrading C++ checks.
+For older runs, an optional memwatch TSV supplies the `available_mb` and
+`swap_used_mb` columns in MiB. Those logs do not supply OOM counts.
+
+```sh
+node scripts/module-extraction.mjs mixed-rescore SAVED_RUN --memory-log MEMORY.tsv > rescored.json
+node scripts/module-extraction.mjs mixed-compare OTHER_RUN rescored.json
 ```
 
 Observation with `--sandbox shared`, Terra 6.1 low and 10 agents, five runs per
