@@ -194,6 +194,24 @@ and render: minimum available memory and peak swap growth over the first sample
 other workloads. An unavailable counter is reported as unknown, not zero.
 `mixed-verify` is the model-free proof.
 
+The move and rename tally does not decide whether a run passes. A completed run
+sets `verdict` to `pass` only if every task check passes, the final file builds
+and renders correctly, and `checks.integrity.passed` is true. Collateral damage
+sets `verdict` to `integrity-failed`; a clean run missing any other condition is
+`incomplete`. The execution status and task tally remain separate.
+
+Integrity compares the ordered lines of `main.cpp` with the reference. It ignores
+issued slot markers, blank lines and line-edge whitespace, reverses the requested
+identifier substitutions in code (not in comments or strings), and exempts one
+intact copy of each assigned move on both sides. An undone move or a wrong
+same-spelled rename can fail its task without failing integrity. Missing or
+rewritten move text and extra copies are not exempt. Equal lines displaced in
+the diff count as misplaced, surplus copies as duplicated, and the remaining
+replacements, removals and additions as changed, lost and added. Paired lines
+count once. The summary gives line ranges in the marker-free file and counts
+by region. `integrityRelatedDeliveries` lists assignments targeting those regions;
+it does not identify the writer when concurrent agents share a file.
+
 ```sh
 node scripts/module-extraction.mjs mixed-verify FLAT_CASE NEW_REFERENCE
 node scripts/module-extraction.mjs mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --agents 10 --sandbox shared --allow-model-calls
