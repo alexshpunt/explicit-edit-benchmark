@@ -4,8 +4,8 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { copyFile, mkdir, open, readFile, readlink, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
+import { OversizedRpcRecord, readPiRpcLines } from "./pi-rpc-lines.mjs";
 import { ExecutionFailure } from "./request-chain.mjs";
 import { assertProcessBoundary, waitForProcessBoundaryExit } from "./process-boundary.mjs";
 import { resolvePiParticipantProfile } from "./pi-profile.mjs";
@@ -340,7 +340,7 @@ export async function startPiParticipant(
   exited.catch(() => {});
   const trace = (event) => {
     if (!["message_update", "tool_execution_update"].includes(event.type)) events.push(event);
-    if (eventsFile) appendFileSync(eventsFile, JSON.stringify(event) + "\n");
+    if (eventsFile) appendFileSync(eventsFile, JSON.stringify(event) + "\n", { mode: 0o600 });
   };
   /** @type {{
    * recoveryController: AbortController,
@@ -504,36 +504,30 @@ export async function startPiParticipant(
       if (active?.started) active.resolve();
     }
   };
-  const readLines = (stream, consume) => {
-    const decoder = new StringDecoder("utf8");
-    let buffered = "";
-    stream.on("data", (chunk) => {
-      try {
-        buffered += decoder.write(chunk);
-        if (buffered.length > 32 * 1024 * 1024) throw Error("RPC record exceeds evidence limit");
-        let end;
-        while ((end = buffered.indexOf("\n")) >= 0) {
-          const line = buffered.slice(0, end);
-          buffered = buffered.slice(end + 1);
-          if (line) consume(line);
-        }
-      } catch (error) {
-        fail(new ExecutionFailure("driver_exit", error.message));
-      }
-    });
-    stream.on("end", () => {
-      buffered += decoder.end();
-      if (buffered) {
+  const readLines = (name, consume) =>
+    readPiRpcLines(
+      child[name],
+      (line) => {
+        if (terminal instanceof OversizedRpcRecord) return;
         try {
-          consume(buffered);
+          consume(line);
         } catch (error) {
-          fail(error);
+          fail(new ExecutionFailure("driver_exit", error.message));
         }
-      }
-    });
-  };
-  readLines(child.stdout, (line) => record(JSON.parse(line)));
-  readLines(child.stderr, (line) => {
+      },
+      (diagnostic) => {
+        if (terminal) return;
+        try {
+          trace({ type: "rpc_record_oversized", stream: name, ...diagnostic });
+        } catch (error) {
+          fail(new ExecutionFailure("driver_exit", error.message));
+          return;
+        }
+        fail(new OversizedRpcRecord(name, diagnostic.bytes));
+      },
+    );
+  readLines("stdout", (line) => record(JSON.parse(line)));
+  readLines("stderr", (line) => {
     if (line.startsWith("RENDERER_BASELINE ")) observe(JSON.parse(line.slice(18)));
     else {
       stderr = (stderr + line + "\n").slice(-65536);
