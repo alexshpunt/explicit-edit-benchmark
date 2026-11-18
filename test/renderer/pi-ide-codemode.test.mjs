@@ -15,13 +15,11 @@ const requiredTools = [
   "bash",
   "write",
   "search",
-  "diff",
   "replace",
   "insert",
   "delete",
   "copy",
   "move",
-  "undo",
 ];
 
 function checkLoadout(requests) {

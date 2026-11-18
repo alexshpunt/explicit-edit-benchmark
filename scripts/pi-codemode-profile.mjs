@@ -1,17 +1,17 @@
 import { writeFileSync, writeSync } from "node:fs";
 
+// Pi Agent IDE keeps diff, undo, ast_search and lsp_search deferred behind
+// tool_search, so they are not part of the active loadout it starts with.
 const ideTools = [
   "codemode",
   "read",
   "write",
   "search",
-  "diff",
   "replace",
   "insert",
   "delete",
   "copy",
   "move",
-  "undo",
 ];
 
 /** Tools each IDE harness must and must not declare. The variant without Bash

@@ -371,13 +371,11 @@ test(
         "bash",
         "write",
         "search",
-        "diff",
         "replace",
         "insert",
         "delete",
         "copy",
         "move",
-        "undo",
       ])
         assert.ok(tools.has(tool), tool);
       assert.ok(

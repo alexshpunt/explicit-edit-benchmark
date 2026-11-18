@@ -114,9 +114,17 @@ test("the IDE variant without Bash removes Bash and must not declare it", async 
     codemode: { mode: "on" },
     defaultTools: ["+codemode", "-bash"],
   });
-  const ide = ["codemode", "read", "write", "search", "diff", "replace", "insert"];
-  const editing = [...ide, "delete", "copy", "move", "undo"];
+  const ide = ["codemode", "read", "write", "search", "replace", "insert"];
+  const editing = [...ide, "delete", "copy", "move", "tool_search"];
   assert.deepEqual(missingProfileTools(editing, "pi-agent-ide-codemode-no-bash"), []);
+  // Deferred IDE tools such as diff and undo are not required in the active loadout.
+  assert.deepEqual(
+    missingProfileTools(
+      editing.filter((name) => name !== "move"),
+      "pi-agent-ide-codemode-no-bash",
+    ),
+    ["move"],
+  );
   assert.deepEqual(missingProfileTools([...editing, "bash"], "pi-agent-ide-codemode-no-bash"), [
     "-bash",
   ]);
