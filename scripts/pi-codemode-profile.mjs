@@ -6,13 +6,11 @@ const requiredTools = [
   "bash",
   "write",
   "search",
-  "diff",
   "replace",
   "insert",
   "delete",
   "copy",
   "move",
-  "undo",
 ];
 
 /** Return the required Codemode/standalone tools absent from an observed loadout. */
@@ -36,9 +34,14 @@ export function declaredToolNames(messages) {
 export default function codemodeProfile(pi) {
   const check = (phase, tools) => {
     const missing = missingProfileTools(tools);
+    const deferredTools = pi
+      .getAllTools?.()
+      ?.filter(({ name, exposure }) => exposure === "deferred" && !tools.includes(name))
+      .map(({ name }) => name)
+      .sort();
     writeFileSync(
       `${process.env.PI_CODING_AGENT_DIR}/codemode-profile.json`,
-      JSON.stringify({ phase, tools: [...tools].sort(), missing }) + "\n",
+      JSON.stringify({ phase, tools: [...tools].sort(), missing, deferredTools }) + "\n",
     );
     if (missing.length) {
       writeSync(
