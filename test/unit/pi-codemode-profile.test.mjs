@@ -7,7 +7,10 @@ import { inspectHarnessOutput, recoveryAdapter } from "../../scripts/harness-run
 import { tempDirectory } from "../helpers/temp.mjs";
 import { parseRunOptions } from "../../scripts/benchmark-run.mjs";
 import { resolveExecutionPlan } from "../../scripts/execution-plan.mjs";
-import { declaredToolNames, missingProfileTools } from "../../scripts/pi-codemode-profile.mjs";
+import codemodeProfile, {
+  declaredToolNames,
+  missingProfileTools,
+} from "../../scripts/pi-codemode-profile.mjs";
 
 const profileTools = [
   "codemode",
@@ -15,14 +18,51 @@ const profileTools = [
   "bash",
   "write",
   "search",
-  "diff",
   "replace",
   "insert",
   "delete",
   "copy",
   "move",
-  "undo",
 ];
+
+await test("the current IDE loadout reports registered deferred tools separately", async (t) => {
+  const root = await tempDirectory("codemode-current");
+  t.mock.method(process, "exit", (code) => assert.fail(`Unexpected profile exit: ${code}`));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = root;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  });
+
+  const tools = [...profileTools, "diagnostics", "file_search", "outline"].sort();
+  const deferredTools = ["ast_search", "diff", "lsp_search", "undo"];
+  const handlers = new Map();
+  const pi = {
+    on: (event, handler) => handlers.set(event, handler),
+    getActiveTools: () => tools,
+    getAllTools: () => [
+      ...tools.map((name) => ({ name, exposure: "direct" })),
+      ...deferredTools.toReversed().map((name) => ({ name, exposure: "deferred" })),
+      { name: "hidden_tool", exposure: "hidden" },
+    ],
+  };
+  codemodeProfile(pi);
+  const readReport = async () =>
+    JSON.parse(await readFile(path.join(root, "codemode-profile.json"), "utf8"));
+
+  handlers.get("session_start")();
+  assert.deepEqual(await readReport(), { phase: "active", tools, missing: [], deferredTools });
+
+  handlers.get("context_with_system")({
+    messages: [{ role: "system", toolsAdded: tools.map((name) => ({ name })) }],
+  });
+  assert.deepEqual(await readReport(), { phase: "model", tools, missing: [], deferredTools });
+
+  delete pi.getAllTools;
+  handlers.get("session_start")();
+  assert.deepEqual(await readReport(), { phase: "active", tools, missing: [] });
+});
 
 await test("the Codemode IDE profile keeps standalone tools and resumes the same configuration", async () => {
   const root = await tempDirectory("codemode-profile");
@@ -107,7 +147,14 @@ await test("missing or incomplete model-facing loadout evidence fails the Codemo
     "not JSON",
     JSON.stringify({ phase: "active", tools: profileTools }),
     JSON.stringify({ phase: "model", tools: ["codemode"], missing: [] }),
-    JSON.stringify({ phase: "model", tools: profileTools.filter((name) => name !== "codemode") }),
+    ...["codemode", "replace"].map((missing) =>
+      JSON.stringify({
+        phase: "model",
+        tools: profileTools.filter((name) => name !== missing),
+        deferredTools: [missing],
+        missing: [],
+      }),
+    ),
   ]) {
     await writeFile(report, evidence);
     const metrics = await inspectHarnessOutput("pi-agent-ide-codemode", output);

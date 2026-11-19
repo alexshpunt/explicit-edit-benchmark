@@ -35,7 +35,9 @@ Install your agent yourself and log in the way that agent expects. The benchmark
 
 `baseline-agent` runs Pi with only the built-in `bash` tool. It disables discovered extensions, skills, templates, themes and context files; its one explicitly loaded extension replaces the system prompt with an empty string. Use the same Pi authentication as `pi-default`.
 
-Use `pi-agent-ide-codemode` for current IDE evaluations. It explicitly loads native Codemode in `on` mode alongside standalone IDE tools and checks their model-facing declarations before inference. `pi-agent-ide` keeps native Codemode disabled for historical comparisons; its results remain a separate family.
+Use `pi-agent-ide-codemode` for current IDE evaluations. It loads native Codemode in `on` mode and checks that Codemode and the required standalone IDE tools are declared to the model before inference. `diff` and `undo` are not required in the active loadout. When Pi reports deferred tools, the trial's local `agent/codemode-profile.json` lists them separately from the observed tool declarations. This check does not change the benchmark configuration identity.
+
+`pi-agent-ide` keeps native Codemode disabled for historical comparisons; its results remain a separate family.
 
 ## Models and reasoning
 
