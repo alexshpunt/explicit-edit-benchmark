@@ -76,6 +76,39 @@ test("default native participants retain the Bash-only Baseline", async (t) => {
   assert.equal(profile.settings, null);
 });
 
+test("an extension harness loads the package's declared entry and keeps its own tools", async (t) => {
+  const { config, runtime } = await fixture(t);
+  const hashline = path.join(runtime, "node_modules/pi-hashline-edit-pro");
+  await mkdir(hashline, { recursive: true });
+  await writeFile(
+    path.join(hashline, "package.json"),
+    JSON.stringify({
+      name: "pi-hashline-edit-pro",
+      version: "7.2.0",
+      pi: { extensions: ["./index.ts"] },
+    }),
+  );
+  await writeFile(path.join(hashline, "index.ts"), "export default function() {}\n");
+  const profile = await resolvePiParticipantProfile({ ...config, harness: "pi-hashline-edit-pro" });
+  assert.equal(profile.baseline, false);
+  assert.deepEqual(profile.harness, {
+    id: "pi-hashline-edit-pro",
+    kind: "pi-hashline-edit-pro",
+    version: "7.2.0",
+  });
+  assert.deepEqual(profile.toolArgs, []);
+  assert.deepEqual(profile.extensionArgs, [
+    "--extension",
+    "/runtime/node_modules/pi-hashline-edit-pro/index.ts",
+    "--extension",
+    "/observer/pi-codemode-profile.mjs",
+  ]);
+  assert.equal(profile.settings, null);
+  const loadout = ["read", "replace", "insert", "grep", "undo_last_change", "write", "bash"];
+  assert.deepEqual(missingProfileTools(loadout, "pi-hashline-edit-pro"), []);
+  assert.deepEqual(missingProfileTools([...loadout, "edit"], "pi-hashline-edit-pro"), ["-edit"]);
+});
+
 test("Codemode participants bind the installed IDE source and additive main profile", async (t) => {
   const { config } = await fixture(t);
   const profile = await resolvePiParticipantProfile({
