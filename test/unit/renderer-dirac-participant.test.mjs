@@ -158,3 +158,14 @@ test("a Dirac participant resolves its runtime and runs unattended with the mode
     "Rename a.",
   ]);
 });
+
+test("the Dirac harness without Bash disables commands and the skills that create command tools", () => {
+  const noBash = config("/unused", { harness: "dirac-no-bash" });
+  assert.equal(isDiracParticipant(noBash), true);
+  assert.equal(isDiracParticipant({ harness: "dirac" }), false);
+  assert.deepEqual(diracCommand(noBash, "Rename a.").slice(-3), [
+    "--disable-tool",
+    "execute_command,use_skill",
+    "Rename a.",
+  ]);
+});
