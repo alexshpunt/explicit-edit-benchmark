@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
-import { copyFile, mkdir, open, readFile, readlink, realpath, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, open, readFile, readlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { OversizedRpcRecord, readPiRpcLines } from "./pi-rpc-lines.mjs";
@@ -13,6 +13,7 @@ import { isTerminalProviderError } from "./provider-recovery.mjs";
 import { missingProfileTools } from "../../../../scripts/pi-codemode-profile.mjs";
 import { hiddenToolchainArgs } from "./toolchain-mask.mjs";
 import { killProcesses, participantTree, readProcessTable } from "./shared-sandbox.mjs";
+import { participantSandboxArgs, writeSandboxAccounts } from "./participant-sandbox.mjs";
 export { startPiParticipant as startBaseline };
 
 /** Sum finalized native Pi usage. Missing observations remain unknown, not zero. */
@@ -91,13 +92,7 @@ export async function startPiParticipant(
   ]) {
     if (config[key]) await copyFile(config[key], path.join(state, "pi", name));
   }
-  // Tools that look up the current user, such as Pi Agent IDE's shared language
-  // servers, need an account entry; only the sandbox user's own entry is visible.
-  const accounts = path.join(state, "accounts");
-  await mkdir(accounts);
-  const [uid, gid] = [process.getuid(), process.getgid()];
-  await writeFile(path.join(accounts, "passwd"), `agent:x:${uid}:${gid}::/state/home:/bin/bash\n`);
-  await writeFile(path.join(accounts, "group"), `agent:x:${gid}:\n`);
+  const accounts = await writeSandboxAccounts(state);
   const observer = path.join(state, "observer");
   await mkdir(observer);
   await copyFile(
@@ -108,83 +103,15 @@ export async function startPiParticipant(
     fileURLToPath(new URL("../../../../scripts/pi-codemode-profile.mjs", import.meta.url)),
     path.join(observer, "pi-codemode-profile.mjs"),
   );
-  const args = [
-    // A shared sandbox supplies the user and PID namespaces when Bubblewrap joins it.
-    ...(sharedSandbox ? [] : ["--unshare-user", "--unshare-pid"]),
-    "--unshare-ipc",
-    "--unshare-uts",
-    "--new-session",
-    "--die-with-parent",
-    "--clearenv",
-    "--setenv",
-    "PATH",
-    "/usr/bin:/bin",
-    "--setenv",
-    "HOME",
-    "/state/home",
-    "--setenv",
-    "PI_CODING_AGENT_DIR",
-    "/state/pi",
-    "--setenv",
-    "PI_OFFLINE",
-    "1",
-    "--setenv",
-    "PI_TELEMETRY",
-    "0",
-    "--ro-bind",
-    "/usr",
-    "/usr",
-    "--ro-bind",
-    "/lib",
-    "/lib",
-    "--ro-bind",
-    "/lib64",
-    "/lib64",
-    "--symlink",
-    "usr/bin",
-    "/bin",
-    "--ro-bind",
-    "/etc/ld.so.cache",
-    "/etc/ld.so.cache",
-    // Resolve standard /usr/bin alternative symlinks without binding all of /etc.
-    "--ro-bind-try",
-    "/etc/alternatives",
-    "/etc/alternatives",
-    "--ro-bind",
-    await realpath("/etc/resolv.conf"),
-    "/etc/resolv.conf",
-    "--ro-bind",
-    "/etc/ssl/certs",
-    "/etc/ssl/certs",
-    "--ro-bind",
-    path.join(accounts, "passwd"),
-    "/etc/passwd",
-    "--ro-bind",
-    path.join(accounts, "group"),
-    "/etc/group",
-    "--proc",
-    "/proc",
-    "--dev",
-    "/dev",
-    ...(sharedSandbox ? ["--bind", sharedSandbox.tmp, "/tmp"] : ["--tmpfs", "/tmp"]),
-    "--ro-bind",
+  const args = await participantSandboxArgs({
+    sharedSandbox,
+    accounts,
     runtime,
-    "/runtime",
-    "--bind",
     state,
-    "/state",
-    "--ro-bind",
-    observer,
-    "/state/observer",
-    "--ro-bind",
-    observer,
-    "/observer",
-    "--bind",
-    path.resolve(workspace),
-    "/workspace",
-    "--chdir",
-    "/workspace",
-  ];
+    workspace,
+    environment: { PI_CODING_AGENT_DIR: "/state/pi", PI_OFFLINE: "1", PI_TELEMETRY: "0" },
+    stateBinds: ["--ro-bind", observer, "/state/observer", "--ro-bind", observer, "/observer"],
+  });
   // An experiment without compilers or language servers: Bash, Python and editors only.
   if (config.toolchain === "hidden") args.push(...(await hiddenToolchainArgs()));
   if (feedbackDirectory) args.push("--ro-bind", path.resolve(feedbackDirectory), "/feedback");

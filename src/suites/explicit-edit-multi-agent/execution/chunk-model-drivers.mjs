@@ -5,6 +5,7 @@ import path from "node:path";
 import { finalizedUsage, startPiParticipant } from "./pi-baseline.mjs";
 import { admitProviderDelivery, createProviderRecovery } from "./provider-recovery.mjs";
 import { executeChunkDelivery } from "./chunk-delivery-deadline.mjs";
+import { isOmpParticipant, startOmpParticipant } from "./omp-participant.mjs";
 
 export const CHUNK_PROVIDER_RETRY_LIMIT = 3;
 
@@ -38,6 +39,17 @@ export function chunkModelDrivers(
       states.set(state, null);
       retries.set(session, 0);
       const sandbox = sharedSandbox ? await sharedSandbox() : undefined;
+      if (isOmpParticipant(config)) {
+        // One process per delivery; native Pi's recovery protocol does not apply.
+        const driver = await startOmpParticipant(workspace, state, config, {
+          signal,
+          eventsFile: state + "-events.jsonl",
+          sharedSandbox: sandbox,
+          onProviderFailure: (error) => recovery.stop(error),
+        });
+        states.set(state, driver);
+        return driver;
+      }
       const driver = await startPiParticipant(workspace, state, config, {
         signal,
         eventsFile: state + "-events.jsonl",
@@ -70,18 +82,19 @@ export function chunkModelDrivers(
         "Unconfirmed participant closure",
       );
       for (const state of states.keys()) {
-        const directory = path.join(state, "pi");
-        const entry = await lstat(directory).catch((error) => {
-          if (error.code === "ENOENT") return null;
-          throw error;
-        });
-        if (!entry) continue;
-        assert.ok(entry.isDirectory() && !entry.isSymbolicLink());
-        await Promise.all(
-          ["auth.json", "models.json"].map((file) =>
-            rm(path.join(directory, file), { force: true }),
-          ),
-        );
+        for (const [subdirectory, files] of [
+          ["pi", ["auth.json", "models.json"]],
+          ["omp", ["agent.db", "agent.db-wal", "agent.db-shm"]],
+        ]) {
+          const directory = path.join(state, subdirectory);
+          const entry = await lstat(directory).catch((error) => {
+            if (error.code === "ENOENT") return null;
+            throw error;
+          });
+          if (!entry) continue;
+          assert.ok(entry.isDirectory() && !entry.isSymbolicLink());
+          await Promise.all(files.map((file) => rm(path.join(directory, file), { force: true })));
+        }
       }
     },
   };
