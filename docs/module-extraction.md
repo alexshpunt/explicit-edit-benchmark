@@ -178,6 +178,15 @@ corrections, build or Score.
 `main.cpp`: no copies, no merging and no protection against overwrites. A new
 agent starts for each task, at most `--agents` at once.
 
+Agents are native Pi by default: the participant config's `harness` selects Bash
+only (`baseline-agent`) or Pi Agent IDE. With `"harness": "oh-my-pi-default"` every
+agent is Oh My Pi instead. Its config has `runtime`, a directory whose `node_modules`
+holds `@oh-my-pi/pi-coding-agent` and `@oven/bun-linux-x64`, `model`, `thinking` and
+`authFile`, an Oh My Pi `agent.db` with the provider's credentials. Each delivery runs
+one `omp --mode json -p` process in the same sandbox as a Pi agent, with Oh My Pi's own
+system prompt and tools and without extensions, skills or rules. Its events are
+recorded and counted like Pi's.
+
 `--sandbox` chooses how agents are isolated. `separate`, the default, gives every
 agent its own sandbox with its own processes and `/tmp`, so each agent starts
 its own language server. With `shared`, all agents of a run work in one sandbox:
