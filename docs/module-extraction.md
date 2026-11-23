@@ -192,6 +192,27 @@ in the same sandbox as a Pi agent, with the agent's own system prompt and tools:
   `node_modules` holds `dirac-cli`; `authFile` is a Dirac `secrets.json`, copied to
   the participant's own Dirac home; `thinking` is Dirac's reasoning effort.
 
+Each of these harnesses also has a variant without a shell, so a run measures the
+editing tools alone. Tools that run JavaScript (Codemode, Oh My Pi's eval) stay, but
+without commands or processes:
+
+- `pi-agent-ide-codemode-no-bash` removes Bash; Codemode can call only the IDE tools.
+- `pi-hashline-edit-pro-no-bash` removes Pi's built-in Bash (`--tools -bash`). The
+  loadout check stops the agent before its first model request if Bash is active.
+- `dirac-no-bash` disables `execute_command` and `use_skill`
+  (`--disable-tool execute_command,use_skill`). The built-in `new-tool` skill unlocks
+  `upsert_tool`, which creates tools that run commands. Subagents stay off, as by
+  Dirac's default.
+- `oh-my-pi-no-bash` loads a settings overlay that turns off the bash tool, Python
+  eval and the debugger, which launches any program. JavaScript eval stays, but it
+  can still reach a shell: its `sh()` helper runs commands on Oh My Pi's shell engine
+  without the bash tool, and cells can import `child_process` or call `Bun.spawn`. A
+  guard extension (`omp-no-shell-guard.mjs`) refuses such cells, percent commands and
+  any bash or debug call with a prose reason. It reads the cell's source, so a
+  deliberate workaround is possible but stays visible in the events. It also records
+  the active tools in the participant's `no-shell-profile.json` and stops the agent
+  before its first model request if Bash or the debugger is active.
+
 Oh My Pi's events already have Pi's shape. Dirac's are converted to it: a tool call's
 result is the text Dirac sent to the model, assistant text is an `assistant_text`
 event because Dirac reports usage separately, and the native records are kept beside
