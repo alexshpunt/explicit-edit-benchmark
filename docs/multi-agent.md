@@ -462,4 +462,6 @@ and their shared-file behavior are described in
 
 [Experimental module extraction](module-extraction.md) is a separate whole-file
 experiment with generation-derived ownership and pragma-once project headers.
-Its observations are not results for the public 71-task suite.
+Its observations are not results for the public 71-task suite. `src/replay/`
+records its shared-file mixed runs and builds local
+[replay pages](module-extraction.md#replay-pages) of them.

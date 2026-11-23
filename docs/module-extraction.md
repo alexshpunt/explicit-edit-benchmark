@@ -304,6 +304,54 @@ minutes per run against 2.7 and about twice the uncached input tokens, with the
 same output tokens. Overload renames failed in both harnesses, and no final file
 built.
 
+### Replay pages
+
+A mixed run keeps only the start and final `main.cpp`. To see how the agents got
+there, run it under the replay recorder. It saves every version of `main.cpp` and
+the time each agent's event line was written. It then builds one HTML page that
+opens from disk without a network. The page replays the run on a timeline: the
+shared file at any moment, what each agent read and called, and which call made
+each edit. The arguments after `--` are those of `mixed-run`, with `FLAT_CASE` and
+`NEW_RUN` first:
+
+```sh
+npm run replay -- mixed-run NEW_REPLAY -- FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof NEW_REFERENCE/summary.json --agents 25 --sandbox shared --allow-model-calls
+```
+
+`NEW_REPLAY` receives `recording/`, the harness-independent `trace/` and
+`replay.html`. Like the run directory, it holds prompts, model replies and tool
+output, so keep it in an ignored folder such as `.tmp/` or `results/`, and never
+publish it. Recording does not change the run: the run writes its own output as
+before, and the run's exit code is the command's.
+
+The steps also run separately, for example to rebuild a page after a viewer change:
+
+```sh
+npm run replay -- record --out RECORDING --file NEW_RUN/workspace/main.cpp --stream 'NEW_RUN/mixed=^session-[0-9]+-events\.jsonl$' -- COMMAND ARGS...
+npm run replay -- import-mixed RUN --recording RECORDING --out TRACE
+npm run replay -- build TRACE --out replay.html
+npm run replay -- agreement TRACE
+REPLAY_TRACE=TRACE npm run replay:dev
+```
+
+`import-mixed` reads Pi RPC events, which Bash only, Pi Agent IDE,
+pi-hashline-edit-pro and Oh My Pi write, and the Pi-shaped events the Dirac
+participant converts its records into. It binds every changed hunk to the call that
+made it. With one writing call running, the cause is `exact`. With several, the
+hunk's text decides (`matched`); otherwise it stays `ambiguous` with every
+candidate listed. A write that no call explains is `external`. A call that already
+returned can still own a write that names what the call introduced, because a
+command can leave a background process that writes later. A version caught
+half-written by a non-atomic write, such as Oh My Pi's `edit`, is counted in the
+outcome and not diffed. `agreement` checks attribution against the tasks: a hunk
+that introduces a name only one agent's task mentions belongs to that agent.
+`replay:dev` serves the viewer with live reload for viewer work.
+
+The code lives in `src/replay/`: `record.ts` (recorder), `adapters/` (Pi events
+to trace events), `attribution.ts`, `mixed-probe.ts` (run import), `trace/` (trace
+format, diff and store) and `viewer/` (Preact and CodeMirror page, built with Vite
+into the HTML file). `src/replay/trace/types.ts` describes the trace format.
+
 ## Isolated snapshot runs
 
 On one shared file, races decide results: a partial read and write once cut
