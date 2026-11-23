@@ -14,6 +14,13 @@ const IDE_TOOL_ARGS = Object.freeze({
   "pi-agent-ide-codemode-no-bash": ["--tools", "+codemode,+tool_search,-bash"],
 });
 
+/** Published Pi extensions that run as a harness with their own defaults: the
+ * extension chooses its tools. The package's declared Pi entry is loaded.
+ */
+const EXTENSION_HARNESSES = Object.freeze({
+  "pi-hashline-edit-pro": { package: "pi-hashline-edit-pro" },
+});
+
 /** Resolve an isolated native participant without starting a process or reading credentials. */
 export async function resolvePiParticipantProfile(config) {
   const keys = new Set([
@@ -46,7 +53,9 @@ export async function resolvePiParticipantProfile(config) {
   );
   const harness = config.harness === undefined ? "baseline-agent" : config.harness;
   assert.ok(
-    harness === "baseline-agent" || Object.hasOwn(IDE_TOOL_ARGS, harness),
+    harness === "baseline-agent" ||
+      Object.hasOwn(IDE_TOOL_ARGS, harness) ||
+      Object.hasOwn(EXTENSION_HARNESSES, harness),
     "Unsupported native Pi harness",
   );
   const runtime = await realpath(config.runtime);
@@ -57,6 +66,39 @@ export async function resolvePiParticipantProfile(config) {
     ),
   );
   const base = { runtime, version: manifest.version };
+  if (Object.hasOwn(EXTENSION_HARNESSES, harness)) {
+    const name = EXTENSION_HARNESSES[harness].package;
+    const directory = await realpath(path.join(runtime, "node_modules", name));
+    const extension = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8"));
+    assert.equal(extension.name, name);
+    const entries = extension.pi?.extensions;
+    assert.ok(
+      Array.isArray(entries) && entries.length > 0,
+      `${name} declares no Pi extension entry`,
+    );
+    const resolved = [];
+    for (const entry of entries) {
+      const file = await realpath(path.resolve(directory, entry));
+      const relative = path.relative(directory, file);
+      assert.ok(
+        relative && !relative.startsWith("..") && !path.isAbsolute(relative),
+        "Extension entries must stay inside the package",
+      );
+      resolved.push(path.posix.join("/runtime", ...path.relative(runtime, file).split(path.sep)));
+    }
+    return {
+      ...base,
+      baseline: false,
+      harness: { id: harness, kind: harness, version: extension.version },
+      toolArgs: [],
+      extensionArgs: [
+        ...resolved.flatMap((entry) => ["--extension", entry]),
+        "--extension",
+        "/observer/pi-codemode-profile.mjs",
+      ],
+      settings: null,
+    };
+  }
   if (harness === "baseline-agent") {
     return {
       ...base,

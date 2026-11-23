@@ -6,6 +6,7 @@ import { finalizedUsage, startPiParticipant } from "./pi-baseline.mjs";
 import { admitProviderDelivery, createProviderRecovery } from "./provider-recovery.mjs";
 import { executeChunkDelivery } from "./chunk-delivery-deadline.mjs";
 import { isOmpParticipant, startOmpParticipant } from "./omp-participant.mjs";
+import { isDiracParticipant, startDiracParticipant } from "./dirac-participant.mjs";
 
 export const CHUNK_PROVIDER_RETRY_LIMIT = 3;
 
@@ -39,9 +40,10 @@ export function chunkModelDrivers(
       states.set(state, null);
       retries.set(session, 0);
       const sandbox = sharedSandbox ? await sharedSandbox() : undefined;
-      if (isOmpParticipant(config)) {
+      if (isOmpParticipant(config) || isDiracParticipant(config)) {
         // One process per delivery; native Pi's recovery protocol does not apply.
-        const driver = await startOmpParticipant(workspace, state, config, {
+        const start = isOmpParticipant(config) ? startOmpParticipant : startDiracParticipant;
+        const driver = await start(workspace, state, config, {
           signal,
           eventsFile: state + "-events.jsonl",
           sharedSandbox: sandbox,
@@ -85,6 +87,7 @@ export function chunkModelDrivers(
         for (const [subdirectory, files] of [
           ["pi", ["auth.json", "models.json"]],
           ["omp", ["agent.db", "agent.db-wal", "agent.db-shm"]],
+          ["dirac/data", ["secrets.json"]],
         ]) {
           const directory = path.join(state, subdirectory);
           const entry = await lstat(directory).catch((error) => {

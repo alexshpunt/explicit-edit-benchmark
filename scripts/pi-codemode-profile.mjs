@@ -15,12 +15,17 @@ const ideTools = [
   "move",
 ];
 
-/** Tools each IDE harness must and must not declare. The variant without Bash
- * leaves editing and commands to the IDE tools and Codemode.
+/** Tools each extension harness must and must not declare. The IDE variant without
+ * Bash leaves editing and commands to the IDE tools and Codemode. pi-hashline-edit-pro
+ * replaces Pi's read, grep and edit with anchored tools and keeps write and Bash.
  */
 export const IDE_HARNESS_TOOLS = Object.freeze({
   "pi-agent-ide-codemode": { required: [...ideTools, "bash"], forbidden: [] },
   "pi-agent-ide-codemode-no-bash": { required: ideTools, forbidden: ["bash"] },
+  "pi-hashline-edit-pro": {
+    required: ["read", "replace", "insert", "grep", "undo_last_change", "write", "bash"],
+    forbidden: ["edit"],
+  },
 });
 
 /** Return the required tools absent from an observed loadout, and any forbidden tool present. */

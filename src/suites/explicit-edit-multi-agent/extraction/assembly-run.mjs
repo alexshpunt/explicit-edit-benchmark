@@ -11,6 +11,8 @@ import {
 import { cp, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { writeTree } from "../generation/generator.mjs";
 import { measureExtractionCandidate } from "../grading/coherent-build.mjs";
 import { compilerDiagnostics } from "../grading/repair-diagnostics.mjs";
@@ -165,12 +167,14 @@ async function runAssemblyObservation({
   reference,
   corrections,
   lifecycle = "per-delivery",
+  prepareWorkspace,
   signal,
 }) {
   const policy = assemblyRunPolicy(lifecycle);
   const workspace = path.join(output, "workspace");
   await mkdir(output, { mode: 0o700 });
   await writeTree(workspace, start);
+  if (prepareWorkspace) await prepareWorkspace(workspace);
   const prepared = prepareLineDifferences(
     cleanupAssemblyMarkers(start, setup.markers).tree,
     reference,
@@ -787,6 +791,24 @@ export async function probeAssembly(
   });
 }
 
+/** A mixed-probe workspace can be a Git repository, for agents whose tools work only
+ * inside one, such as Dirac's symbol index. The start file is its one commit.
+ */
+export const MIXED_GIT_WORKSPACE_POLICY = "git-repository-with-start-commit-v1";
+const execFileAsync = promisify(execFile);
+
+export async function commitGitWorkspace(workspace) {
+  const git = (...args) =>
+    execFileAsync(
+      "git",
+      ["-c", "user.name=Explicit Edit", "-c", "user.email=benchmark@localhost", ...args],
+      { cwd: workspace, env: { PATH: "/usr/bin:/bin", HOME: workspace, GIT_CONFIG_NOSYSTEM: "1" } },
+    );
+  await git("init", "-q", "-b", "main");
+  await git("add", "-A");
+  await git("commit", "-q", "--no-gpg-sign", "-m", "Start");
+}
+
 /** The mixed probe's identity: clean source, its tasks and the general prompt. */
 async function mixedProbeIdentity(
   probe,
@@ -936,7 +958,14 @@ export async function runMixedProbe(
   casePath,
   outputPath,
   config,
-  { proofPath, counts = {}, agents = ASSEMBLY_AGENTS, sandbox = "separate", signal } = {},
+  {
+    proofPath,
+    counts = {},
+    agents = ASSEMBLY_AGENTS,
+    sandbox = "separate",
+    workspaceGit = false,
+    signal,
+  } = {},
 ) {
   assert.ok(Number.isInteger(agents) && agents >= 1 && agents <= MIXED_PROBE_MAX_AGENTS);
   assert.ok(["separate", "shared"].includes(sandbox), `Unknown sandbox mode ${sandbox}`);
@@ -951,13 +980,17 @@ export async function runMixedProbe(
     await mixedProbeIdentity(probe, general, null),
     "The reference proof belongs to other source or tasks",
   );
-  const identity = await mixedProbeIdentity(
-    probe,
-    general,
-    config.harness ?? "baseline-agent",
-    agents,
-    shared ? SHARED_SANDBOX_POLICY : null,
-  );
+  const identity = {
+    ...(await mixedProbeIdentity(
+      probe,
+      general,
+      config.harness ?? "baseline-agent",
+      agents,
+      shared ? SHARED_SANDBOX_POLICY : null,
+    )),
+    // Only runs with a Git workspace carry the field, so earlier identities are unchanged.
+    ...(workspaceGit ? { workspace: MIXED_GIT_WORKSPACE_POLICY } : {}),
+  };
   const started = Date.now();
   const host = sampleHostMemory();
   let report, minutes, peakMemory, grade, build, hostMemory;
@@ -982,6 +1015,7 @@ export async function runMixedProbe(
           start: probe.start,
           reference: probe.expected,
           corrections: false,
+          prepareWorkspace: workspaceGit ? commitGitWorkspace : undefined,
           signal,
         });
       } finally {
@@ -1014,6 +1048,7 @@ export async function runMixedProbe(
     identity,
     status: report.status,
     sandbox: shared ? SHARED_SANDBOX_POLICY : "separate",
+    ...(workspaceGit ? { workspace: MIXED_GIT_WORKSPACE_POLICY } : {}),
     minutes: Number(minutes.toFixed(2)),
     deliveries: rows.length,
     timedOut: rows.filter((row) => row.status === "timed-out").length,
