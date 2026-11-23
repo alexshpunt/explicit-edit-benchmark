@@ -179,13 +179,31 @@ corrections, build or Score.
 agent starts for each task, at most `--agents` at once.
 
 Agents are native Pi by default: the participant config's `harness` selects Bash
-only (`baseline-agent`) or Pi Agent IDE. With `"harness": "oh-my-pi-default"` every
-agent is Oh My Pi instead. Its config has `runtime`, a directory whose `node_modules`
-holds `@oh-my-pi/pi-coding-agent` and `@oven/bun-linux-x64`, `model`, `thinking` and
-`authFile`, an Oh My Pi `agent.db` with the provider's credentials. Each delivery runs
-one `omp --mode json -p` process in the same sandbox as a Pi agent, with Oh My Pi's own
-system prompt and tools and without extensions, skills or rules. Its events are
-recorded and counted like Pi's.
+only (`baseline-agent`), Pi Agent IDE, or Pi with the published
+`pi-hashline-edit-pro` extension at its default settings
+(`"harness": "pi-hashline-edit-pro"`, with the package installed in the runtime next
+to Pi). Two other agent CLIs run as participants too. Each delivery runs one process
+in the same sandbox as a Pi agent, with the agent's own system prompt and tools:
+
+- `"harness": "oh-my-pi-default"` runs `omp --mode json -p` without extensions,
+  skills or rules. The runtime's `node_modules` holds `@oh-my-pi/pi-coding-agent`
+  and `@oven/bun-linux-x64`; `authFile` is an Oh My Pi `agent.db`.
+- `"harness": "dirac-default"` runs `dirac --yolo --json`. The runtime's
+  `node_modules` holds `dirac-cli`; `authFile` is a Dirac `secrets.json`, copied to
+  the participant's own Dirac home; `thinking` is Dirac's reasoning effort.
+
+Oh My Pi's events already have Pi's shape. Dirac's are converted to it: a tool call's
+result is the text Dirac sent to the model, assistant text is an `assistant_text`
+event because Dirac reports usage separately, and the native records are kept beside
+the events as `session-N-events-native.jsonl`. Events of every participant are
+counted like Pi's.
+
+`--workspace-git` makes the workspace a Git repository whose one commit is the
+start file, before the first task. Some agents need one: Dirac indexes symbols, and
+offers its syntax-tree rename, only inside a repository. The option is part of the
+run identity and summary (`workspace`); without it the workspace is a plain folder,
+as in every earlier run. The repository's files are captured with the workspace but
+are not graded.
 
 `--sandbox` chooses how agents are isolated. `separate`, the default, gives every
 agent its own sandbox with its own processes and `/tmp`, so each agent starts
