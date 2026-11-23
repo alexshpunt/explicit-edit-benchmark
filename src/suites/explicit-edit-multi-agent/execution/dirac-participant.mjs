@@ -5,10 +5,18 @@ import { cliParticipant } from "./cli-participant.mjs";
 import { participantSandboxArgs, writeSandboxAccounts } from "./participant-sandbox.mjs";
 
 export const DIRAC_HARNESS = "dirac-default";
+/** Dirac without a shell: execute_command is off, and so is use_skill, because the
+ * built-in new-tool skill unlocks upsert_tool, which creates tools that run commands.
+ * Subagents, which could start without the selection, are off by Dirac's default. */
+export const DIRAC_NO_BASH_HARNESS = "dirac-no-bash";
+const DIRAC_TOOL_ARGS = Object.freeze({
+  [DIRAC_HARNESS]: [],
+  [DIRAC_NO_BASH_HARNESS]: ["--disable-tool", "execute_command,use_skill"],
+});
 const PACKAGE = "node_modules/dirac-cli";
 
 /** Whether a participant config selects Dirac. */
-export const isDiracParticipant = (config) => config?.harness === DIRAC_HARNESS;
+export const isDiracParticipant = (config) => Object.hasOwn(DIRAC_TOOL_ARGS, config?.harness ?? "");
 
 /** Resolve a Dirac participant without starting a process or reading credentials.
  * The runtime holds `dirac-cli`; `authFile` is a Dirac `secrets.json` with the
@@ -20,7 +28,7 @@ export async function resolveDiracParticipantProfile(config) {
     Object.keys(config).every((key) => keys.has(key)),
     "Unknown Dirac participant configuration key",
   );
-  assert.equal(config.harness, DIRAC_HARNESS);
+  assert.ok(isDiracParticipant(config), "Unsupported Dirac harness");
   assert.ok(
     typeof config.runtime === "string" &&
       typeof config.model === "string" &&
@@ -54,6 +62,7 @@ export function diracCommand(config, prompt) {
     config.model.slice(slash + 1),
     "--reasoning-effort",
     config.thinking,
+    ...DIRAC_TOOL_ARGS[config.harness],
     prompt,
   ];
 }
