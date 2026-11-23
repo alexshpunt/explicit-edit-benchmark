@@ -1,15 +1,24 @@
 import assert from "node:assert/strict";
-import { access, copyFile, mkdir, readFile, realpath } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { cliParticipant } from "./cli-participant.mjs";
 import { participantSandboxArgs, writeSandboxAccounts } from "./participant-sandbox.mjs";
 
 export const OMP_HARNESS = "oh-my-pi-default";
+/** Oh My Pi without a shell: the bash tool, Python eval and the debugger, which
+ * launches any program, are off, and a guard extension refuses JavaScript eval
+ * cells that reach a shell. */
+export const OMP_NO_BASH_HARNESS = "oh-my-pi-no-bash";
+const OMP_HARNESSES = new Set([OMP_HARNESS, OMP_NO_BASH_HARNESS]);
 const PACKAGE = "node_modules/@oh-my-pi/pi-coding-agent";
 const BUN = "node_modules/@oven/bun-linux-x64/bin/bun";
+/** Settings overlay of the no-Bash harness. */
+export const OMP_NO_BASH_SETTINGS =
+  "bash:\n  enabled: false\neval:\n  py: false\ndebug:\n  enabled: false\n";
 
 /** Whether a participant config selects Oh My Pi instead of native Pi. */
-export const isOmpParticipant = (config) => config?.harness === OMP_HARNESS;
+export const isOmpParticipant = (config) => OMP_HARNESSES.has(config?.harness);
 
 /** Resolve an Oh My Pi participant without starting a process or reading credentials.
  * The runtime holds `@oh-my-pi/pi-coding-agent` and `@oven/bun-linux-x64`; `authFile`
@@ -21,7 +30,7 @@ export async function resolveOmpParticipantProfile(config) {
     Object.keys(config).every((key) => keys.has(key)),
     "Unknown Oh My Pi participant configuration key",
   );
-  assert.equal(config.harness, OMP_HARNESS);
+  assert.ok(OMP_HARNESSES.has(config.harness), "Unsupported Oh My Pi harness");
   assert.ok(
     typeof config.runtime === "string" &&
       typeof config.model === "string" &&
@@ -39,8 +48,11 @@ export async function resolveOmpParticipantProfile(config) {
   return { runtime, version: manifest.version };
 }
 
-/** Arguments of one non-interactive Oh My Pi delivery inside the sandbox. */
+/** Arguments of one non-interactive Oh My Pi delivery inside the sandbox. The
+ * no-Bash harness adds its settings overlay and the shell guard extension, which
+ * `--no-extensions` keeps because it is named explicitly. */
 export function ompCommand(config, prompt) {
+  const noBash = config.harness === OMP_NO_BASH_HARNESS;
   return [
     `/runtime/${BUN}`,
     `/runtime/${PACKAGE}/dist/cli.js`,
@@ -52,6 +64,9 @@ export function ompCommand(config, prompt) {
     "--no-extensions",
     "--no-skills",
     "--no-rules",
+    ...(noBash
+      ? ["--config", "/state/omp/no-bash.yml", "--extension", "/observer/omp-no-shell-guard.mjs"]
+      : []),
     "--auto-approve",
     "--mode",
     "json",
@@ -77,6 +92,17 @@ export async function startOmpParticipant(
   await mkdir(path.join(state, "omp"), { mode: 0o700 });
   await mkdir(path.join(state, "home"));
   await copyFile(config.authFile, path.join(state, "omp", "agent.db"));
+  const stateBinds = [];
+  if (config.harness === OMP_NO_BASH_HARNESS) {
+    await writeFile(path.join(state, "omp", "no-bash.yml"), OMP_NO_BASH_SETTINGS, { mode: 0o600 });
+    const observer = path.join(state, "observer");
+    await mkdir(observer);
+    await copyFile(
+      fileURLToPath(new URL("omp-no-shell-guard.mjs", import.meta.url)),
+      path.join(observer, "omp-no-shell-guard.mjs"),
+    );
+    stateBinds.push("--ro-bind", observer, "/state/observer", "--ro-bind", observer, "/observer");
+  }
   const accounts = await writeSandboxAccounts(state);
   const sandboxArgs = await participantSandboxArgs({
     sharedSandbox,
@@ -90,6 +116,7 @@ export async function startOmpParticipant(
       PI_TELEMETRY: "0",
       SHELL: "/bin/bash",
     },
+    stateBinds,
   });
   return cliParticipant({
     name: "Oh My Pi",

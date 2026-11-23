@@ -15,10 +15,15 @@ const IDE_TOOL_ARGS = Object.freeze({
 });
 
 /** Published Pi extensions that run as a harness with their own defaults: the
- * extension chooses its tools. The package's declared Pi entry is loaded.
+ * extension chooses its tools. The package's declared Pi entry is loaded. A variant
+ * without Bash removes Pi's built-in Bash and keeps the rest of the extension's loadout.
  */
 const EXTENSION_HARNESSES = Object.freeze({
-  "pi-hashline-edit-pro": { package: "pi-hashline-edit-pro" },
+  "pi-hashline-edit-pro": { package: "pi-hashline-edit-pro", toolArgs: [] },
+  "pi-hashline-edit-pro-no-bash": {
+    package: "pi-hashline-edit-pro",
+    toolArgs: ["--tools", "-bash"],
+  },
 });
 
 /** Resolve an isolated native participant without starting a process or reading credentials. */
@@ -90,7 +95,7 @@ export async function resolvePiParticipantProfile(config) {
       ...base,
       baseline: false,
       harness: { id: harness, kind: harness, version: extension.version },
-      toolArgs: [],
+      toolArgs: EXTENSION_HARNESSES[harness].toolArgs,
       extensionArgs: [
         ...resolved.flatMap((entry) => ["--extension", entry]),
         "--extension",
