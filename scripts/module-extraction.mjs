@@ -22,7 +22,7 @@ const help = `Experimental paired-module extraction
   mixed-verify FLAT_CASE NEW_RUN [--deliveries N]
   mixed-rescore SAVED_RUN [--memory-log MEMWATCH_TSV]
   mixed-compare RUN_OR_SUMMARY RUN_OR_SUMMARY...
-  mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--deliveries N] [--agents N] [--sandbox separate|shared]
+  mixed-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--deliveries N] [--agents N] [--sandbox separate|shared] [--workspace-git]
   snapshot-verify FLAT_CASE NEW_RUN [--pool mixed|hard] [--agents N]
   snapshot-run FLAT_CASE NEW_RUN --config PRIVATE_JSON --proof REFERENCE_RUN/summary.json --allow-model-calls [--pool mixed|hard] [--agents N]
   snapshot-matrix NEW_OUTPUT_JSON SNAPSHOT_RUN...
@@ -87,8 +87,9 @@ and render, tokens, cost and wall time. The harness comes from the private
 config, so one proof serves every harness. --agents (1 to 40, default 20) limits
 the agents working at once. --sandbox separate (default) gives every agent its
 own sandbox; --sandbox shared puts all agents of a run in one sandbox, with its
-processes, its /tmp and a language server any of them starts. mixed-verify is the
-model-free proof.
+processes, its /tmp and a language server any of them starts. --workspace-git
+makes the workspace a Git repository with the start file committed before the first
+task, for agents whose tools need one. mixed-verify is the model-free proof.
 Snapshot commands run the mixed tasks with persistent agents, each in its own copy
 of main.cpp. Before a task the copy receives the reference state of every task
 finished so far; afterwards it must equal that state plus the task, and the task's
@@ -211,7 +212,14 @@ async function mixedCommand(values, positionals) {
         paths[0],
         paths[1],
         JSON.parse(await readFile(values.config, "utf8")),
-        { proofPath: values.proof, counts, agents, sandbox, signal },
+        {
+          proofPath: values.proof,
+          counts,
+          agents,
+          sandbox,
+          workspaceGit: values["workspace-git"] === true,
+          signal,
+        },
       )
     : await assembly.verifyMixedProbe(paths[0], paths[1], { counts, signal });
   const { identity: _identity, ...rest } = summary;
@@ -395,10 +403,12 @@ try {
       "rename-agents": { type: "string" },
       pool: { type: "string" },
       sandbox: { type: "string" },
+      "workspace-git": { type: "boolean" },
       "memory-log": { type: "string" },
     },
   });
   if (positionals[0] !== "mixed-run") assert.equal(values.sandbox, undefined, help);
+  if (positionals[0] !== "mixed-run") assert.equal(values["workspace-git"], undefined, help);
   if (positionals[0] !== "mixed-rescore") assert.equal(values["memory-log"], undefined, help);
   if (!positionals[0]?.startsWith("assembly-"))
     assert.ok(
