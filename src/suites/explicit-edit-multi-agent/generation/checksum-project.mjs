@@ -887,13 +887,12 @@ export function generateChecksumProject(seed, options = {}) {
         ...declarations.map(
           ({ name, value }) => `const long long ${context.name(name)} = ${value};`,
         ),
-      ].join("\n"),
-      // M definitions stand with the prototypes, so the lead stays the fourth
-      // paragraph.
-      [
-        ...prototypes.map(({ name }) => `${signature(name)};`),
+        // M definitions stand with the constants: in the prototype paragraph their
+        // braces would be the first ones after a B, H or I prototype, which would
+        // make a blind search for the definition fail loudly instead of silently.
         ...ofCluster("M").map(({ definition }) => definition),
       ].join("\n"),
+      prototypes.map(({ name }) => `${signature(name)};`).join("\n"),
       ...order.map(
         (block) =>
           block.marker ?? block.text ?? block.raw ?? definition(byName.get(block.function)),

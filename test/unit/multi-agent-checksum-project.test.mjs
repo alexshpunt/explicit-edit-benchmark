@@ -200,6 +200,13 @@ test("each trap differs from its control in its one factor", () => {
           trap,
           edit.id,
         );
+      // The first brace after a B, H or I trap's prototype opens the lead, so a
+      // blind search from the prototype takes a whole definition for the target.
+      if ("BHI".includes(edit.cluster) && trap) {
+        const prototype = start.indexOf(`long long ${edit.name ?? edit.host}(long long value);`);
+        const lead = start.split("\n\n")[3];
+        assert.equal(start.indexOf("{", prototype), start.indexOf(lead) + lead.indexOf("{"));
+      }
       // The first definition after the prototypes repeats every I expression.
       if (edit.cluster === "I") {
         const lead = start.split("\n\n")[3];
