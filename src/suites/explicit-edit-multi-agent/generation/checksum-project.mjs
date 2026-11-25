@@ -173,9 +173,16 @@ const header = (name) => `${signature(name)} {`;
 /** Exact text in a prompt, as the original suite writes it: JSON string notation. */
 const q = (value) => JSON.stringify(value);
 
-/** The definition of a function in a main.cpp, as one paragraph, or undefined. */
-export const definitionText = (text, name) =>
-  text.split("\n\n").find((block) => block.startsWith(header(name)));
+/** The definition of a function in a main.cpp, from its first line through the
+ * next line that is a lone "}", or undefined. It does not rely on the blank lines
+ * around it, which another agent's mistake can remove.
+ */
+export function definitionText(text, name) {
+  const first = text.startsWith(header(name)) ? 0 : text.indexOf(`\n${header(name)}`) + 1;
+  if (first === 0 && !text.startsWith(header(name))) return undefined;
+  const end = text.indexOf("\n}", first);
+  return end < 0 ? undefined : text.slice(first, end + 2);
+}
 
 /** Whole-identifier occurrences of a name: a longer identifier is another name. */
 export const identifierCount = (text, name) =>
