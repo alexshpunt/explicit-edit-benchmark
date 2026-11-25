@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
  * No two tasks edit the same text: a moved function holds no renamed name and no
  * changed expression, so the reference does not depend on the order of the tasks.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v3";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v4";
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   functions: 18,
   moves: 4,
@@ -102,8 +102,13 @@ function expressionText(statement, names, constants) {
   throw new Error(`Unknown statement kind ${statement.kind}`);
 }
 
+/** A function's signature; moves name a function only by it, as the earlier probe
+ * did, so an agent finds the extent of the definition itself.
+ */
+const signature = (name) => `long long ${name}(long long value)`;
+
 /** The first line of a function definition. */
-const header = (name) => `long long ${name}(long long value) {`;
+const header = (name) => `${signature(name)} {`;
 
 /** Exact text in a prompt, as the original suite writes it: JSON string notation. */
 const q = (value) => JSON.stringify(value);
@@ -111,7 +116,7 @@ const q = (value) => JSON.stringify(value);
 /** One task as a mechanical edit of exact text. */
 function instruction(task) {
   if (task.kind === "move")
-    return `In main.cpp, move the ${task.lines} lines from the line ${q(header(task.name))} through the first following line ${q("}")} to the placeholder line ${q(task.marker)}: the moved lines replace that placeholder line. Also delete the empty line that directly followed the moved lines in their old place. Keep the text of the moved lines unchanged.`;
+    return `In main.cpp, move the complete definition of the function ${q(signature(task.name))} to the placeholder line ${q(task.marker)}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`;
   if (task.kind === "rename")
     return `In main.cpp, replace all ${task.occurrences} occurrences of ${q(task.name)} with ${q(task.newName)}.`;
   return `In main.cpp, replace its one occurrence of ${q(task.before)} with ${q(task.after)}.`;
