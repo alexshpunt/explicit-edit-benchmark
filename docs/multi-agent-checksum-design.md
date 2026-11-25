@@ -171,3 +171,22 @@ the whole 300-second deadline; it says nothing about the edit. With this model, 
 the B trap separates the harnesses, and no density up to 5 costs either harness an
 edit: every agent edits with one quick command, so two read-modify-write cycles
 almost never overlap.
+
+Second round, after D traps got escaped literals and composite tasks were kept inside
+one zone. Same model and seed; "5 × 4" means five composite tasks of four edits each.
+
+| Harness | Tasks, density | Isolated: failed edits | Shared: failed edits    | Shared file                              |
+| ------- | -------------- | ---------------------- | ----------------------- | ---------------------------------------- |
+| Bash    | 20 × 1, 1      | both B traps           | both B traps, E control | does not build                           |
+| Bash    | 5 × 4, 1       | none                   | none                    | equals the reference                     |
+| Bash    | 5 × 4, 5       | none                   | none                    | equals the reference                     |
+| IDE     | 20 × 1, 1      | none                   | none                    | equals the reference                     |
+| IDE     | 5 × 4, 1 and 5 | none                   | none                    | builds; 2 extra blank lines at density 5 |
+
+The escaped D literals cost neither harness an edit. The shared Bash E control failed
+because a mis-cut B trap took the function that held it, so one agent's mistake broke
+another agent's edit. Bash agents with four edits per task passed every B trap: each
+wrote one Python script, and its pattern for a moved function was anchored on the
+definition line, while single-edit agents searched for the bare signature and took
+the prototype. Five agents working through four edits each in one zone cost neither
+harness an edit.
