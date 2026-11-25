@@ -215,3 +215,27 @@ occurrence is the prototype, the next `{` opens whichever function follows the
 prototypes, and that function ends cleanly, so the script moves it without any
 error. A trap separates harnesses when the wrong target passes every check an agent
 makes.
+
+Fourth round: the same mechanism for two more operations. H deletes a function and I
+replaces an expression inside a function; a trap's function has a prototype. The
+lead function, the first definition after the prototypes, repeats every I expression,
+so a script that starts from the prototype finds the expression there and edits the
+wrong function without an error. Clusters B, C, F, G, H and I, two traps and two
+controls each, seeds 42, 7 and 11. Collateral damage counts paragraphs that no edit
+was meant to change or move but that are lost, changed or duplicated.
+
+| Harness, mode | Failed traps over three seeds     | Failed controls | Collateral paragraphs | Shared file             |
+| ------------- | --------------------------------- | --------------- | --------------------- | ----------------------- |
+| Bash isolated | B 6/6, H 6/6, I 6/6; C, F, G none | none            | none                  |                         |
+| Bash shared   | B 6/6, H 6/6, I 3/6, C 1/6        | none            | 2, 2, 4               | never builds            |
+| IDE isolated  | none                              | none            | none                  |                         |
+| IDE shared    | none                              | none            | 0, 1, 0               | builds for 2 seeds of 3 |
+
+Every Bash failure is the silent first match. In the shared runs, some I traps pass
+because an H or B agent had already removed the lead function, so the script found
+nothing there and recovered; the collateral is the lead and the prototype block. The
+one IDE collateral is a stale view: an agent searched for the function to delete,
+another agent's edit then shifted the lines, the agent read 30 lines from the old
+line number, took the body of the next function for its own and deleted from its
+function's first line through the blank line after the next function. Both functions
+went, and the file no longer built.
