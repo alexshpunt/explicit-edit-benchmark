@@ -16,7 +16,8 @@ shared-run starts N agents (all tasks by default) on one main.cpp, then gives th
 the tasks in waves of N at once, and grades the final file against the reference.
 --clusters LETTERS picks the clusters, such as BCFG; --per-variant N sets the trap
 and control edits per cluster; --density N puts N edits
-in each zone of neighbouring lines; --edits N groups N edits into one composite task.
+in each zone of neighbouring lines; --edits N groups N edits into one composite task;
+--lines N adds functions until main.cpp has at least N lines.
 --no-notice leaves out the sentence that other agents edit main.cpp at the same time.
 shared-rescore SEED SAVED_RUN grades a saved shared run again with the current grader.`;
 
@@ -32,6 +33,7 @@ const { values, positionals } = parseArgs({
     "per-variant": { type: "string" },
     density: { type: "string" },
     edits: { type: "string" },
+    lines: { type: "string" },
   },
 });
 const [command, seedText, target] = positionals;
@@ -43,6 +45,7 @@ const options = Object.fromEntries(
     ["per-variant", "perVariant"],
     ["density", "density"],
     ["edits", "edits"],
+    ["lines", "lines"],
   ]
     .filter(([flag]) => values[flag] !== undefined)
     .map(([flag, key]) => [key, Number(values[flag])]),

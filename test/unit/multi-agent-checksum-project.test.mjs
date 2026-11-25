@@ -19,7 +19,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJ";
+const ALL = "ABCDEFGHIJKLM";
 const CONFIGS = [
   {},
   { clusters: ALL },
@@ -55,6 +55,7 @@ for (const { seed, options } of [
   { seed: 3, options: { density: 3 } },
   { seed: 4, options: { edits: 4, clusters: ALL } },
   { seed: 5, options: { perVariant: 3, density: 4 } },
+  { seed: 6, options: { clusters: "FKLM", lines: 3000 } },
 ]) {
   test(`checksum project ${seed} ${JSON.stringify(options)}: every state builds and prints its answer`, async (t) => {
     const project = generateChecksumProject(seed, options);
@@ -62,8 +63,8 @@ for (const { seed, options } of [
     const root = await mkdtemp(path.join(os.tmpdir(), "checksum-project-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     const edits = atoms(project);
-    // A J trap or control is a pair of edits.
-    const per = (cluster) => (cluster === "J" ? 2 : 1) * size.perVariant;
+    // A J trap or control is a pair of edits, an L one a group of three.
+    const per = (cluster) => (({ J: 2, L: 3 })[cluster] ?? 1) * size.perVariant;
     const clusters = size.clusters.split("");
     assert.equal(edits.length, 2 * clusters.reduce((sum, cluster) => sum + per(cluster), 0));
     assert.equal(project.tasks.length * size.edits, edits.length);
@@ -75,8 +76,11 @@ for (const { seed, options } of [
     assert.notEqual(project.answers.expected, project.answers.start);
     assert.doesNotMatch(project.expected, /__EXPLICIT_EDIT_SLOT_/);
     const lines = project.start.split("\n").length;
-    // Generated code stays near 20 lines per edit, so a run's file stays readable.
-    assert.ok(lines > 15 * edits.length && lines < 40 * edits.length, `${lines} lines`);
+    // Generated code stays near 20 lines per edit, so a run's file stays readable,
+    // unless the size option asks for more.
+    if (size.lines === 0)
+      assert.ok(lines > 15 * edits.length && lines < 40 * edits.length, `${lines} lines`);
+    else assert.ok(lines >= size.lines && lines < 1.2 * size.lines + 40 * edits.length);
     const states = [
       { id: "start", source: project.start, answer: project.answers.start },
       { id: "expected", source: project.expected, answer: project.answers.expected },
@@ -118,7 +122,16 @@ function followInstruction(start, task) {
   if (task.kind === "expression") return start.replace(task.before, task.after);
   if (task.kind === "insert") return start.replace(task.marker, task.text);
   const lines = start.split("\n");
-  const first = lines.indexOf(`long long ${task.name ?? task.host}(long long value) {`);
+  if (task.kind === "bulk-delete") {
+    const kept = lines.filter((line) => !line.trimStart().startsWith(`${task.name}(`));
+    assert.equal(lines.length - kept.length, task.occurrences, task.id);
+    return kept.join("\n");
+  }
+  const header = `long long ${task.name ?? task.host}(long long value) {`;
+  // A K definition is the first one after the opening line of its namespace.
+  const from =
+    task.kind === "namespace-delete" ? lines.indexOf(`namespace ${task.namespace} {`) : 0;
+  const first = lines.indexOf(header, from);
   const length = definitionLength(lines, first);
   if (task.kind === "scoped-replace" || task.kind === "local-rename") {
     let definition = lines.slice(first, first + length).join("\n");
@@ -133,8 +146,11 @@ function followInstruction(start, task) {
     lines.splice(first, length, definition);
     return lines.join("\n");
   }
-  const moved = lines.splice(first, length);
-  assert.equal(lines.splice(first, 1)[0], "", task.id);
+  // An L deletion starts at the comment lines right above the definition.
+  let top = first;
+  if (task.kind === "commented-delete") while (lines[top - 1].startsWith("//")) top--;
+  const moved = lines.splice(top, first - top + length);
+  assert.equal(lines.splice(top, 1)[0], "", task.id);
   if (task.kind === "move") lines.splice(lines.indexOf(task.marker), 1, ...moved);
   return lines.join("\n");
 }
@@ -162,8 +178,9 @@ test("a trap and its control share their wording", () => {
         .filter((edit) => edit.cluster === cluster)
         .map(shape),
     );
-    // A J pair has two instructions: the move and the expression edit.
-    assert.equal(prompts.size, cluster === "J" ? 2 : 1, cluster);
+    // A J pair has two instructions, the move and the expression edit, and an L
+    // group two, the deletion and the inserts.
+    assert.equal(prompts.size, "JL".includes(cluster) ? 2 : 1, cluster);
   }
   // Nothing an agent sees names the variant.
   for (const task of project.tasks) assert.doesNotMatch(task.id + task.prompt, /trap|control/);
@@ -196,6 +213,22 @@ test("each trap differs from its control in its one factor", () => {
         const distance = Math.abs(at(edit.host) - at(edit.partner.name));
         assert.equal(distance, trap ? 0 : 1, edit.id);
       }
+      // A K trap's signature also stands in the namespace before its own.
+      if (edit.cluster === "K") {
+        const own = start.indexOf(`namespace ${edit.namespace} {`);
+        const other = start.indexOf(`namespace ${edit.decoy} {`);
+        assert.ok(other < own, edit.id);
+        assert.equal(start.slice(other, own).includes(`long long ${edit.name}(`), trap, edit.id);
+      }
+      // L neighbours' slots stand right above a trap's function and right below a
+      // control's.
+      if (edit.cluster === "L" && edit.kind === "insert") {
+        const blocks = start.split("\n\n");
+        const own = blocks.findIndex((block) => block.includes(`long long ${edit.partner.name}(`));
+        const slot = blocks.indexOf(edit.marker);
+        assert.ok(trap ? [own - 1, own - 2].includes(slot) : [own + 1, own + 2].includes(slot));
+      }
+      if (edit.cluster === "M") assert.equal(edit.occurrences, trap ? 32 : 3, edit.id);
       // A C trap scans for a brace character.
       if (edit.cluster === "C")
         assert.equal(/'[{}]'/.test(definitionText(start, edit.name)), trap, edit.id);
@@ -240,7 +273,10 @@ test("tasks never edit the same text", () => {
     for (const edit of edits) {
       let text;
       // A J trap moves a function whose expression its partner changes, on purpose.
-      if (["move", "local-rename", "delete"].includes(edit.kind) && edit.cluster !== "J")
+      if (
+        ["move", "local-rename", "delete", "commented-delete"].includes(edit.kind) &&
+        edit.cluster !== "J"
+      )
         text = definitionText(project.start, edit.name);
       if (edit.kind === "insert") text = edit.text;
       if (!text) continue;
@@ -287,8 +323,8 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J pairs stand in gaps of their own, next to their partner instead.
-        const edits = all.filter(({ cluster }) => cluster !== "J");
+        // J, K and L edits stand in gaps of their own, and M edits everywhere.
+        const edits = all.filter(({ cluster }) => !"JKLM".includes(cluster));
         if (edits.length === 0) continue;
         // The host: the one function that holds every A use and E site of the zone.
         let hosts = null;
@@ -420,13 +456,18 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   assert.ok(failed(wrong, deletion));
   assert.deepEqual(gradeSharedChecksum(project, wrong).collateral, [lead.split("\n")[0]]);
   // A J trap's move written from a copy read before its partner's edit loses that
-  // edit: the partner fails, and so does the move, whose text differs.
+  // edit. The final file cannot tell a stale move from a partner that never edited,
+  // so the partner fails and the move, finished either way, passes.
   const inner = project.tasks.find(
     (task) => task.cluster === "J" && task.variant === "trap" && task.kind === "expression",
   );
   const stale = project.expected.replace(inner.after, inner.before);
   assert.ok(failed(stale, inner));
-  assert.ok(failed(stale, inner.partner));
+  assert.ok(!failed(stale, inner.partner));
+  // Any other change to the moved function fails the move.
+  const mover = definitionText(project.expected, inner.partner.name);
+  const edited = mover.replace("  return (", "  return  (");
+  assert.ok(failed(project.expected.replace(mover, edited), inner.partner));
   const inPlace = find("I", "trap");
   assert.ok(
     failed(
@@ -436,6 +477,22 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
       inPlace,
     ),
   );
+  // A K trap that deletes the first definition with its signature, in the other
+  // namespace, fails and harms that namespace.
+  const spaced = find("K", "trap");
+  const decoy = { ...spaced, namespace: spaced.decoy };
+  assert.ok(failed(followInstruction(project.start, decoy), spaced));
+  const both = followInstruction(project.expected, decoy);
+  assert.ok(failed(both, spaced));
+  assert.deepEqual(gradeSharedChecksum(project, both).collateral, [
+    `long long ${spaced.name}(long long value) {`,
+  ]);
+  // An L deletion that leaves the comment lines fails.
+  const commented = project.tasks.find((task) => task.kind === "commented-delete");
+  assert.ok(failed(followInstruction(project.start, { ...commented, kind: "delete" }), commented));
+  // An M edit that deletes the definition too fails.
+  const bulk = find("M", "trap");
+  assert.ok(failed(project.expected.replace(`${bulk.definition}\n`, ""), bulk));
 });
 
 test("a composite task passes only when every one of its edits is done", () => {

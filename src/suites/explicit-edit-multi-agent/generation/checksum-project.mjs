@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
  * agents of a wave edit neighbouring lines of one function at the same moment.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v5";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v6";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
@@ -24,6 +24,9 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   H: "deletion target",
   I: "in-place target",
   J: "overlapping pair",
+  K: "namespace target",
+  L: "shifted lines",
+  M: "bulk deletion",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -34,6 +37,8 @@ export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   density: 1,
   // Edits per task; more than one makes composite tasks.
   edits: 1,
+  // The least number of lines of the start main.cpp; 0 adds no extra functions.
+  lines: 0,
 });
 const MODULUS = 1000003;
 // Library functions have prototypes and are the only functions other functions call,
@@ -233,6 +238,12 @@ function instruction(edit) {
     return `In main.cpp, delete the complete definition of the function ${q(signature(edit.name))}. Also delete the empty line that directly followed the definition.`;
   if (edit.kind === "local-rename")
     return `In main.cpp, in the definition of the function ${q(signature(edit.name))}, rename the local variable ${q(edit.local)} to ${q(edit.newName)}: replace each of its ${edit.occurrences} occurrences in that definition.`;
+  if (edit.kind === "namespace-delete")
+    return `In main.cpp, delete the complete definition of the function ${q(signature(edit.name))} in the namespace ${q(edit.namespace)}. Also delete the empty line that directly followed the definition.`;
+  if (edit.kind === "commented-delete")
+    return `In main.cpp, delete the complete definition of the function ${q(signature(edit.name))} together with the comment lines directly above it. Also delete the empty line that directly followed the definition.`;
+  if (edit.kind === "bulk-delete")
+    return `In main.cpp, delete each line that calls the function ${q(edit.name)}; there are ${edit.occurrences} lines. Keep its definition.`;
   return `In main.cpp, replace its one occurrence of ${q(edit.before)} with ${q(edit.after)}.`;
 }
 
@@ -259,7 +270,43 @@ const KIND = {
   I: "scoped-replace",
   // J pairs a move with an expression edit; see generateChecksumProject.
   J: "move",
+  K: "namespace-delete",
+  // L gives two neighbours an insert each; see generateChecksumProject.
+  L: "commented-delete",
+  M: "bulk-delete",
 };
+// Namespace names of K edits: the first namespace of a pair in the file holds the
+// decoy, the second the target.
+const NAMESPACES = [
+  ["fast", "slow"],
+  ["draft", "release"],
+  ["legacy", "modern"],
+  ["local", "remote"],
+  ["primary", "backup"],
+  ["front", "back"],
+  ["north", "south"],
+  ["cold", "warm"],
+  ["coarse", "fine"],
+  ["stable", "preview"],
+  ["east", "west"],
+  ["upstream", "downstream"],
+];
+// Comment lines above L functions; each gets its own number.
+const NOTES = [
+  "Kept for report format",
+  "Owner note",
+  "Checked against batch",
+  "Superseded with the table lookup in step",
+  "Retired with input range",
+  "Do not inline, see ticket",
+];
+// Functions whose calls an M edit deletes.
+const TRACE_VERBS = ["trace", "audit", "probe", "record"];
+const TRACE_NOUNS = ["entry", "exit", "step", "state"];
+// Lines that call an M trap's or an M control's function.
+const BULK_LINES = { trap: 32, control: 3 };
+// String literals of an L neighbour's supplied function.
+const SHIFT_LITERALS = 20;
 // New names of G variables; no other identifier uses them.
 const LOCAL_NAMES = ["carry", "pivot", "tally", "stage", "inner", "accum", "blend", "sweep"];
 // Original names of G control variables, used by no other function.
@@ -270,10 +317,11 @@ const LAYOUT_KINDS = ["grid", "panel", "table", "chart", "frame", "board"];
 /** Generate one project with its tasks and references. */
 export function generateChecksumProject(seed, options = {}) {
   assert.ok(Number.isSafeInteger(seed) && seed >= 0, "Seed must be a non-negative integer");
-  /** @type {{ clusters: string, perVariant: number, density: number, edits: number }} */
+  /** @type {{ clusters: string, perVariant: number, density: number, edits: number, lines: number }} */
   const counts = { ...CHECKSUM_PROJECT_DEFAULTS, ...options };
   for (const key of ["perVariant", "density", "edits"])
     assert.ok(Number.isSafeInteger(counts[key]) && counts[key] >= 1, `${key} must be positive`);
+  assert.ok(Number.isSafeInteger(counts.lines) && counts.lines >= 0, "lines must not be negative");
   const clusters = [...new Set(counts.clusters)].sort();
   assert.ok(
     clusters.length > 0 && clusters.every((cluster) => cluster in CHECKSUM_CLUSTERS),
@@ -281,11 +329,13 @@ export function generateChecksumProject(seed, options = {}) {
   );
   const random = generator(seed);
 
-  // Distinct numbers keep every changed expression unique in the file.
+  // Distinct numbers keep every changed expression unique in the file; a larger
+  // file draws them from a wider range.
   const taken = new Set();
+  const highest = 1999 + 4 * counts.lines;
   const number = () => {
     for (;;) {
-      const value = random.integer(11, 1999);
+      const value = random.integer(11, highest);
       if (!taken.has(value)) {
         taken.add(value);
         return value;
@@ -312,6 +362,12 @@ export function generateChecksumProject(seed, options = {}) {
         // A J pair: one agent moves a function, another changes an expression.
         if (cluster === "J")
           edits.push({ cluster, variant, kind: "expression", partner: edits.at(-1) });
+        // An L group: one agent deletes a function, two neighbours insert text.
+        if (cluster === "L") {
+          const partner = edits.at(-1);
+          edits.push({ cluster, variant, kind: "insert", partner });
+          edits.push({ cluster, variant, kind: "insert", partner });
+        }
       }
   assert.equal(edits.length % counts.edits, 0, "Edits do not divide into tasks");
   const zones = [];
@@ -402,21 +458,41 @@ export function generateChecksumProject(seed, options = {}) {
     return entry;
   };
   const plain = (length) => Array.from({ length }, () => "plain");
+  // The text of a supplied function, given its string literals as they stand in
+  // main.cpp.
+  const supplied = (name, literals) => {
+    const lines = [
+      header(name),
+      "  const char* labels[] = {",
+      ...literals.map((literal) => `    "${literal}",`),
+      "  };",
+      `  long long total = (value * ${number()} + ${number()}) % kModulus;`,
+      "  for (const char* label : labels)",
+      "    for (const char* p = label; *p != 0; ++p) total = (total * 31 + *p) % kModulus;",
+      "  return total;",
+      "}",
+    ];
+    return { text: lines.join("\n"), lines: lines.length };
+  };
 
   // Fillers hold the constant uses that are not in a host; the first few are the
   // library. There are enough fillers to keep zones and slots apart at density 1,
   // and one more for each host that a higher density saves, so the file keeps its
   // size across densities.
   const moves = edits.filter(({ kind }) => kind === "move");
-  // J pairs stand in gaps of their own.
-  const pairCount = ofCluster("J").length / 2;
+  // J pairs, K namespace pairs and L groups stand in gaps of their own.
+  const ownGaps = ofCluster("J").length / 2 + ofCluster("K").length + ofCluster("L").length / 3;
   const lengths = [];
   while (
     lengths.length <
-      Math.max(LIBRARY_SIZE, 2 * edits.length - zones.length + moves.length + pairCount - 1) ||
+      Math.max(LIBRARY_SIZE, 2 * edits.length - zones.length + moves.length + ownGaps - 1) ||
     lengths.reduce((sum, length) => sum + length, 0) < fillerUses.length * 1.4
   )
     lengths.push(random.integer(3, 5));
+  // The size option adds longer fillers until they alone reach the line count; a
+  // filler takes its declarations, three more lines and an empty line.
+  while (lengths.reduce((sum, length) => sum + length + 4, 0) < counts.lines)
+    lengths.push(random.integer(8, 16));
   const plans = lengths.map(plain);
   const places = random.shuffle(
     plans.flatMap((plan, filler) => plan.map((_, index) => [filler, index])),
@@ -531,6 +607,66 @@ export function generateChecksumProject(seed, options = {}) {
     pairs.push(random.shuffle(unit));
   }
 
+  // K: a function to delete in the second of two namespaces with two functions
+  // each. In a trap the first namespace holds a function with the same signature,
+  // so the first match of the signature is the wrong definition, and deleting it
+  // still builds; in a control the first namespace's function has another name.
+  // Nothing calls them.
+  const namespaces = random.shuffle(NAMESPACES);
+  const namespaced = (space, name) => {
+    const entry = build(`${space}::${name}`, plain(random.integer(2, 4)), { prototyped: false });
+    Object.assign(entry, { display: name, uncalled: true });
+    return { function: entry.name };
+  };
+  const namespaceBlock = (space, members) => [
+    { raw: `namespace ${space} {` },
+    ...random.shuffle(members),
+    { raw: `}  // namespace ${space}` },
+  ];
+  for (const edit of ofCluster("K")) {
+    const pair = namespaces.pop();
+    assert.ok(pair, "Namespace names exhausted");
+    [edit.decoy, edit.namespace] = pair;
+    edit.name = take(functionNames);
+    edit.key = `${edit.namespace}::${edit.name}`;
+    const decoyName = edit.variant === "trap" ? edit.name : take(functionNames);
+    pairs.push([
+      ...namespaceBlock(edit.decoy, [
+        namespaced(edit.decoy, decoyName),
+        namespaced(edit.decoy, take(functionNames)),
+      ]),
+      ...namespaceBlock(edit.namespace, [
+        namespaced(edit.namespace, edit.name),
+        namespaced(edit.namespace, take(functionNames)),
+      ]),
+    ]);
+  }
+
+  // L: a function to delete with the comment lines above it, whose number the
+  // prompt does not give, so the agent reads the file before it edits. In the same
+  // wave two neighbours each insert a long function next to it: above it in a trap,
+  // which moves its lines down between the agent's read and its edit, and below it
+  // in a control. Nothing calls these functions.
+  const shifted = [];
+  for (const edit of ofCluster("L").filter(({ kind }) => kind === "commented-delete")) {
+    const entry = build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false });
+    entry.uncalled = true;
+    entry.comment = random
+      .shuffle(NOTES)
+      .slice(0, random.integer(2, 5))
+      .map((note) => `// ${note} ${number()}.`);
+    Object.assign(edit, { name: entry.name, comment: entry.comment });
+    shifted.push(edit);
+  }
+  for (const edit of ofCluster("L").filter(({ kind }) => kind === "insert")) {
+    const name = take(functionNames);
+    const literals = Array.from(
+      { length: SHIFT_LITERALS },
+      () => `${random.pick(ADJECTIVES)} ${random.pick(NOUNS)} ${number()}`,
+    );
+    Object.assign(edit, { name }, supplied(name, literals));
+  }
+
   // H: functions to delete; a trap has a prototype. Nothing calls them, so the
   // file builds without them.
   for (const edit of ofCluster("H")) {
@@ -565,23 +701,17 @@ export function generateChecksumProject(seed, options = {}) {
   for (const edit of ofCluster("D")) {
     const name = take(functionNames);
     const pool = edit.variant === "trap" ? ESCAPED_LITERALS : PLAIN_LITERALS;
-    const lines = [
-      header(name),
-      "  const char* labels[] = {",
-      ...random
-        .shuffle(pool)
-        .slice(0, SUPPLIED_LITERALS)
-        .map((literal) => `    "${literal}",`),
-      "  };",
-      `  long long total = (value * ${number()} + ${number()}) % kModulus;`,
-      "  for (const char* label : labels)",
-      "    for (const char* p = label; *p != 0; ++p) total = (total * 31 + *p) % kModulus;",
-      "  return total;",
-      "}",
-    ];
-    edit.name = name;
-    edit.text = lines.join("\n");
-    edit.lines = lines.length;
+    Object.assign(edit, { name }, supplied(name, random.shuffle(pool).slice(0, SUPPLIED_LITERALS)));
+  }
+
+  // M: a function with an empty body whose calls stand in many fillers in a trap and
+  // in a few in a control; the edit deletes every call line and keeps the definition.
+  // The calls are placed in the fillers once the F decoys are in place.
+  const traceNames = vocabulary(TRACE_VERBS, TRACE_NOUNS);
+  for (const edit of ofCluster("M")) {
+    edit.name = take(traceNames);
+    edit.occurrences = BULK_LINES[edit.variant];
+    edit.definition = `inline void ${edit.name}(const char*, long long) {}`;
   }
 
   // Placeholders, numbered in zone order.
@@ -599,10 +729,19 @@ export function generateChecksumProject(seed, options = {}) {
         ...zone
           .filter(({ cluster }) => "BCGHI".includes(cluster))
           .map((edit) => ({ function: edit.name ?? edit.host })),
-        ...zone.filter(({ kind }) => kind === "insert").map(({ marker }) => ({ marker })),
+        ...zone.filter(({ cluster }) => cluster === "D").map(({ marker }) => ({ marker })),
       ]),
     ),
     ...pairs,
+    // An L function with its neighbours' slots right above it in a trap and right
+    // below it in a control.
+    ...shifted.map((edit) => {
+      const slots = ofCluster("L")
+        .filter(({ partner }) => partner === edit)
+        .map(({ marker }) => ({ marker }));
+      const own = { function: edit.name };
+      return edit.variant === "trap" ? [...slots, own] : [own, ...slots];
+    }),
     ...moves.map(({ marker }) => [{ marker }]),
   ];
   const fillerOrder = random.shuffle(fillers);
@@ -686,6 +825,18 @@ export function generateChecksumProject(seed, options = {}) {
     }
   }
 
+  // M: the call lines, each in a random filler before a random declaration or the
+  // return.
+  for (const edit of ofCluster("M"))
+    for (let call = 1; call <= edit.occurrences; call++) {
+      const entry = random.pick(fillers);
+      entry.body.splice(random.integer(0, entry.body.length), 0, {
+        type: "raw",
+        trace: edit.name,
+        lines: [`  ${edit.name}("site ${call}", value);`],
+      });
+    }
+
   // E, F, I and J expressions: a new factor that changes the answer.
   const startAnswer = evaluate(new Map());
   for (const edit of edits.filter(({ statement }) => statement !== undefined)) {
@@ -697,14 +848,17 @@ export function generateChecksumProject(seed, options = {}) {
   const render = (done) => {
     const names = new Map(),
       factors = new Map(),
-      locals = new Map();
+      locals = new Map(),
+      silenced = new Set();
     let order = layout;
     for (const edit of done.flatMap((task) => task.parts ?? [task])) {
       if (edit.kind === "rename") names.set(edit.name, edit.newName);
       if (edit.kind === "expression" || edit.kind === "scoped-replace")
         factors.set(edit.statement, edit.newFactor);
       if (edit.kind === "local-rename") locals.set(edit.name, edit);
-      if (edit.kind === "delete") order = order.filter((block) => block.function !== edit.name);
+      if (["delete", "namespace-delete", "commented-delete"].includes(edit.kind))
+        order = order.filter((block) => block.function !== (edit.key ?? edit.name));
+      if (edit.kind === "bulk-delete") silenced.add(edit.name);
       if (edit.kind === "move")
         order = order
           .filter((block) => block.function !== edit.name)
@@ -715,8 +869,11 @@ export function generateChecksumProject(seed, options = {}) {
     const context = { factors, name: (name) => names.get(name) ?? name };
     const definition = (entry) => {
       const text = [
-        header(entry.name),
-        ...entry.body.flatMap((item) => itemLines(item, 1, context)),
+        ...(entry.comment ?? []),
+        header(entry.display ?? entry.name),
+        ...entry.body
+          .filter((item) => !silenced.has(item.trace))
+          .flatMap((item) => itemLines(item, 1, context)),
         `  return (${entry.result[0]} + ${entry.result[1]}) % kModulus;`,
         "}",
       ].join("\n");
@@ -731,8 +888,16 @@ export function generateChecksumProject(seed, options = {}) {
           ({ name, value }) => `const long long ${context.name(name)} = ${value};`,
         ),
       ].join("\n"),
-      prototypes.map(({ name }) => `${signature(name)};`).join("\n"),
-      ...order.map((block) => block.marker ?? block.text ?? definition(byName.get(block.function))),
+      // M definitions stand with the prototypes, so the lead stays the fourth
+      // paragraph.
+      [
+        ...prototypes.map(({ name }) => `${signature(name)};`),
+        ...ofCluster("M").map(({ definition }) => definition),
+      ].join("\n"),
+      ...order.map(
+        (block) =>
+          block.marker ?? block.text ?? block.raw ?? definition(byName.get(block.function)),
+      ),
       [
         "int main() {",
         "  long long total = 0;",
@@ -766,6 +931,25 @@ export function generateChecksumProject(seed, options = {}) {
       const declared = "BHI".includes(edit.cluster) && edit.variant === "trap" ? 1 : 0;
       assert.equal(occurrences(header(target)), 1, `${edit.id} header is not unique`);
       assert.equal(occurrences(`${signature(target)};`), declared, `${edit.id} prototype`);
+    }
+    if (edit.cluster === "K") {
+      // Only a trap's signature stands in the other namespace too.
+      assert.equal(occurrences(header(edit.name)), edit.variant === "trap" ? 2 : 1, edit.id);
+      assert.equal(occurrences(`${signature(edit.name)};`), 0, `${edit.id} prototype`);
+      for (const space of [edit.decoy, edit.namespace])
+        assert.equal(occurrences(`namespace ${space} {`), 1, `${edit.id} namespace`);
+    }
+    if (edit.kind === "commented-delete") {
+      assert.equal(occurrences(header(edit.name)), 1, `${edit.id} header is not unique`);
+      assert.equal(occurrences(`${signature(edit.name)};`), 0, `${edit.id} prototype`);
+      for (const line of edit.comment) assert.equal(occurrences(line), 1, `${edit.id} comment`);
+    }
+    if (edit.kind === "bulk-delete") {
+      const calls = (text) =>
+        text.split("\n").filter((line) => line.startsWith(`  ${edit.name}(`)).length;
+      assert.equal(calls(start), edit.occurrences, `${edit.id} calls`);
+      assert.equal(calls(expected), 0, `${edit.id} calls left`);
+      assert.equal(occurrences(edit.name), edit.occurrences + 1, `${edit.id} other uses`);
     }
     if (edit.kind === "move" || edit.kind === "insert")
       assert.equal(occurrences(edit.marker), 1, `${edit.id} marker is not unique`);

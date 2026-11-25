@@ -198,6 +198,13 @@ export function sharedPrompt(task) {
 /** The paragraphs of a main.cpp: prototypes, each definition or slot, and main. */
 const blocks = (text) => text.replace(/\n$/, "").split("\n\n");
 
+/** The text of a namespace from its opening line to its closing line, or undefined. */
+function namespaceText(text, name) {
+  const open = text.indexOf(`namespace ${name} {\n`);
+  const close = open < 0 ? -1 : text.indexOf(`}  // namespace ${name}\n`, open);
+  return close < 0 ? undefined : text.slice(open, close);
+}
+
 /** Grade a shared main.cpp against the project's reference. A block passes when it
  * stands in the candidate exactly once, as a whole paragraph. A rename passes when
  * the old identifier is gone, the new one appears as often as in the reference and
@@ -225,23 +232,43 @@ export function gradeSharedChecksum(project, candidate) {
   const untouched = new Set(
     wanted.filter((block) => original.has(block) && !moved.has(block.split("\n")[0])),
   );
+  const edits = project.tasks.flatMap((task) => task.parts ?? [task]);
   // A neighbour is known by its first line, so another agent's unfinished edit
-  // inside it does not fail this one.
+  // inside it does not fail this one. Slots, inserted text and deleted functions
+  // come and go with other agents' edits, so they are not neighbours.
   const first = (block) => block?.split("\n")[0];
-  const placed = (find, marker) => {
+  const inserted = new Set(edits.filter(({ kind }) => kind === "insert").map(({ text }) => text));
+  const deleted = new Set(
+    edits.flatMap((edit) =>
+      edit.kind === "delete"
+        ? [`long long ${edit.name}(long long value) {`]
+        : edit.kind === "commented-delete"
+          ? [edit.comment[0]]
+          : [],
+    ),
+  );
+  const passing = (block) =>
+    block.startsWith("// __EXPLICIT_EDIT_SLOT_") ||
+    inserted.has(block) ||
+    deleted.has(first(block));
+  const neighbour = (list, at, step) => {
+    let index = at + step;
+    while (index >= 0 && index < list.length && passing(list[index])) index += step;
+    return first(list[index]);
+  };
+  const placed = (find, marker, variants = [(block) => block]) => {
     const at = got.findIndex(find),
       reference = wanted.findIndex(find);
     return (
       at >= 0 &&
       reference >= 0 &&
       paragraphs.get(got[at]) === 1 &&
-      got[at] === wanted[reference] &&
+      variants.some((variant) => got[at] === variant(wanted[reference])) &&
       count(candidate, marker) === 0 &&
-      (first(got[at - 1]) === first(wanted[reference - 1]) ||
-        first(got[at + 1]) === first(wanted[reference + 1]))
+      (neighbour(got, at, -1) === neighbour(wanted, reference, -1) ||
+        neighbour(got, at, 1) === neighbour(wanted, reference, 1))
     );
   };
-  const edits = project.tasks.flatMap((task) => task.parts ?? [task]);
   const checks = new Map();
   for (const edit of edits) {
     let passed;
@@ -272,15 +299,40 @@ export function gradeSharedChecksum(project, candidate) {
         definitionText(candidate, edit.name) === undefined &&
         count(candidate, `long long ${edit.name}(long long value);`) ===
           count(project.expected, `long long ${edit.name}(long long value);`);
-    else if (edit.kind === "local-rename")
+    // Both namespaces of a K edit stand as in the reference: the target lost its
+    // definition and the other namespace kept its own.
+    else if (edit.kind === "namespace-delete")
+      passed = [edit.namespace, edit.decoy].every(
+        (space) =>
+          namespaceText(candidate, space) !== undefined &&
+          namespaceText(candidate, space) === namespaceText(project.expected, space),
+      );
+    else if (edit.kind === "commented-delete")
+      passed =
+        definitionText(candidate, edit.name) === undefined &&
+        edit.comment.every((line) => count(candidate, line) === 0);
+    else if (edit.kind === "bulk-delete") {
+      const calls = candidate
+        .split("\n")
+        .filter((line) => line.trimStart().startsWith(`${edit.name}(`));
+      passed = calls.length === 0 && count(candidate, edit.definition) === 1;
+    } else if (edit.kind === "local-rename")
       passed =
         definitionText(candidate, edit.name) === definitionText(project.expected, edit.name) &&
         identifierCount(candidate, edit.newName) ===
           identifierCount(project.expected, edit.newName);
     else {
       const signature = `long long ${edit.name}(long long value)`;
+      // A J trap's function may still hold its partner's old expression: a lost
+      // partner edit fails the partner.
+      const inner = edits.find(
+        ({ partner, kind }) => partner?.id === edit.id && kind === "expression",
+      );
+      const variants = [(block) => block];
+      if (inner && edit.variant === "trap")
+        variants.push((block) => block.replace(inner.after, inner.before));
       passed =
-        placed((block) => block.startsWith(`${signature} {`), edit.marker) &&
+        placed((block) => block.startsWith(`${signature} {`), edit.marker, variants) &&
         count(candidate, `${signature};`) === count(project.expected, `${signature};`);
     }
     checks.set(edit.id, {
