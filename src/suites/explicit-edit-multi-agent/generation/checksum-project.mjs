@@ -23,10 +23,11 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   G: "scoped rename",
   H: "deletion target",
   I: "in-place target",
+  J: "overlapping pair",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
-  clusters: "BCFGHI",
+  clusters: "BCFGHIJ",
   // Trap edits and control edits per cluster.
   perVariant: 2,
   // Edits per zone.
@@ -256,6 +257,8 @@ const KIND = {
   G: "local-rename",
   H: "delete",
   I: "scoped-replace",
+  // J pairs a move with an expression edit; see generateChecksumProject.
+  J: "move",
 };
 // New names of G variables; no other identifier uses them.
 const LOCAL_NAMES = ["carry", "pivot", "tally", "stage", "inner", "accum", "blend", "sweep"];
@@ -304,8 +307,12 @@ export function generateChecksumProject(seed, options = {}) {
   const edits = [];
   for (const cluster of clusters)
     for (const variant of ["trap", "control"])
-      for (let index = 1; index <= counts.perVariant; index++)
+      for (let index = 1; index <= counts.perVariant; index++) {
         edits.push({ cluster, variant, kind: KIND[cluster] });
+        // A J pair: one agent moves a function, another changes an expression.
+        if (cluster === "J")
+          edits.push({ cluster, variant, kind: "expression", partner: edits.at(-1) });
+      }
   assert.equal(edits.length % counts.edits, 0, "Edits do not divide into tasks");
   const zones = [];
   const ordered = random.shuffle(edits);
@@ -400,10 +407,13 @@ export function generateChecksumProject(seed, options = {}) {
   // library. There are enough fillers to keep zones and slots apart at density 1,
   // and one more for each host that a higher density saves, so the file keeps its
   // size across densities.
-  const moves = [...ofCluster("B"), ...ofCluster("C")];
+  const moves = edits.filter(({ kind }) => kind === "move");
+  // J pairs stand in gaps of their own.
+  const pairCount = ofCluster("J").length / 2;
   const lengths = [];
   while (
-    lengths.length < Math.max(LIBRARY_SIZE, 2 * edits.length - zones.length + moves.length - 1) ||
+    lengths.length <
+      Math.max(LIBRARY_SIZE, 2 * edits.length - zones.length + moves.length + pairCount - 1) ||
     lengths.reduce((sum, length) => sum + length, 0) < fillerUses.length * 1.4
   )
     lengths.push(random.integer(3, 5));
@@ -499,6 +509,28 @@ export function generateChecksumProject(seed, options = {}) {
     edit.name = build(take(functionNames), plain(4), { prototyped: false, variables }).name;
   }
 
+  // J: a move and an expression edit given to two agents at once. In a trap the
+  // expression is inside the moved function, so an agent that writes the function
+  // from a copy read before its partner's edit loses that edit; in a control it is
+  // in the function right next to it. Every order of the two edits gives the same
+  // file.
+  const pairs = [];
+  for (const edit of ofCluster("J").filter(({ kind }) => kind === "expression")) {
+    const site = { scoped: edit };
+    const mover = build(
+      take(functionNames),
+      edit.variant === "trap" ? ["plain", site, "plain"] : plain(3),
+      { prototyped: false },
+    );
+    edit.partner.name = mover.name;
+    const unit = [{ function: mover.name }];
+    if (edit.variant === "control")
+      unit.push({
+        function: build(take(functionNames), ["plain", site, "plain"], { prototyped: false }).name,
+      });
+    pairs.push(random.shuffle(unit));
+  }
+
   // H: functions to delete; a trap has a prototype. Nothing calls them, so the
   // file builds without them.
   for (const edit of ofCluster("H")) {
@@ -570,6 +602,7 @@ export function generateChecksumProject(seed, options = {}) {
         ...zone.filter(({ kind }) => kind === "insert").map(({ marker }) => ({ marker })),
       ]),
     ),
+    ...pairs,
     ...moves.map(({ marker }) => [{ marker }]),
   ];
   const fillerOrder = random.shuffle(fillers);
@@ -653,9 +686,9 @@ export function generateChecksumProject(seed, options = {}) {
     }
   }
 
-  // E, F and I: a new factor that changes the answer.
+  // E, F, I and J expressions: a new factor that changes the answer.
   const startAnswer = evaluate(new Map());
-  for (const edit of edits.filter(({ cluster }) => "EFI".includes(cluster))) {
+  for (const edit of edits.filter(({ statement }) => statement !== undefined)) {
     do edit.newFactor = number();
     while (evaluate(new Map([[edit.statement, edit.newFactor]])) === startAnswer);
     edit.after = edit.before.replace(` * ${edit.factor} + `, ` * ${edit.newFactor} + `);
@@ -728,7 +761,7 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(occurrences(edit.newName), 0, `${edit.id} new name exists`);
     }
     // B, H and I traps, and only they, have a prototype.
-    if ("BCFGHI".includes(edit.cluster)) {
+    if ("BCFGHIJ".includes(edit.cluster)) {
       const target = edit.name ?? edit.host;
       const declared = "BHI".includes(edit.cluster) && edit.variant === "trap" ? 1 : 0;
       assert.equal(occurrences(header(target)), 1, `${edit.id} header is not unique`);
@@ -756,10 +789,13 @@ export function generateChecksumProject(seed, options = {}) {
     if (edit.kind === "expression") {
       assert.equal(occurrences(edit.before), 1, `${edit.id} expression is not unique`);
       assert.equal(expected.split(edit.after).length, 2, `${edit.id} result is not unique`);
-      // The comment line above and the edited line, exactly as the reference has them.
-      const lines = expected.split("\n");
-      const at = lines.findIndex((line) => line.includes(edit.after));
-      edit.context = `${lines[at - 1]}\n${lines[at]}`;
+      // E: the comment line above and the edited line, exactly as the reference has
+      // them. A J expression has no comment.
+      if (edit.cluster === "E") {
+        const lines = expected.split("\n");
+        const at = lines.findIndex((line) => line.includes(edit.after));
+        edit.context = `${lines[at - 1]}\n${lines[at]}`;
+      }
     }
     edit.prompt = mechanicalPrompt(instruction(edit));
   }

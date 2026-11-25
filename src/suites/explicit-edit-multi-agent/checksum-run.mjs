@@ -254,7 +254,8 @@ export function gradeSharedChecksum(project, candidate) {
           (name) => identifierCount(candidate, name) === identifierCount(project.expected, name),
         );
     else if (edit.kind === "expression")
-      passed = count(candidate, edit.before) === 0 && count(candidate, edit.context) === 1;
+      passed =
+        count(candidate, edit.before) === 0 && count(candidate, edit.context ?? edit.after) === 1;
     else if (edit.kind === "insert") passed = placed((block) => block === edit.text, edit.marker);
     // The other copies of an F text stay unchanged, and a G name is new only in its
     // own function. New G names differ per edit, while two G traps share "b".

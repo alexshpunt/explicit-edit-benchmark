@@ -19,7 +19,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHI";
+const ALL = "ABCDEFGHIJ";
 const CONFIGS = [
   {},
   { clusters: ALL },
@@ -62,12 +62,15 @@ for (const { seed, options } of [
     const root = await mkdtemp(path.join(os.tmpdir(), "checksum-project-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     const edits = atoms(project);
-    assert.equal(edits.length, 2 * size.clusters.length * size.perVariant);
+    // A J trap or control is a pair of edits.
+    const per = (cluster) => (cluster === "J" ? 2 : 1) * size.perVariant;
+    const clusters = size.clusters.split("");
+    assert.equal(edits.length, 2 * clusters.reduce((sum, cluster) => sum + per(cluster), 0));
     assert.equal(project.tasks.length * size.edits, edits.length);
-    for (const summary of Object.values(clusterSummary(edits)))
+    for (const [cluster, summary] of Object.entries(clusterSummary(edits)))
       assert.deepEqual(summary, {
-        trap: { passed: 0, total: size.perVariant },
-        control: { passed: 0, total: size.perVariant },
+        trap: { passed: 0, total: per(cluster) },
+        control: { passed: 0, total: per(cluster) },
       });
     assert.notEqual(project.answers.expected, project.answers.start);
     assert.doesNotMatch(project.expected, /__EXPLICIT_EDIT_SLOT_/);
@@ -85,7 +88,7 @@ for (const { seed, options } of [
     states.forEach((state, index) => assert.equal(printed[index], `${state.answer}\n`, state.id));
     for (const task of project.tasks) {
       // Only a changed factor alters the answer, and one always does.
-      const changes = (task.parts ?? [task]).some(({ cluster }) => "EFI".includes(cluster));
+      const changes = (task.parts ?? [task]).some(({ statement }) => statement !== undefined);
       assert.equal(task.answer !== project.answers.start, changes, task.id);
     }
   });
@@ -159,7 +162,8 @@ test("a trap and its control share their wording", () => {
         .filter((edit) => edit.cluster === cluster)
         .map(shape),
     );
-    assert.equal(prompts.size, 1, cluster);
+    // A J pair has two instructions: the move and the expression edit.
+    assert.equal(prompts.size, cluster === "J" ? 2 : 1, cluster);
   }
   // Nothing an agent sees names the variant.
   for (const task of project.tasks) assert.doesNotMatch(task.id + task.prompt, /trap|control/);
@@ -183,6 +187,14 @@ test("each trap differs from its control in its one factor", () => {
       if (edit.cluster === "I") {
         const lead = start.split("\n\n")[3];
         assert.ok(lead.includes(edit.before) && !lead.startsWith(`long long ${edit.host}(`));
+      }
+      // A J trap's expression is inside the function its partner moves; a control's
+      // is in the function right next to it.
+      if (edit.cluster === "J" && edit.kind === "expression") {
+        const blocks = start.split("\n\n");
+        const at = (name) => blocks.findIndex((block) => block.startsWith(`long long ${name}(`));
+        const distance = Math.abs(at(edit.host) - at(edit.partner.name));
+        assert.equal(distance, trap ? 0 : 1, edit.id);
       }
       // A C trap scans for a brace character.
       if (edit.cluster === "C")
@@ -223,11 +235,12 @@ test("tasks never edit the same text", () => {
     const edits = atoms(project);
     const renamed = edits.filter(({ kind }) => kind === "rename").map(({ name }) => name);
     const changed = edits
-      .filter(({ cluster }) => "EFI".includes(cluster))
+      .filter(({ statement }) => statement !== undefined)
       .map(({ before }) => before);
     for (const edit of edits) {
       let text;
-      if (["move", "local-rename", "delete"].includes(edit.kind))
+      // A J trap moves a function whose expression its partner changes, on purpose.
+      if (["move", "local-rename", "delete"].includes(edit.kind) && edit.cluster !== "J")
         text = definitionText(project.start, edit.name);
       if (edit.kind === "insert") text = edit.text;
       if (!text) continue;
@@ -269,11 +282,14 @@ test("density puts the edits of one zone next to each other", () => {
         const label = `${JSON.stringify(options)}/${seed}: zone ${zone}`;
         assert.ok(tasks.length <= density, label);
         if (zone < zones.size) assert.equal(tasks.length, density, label);
-        const edits = tasks.flatMap((task) => task.parts ?? [task]);
+        const all = tasks.flatMap((task) => task.parts ?? [task]);
         assert.ok(
-          edits.every((edit) => edit.zone === zone),
+          all.every((edit) => edit.zone === zone),
           label,
         );
+        // J pairs stand in gaps of their own, next to their partner instead.
+        const edits = all.filter(({ cluster }) => cluster !== "J");
+        if (edits.length === 0) continue;
         // The host: the one function that holds every A use and E site of the zone.
         let hosts = null;
         const near = [];
@@ -317,7 +333,7 @@ test("density puts the edits of one zone next to each other", () => {
 test("the shared grade credits finished tasks and names damaged definitions", () => {
   const project = generateChecksumProject(42, { clusters: ALL });
   assert.deepEqual(
-    { exact: true, passed: 36, damaged: [], extra: [] },
+    { exact: true, passed: project.tasks.length, damaged: [], extra: [] },
     (({ exact, passed, damaged, extra }) => ({ exact, passed, damaged, extra }))(
       gradeSharedChecksum(project, project.expected),
     ),
@@ -403,6 +419,14 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   const wrong = paragraphs.filter((block) => block !== lead).join("\n\n");
   assert.ok(failed(wrong, deletion));
   assert.deepEqual(gradeSharedChecksum(project, wrong).collateral, [lead.split("\n")[0]]);
+  // A J trap's move written from a copy read before its partner's edit loses that
+  // edit: the partner fails, and so does the move, whose text differs.
+  const inner = project.tasks.find(
+    (task) => task.cluster === "J" && task.variant === "trap" && task.kind === "expression",
+  );
+  const stale = project.expected.replace(inner.after, inner.before);
+  assert.ok(failed(stale, inner));
+  assert.ok(failed(stale, inner.partner));
   const inPlace = find("I", "trap");
   assert.ok(
     failed(
