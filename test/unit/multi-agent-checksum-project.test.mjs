@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import {
   CHECKSUM_CLUSTERS,
   CHECKSUM_PROJECT_DEFAULTS,
+  definitionText,
   generateChecksumProject,
   identifierCount,
 } from "../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs";
@@ -18,10 +19,12 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
+const ALL = "ABCDEFG";
 const CONFIGS = [
   {},
+  { clusters: ALL },
   { density: 2 },
-  { density: 3 },
+  { density: 3, clusters: ALL },
   { density: 5 },
   { edits: 4 },
   { density: 3, edits: 2 },
@@ -48,9 +51,9 @@ test("a seed fixes the checksum project and its tasks", () => {
 
 for (const { seed, options } of [
   { seed: 1, options: {} },
-  { seed: 2, options: { density: 2 } },
+  { seed: 2, options: { density: 2, clusters: ALL } },
   { seed: 3, options: { density: 3 } },
-  { seed: 4, options: { edits: 4 } },
+  { seed: 4, options: { edits: 4, clusters: ALL } },
   { seed: 5, options: { perVariant: 3, density: 4 } },
 ]) {
   test(`checksum project ${seed} ${JSON.stringify(options)}: every state builds and prints its answer`, async (t) => {
@@ -59,7 +62,7 @@ for (const { seed, options } of [
     const root = await mkdtemp(path.join(os.tmpdir(), "checksum-project-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     const edits = atoms(project);
-    assert.equal(edits.length, 10 * size.perVariant);
+    assert.equal(edits.length, 2 * size.clusters.length * size.perVariant);
     assert.equal(project.tasks.length * size.edits, edits.length);
     for (const summary of Object.values(clusterSummary(edits)))
       assert.deepEqual(summary, {
@@ -80,8 +83,8 @@ for (const { seed, options } of [
     );
     states.forEach((state, index) => assert.equal(printed[index], `${state.answer}\n`, state.id));
     for (const task of project.tasks) {
-      // Only an expression change alters the answer, and one always does.
-      const changes = (task.parts ?? [task]).some(({ kind }) => kind === "expression");
+      // Only a changed factor alters the answer, and one always does.
+      const changes = (task.parts ?? [task]).some(({ cluster }) => "EF".includes(cluster));
       assert.equal(task.answer !== project.answers.start, changes, task.id);
     }
   });
@@ -109,8 +112,22 @@ function followInstruction(start, task) {
   if (task.kind === "expression") return start.replace(task.before, task.after);
   if (task.kind === "insert") return start.replace(task.marker, task.text);
   const lines = start.split("\n");
-  const first = lines.indexOf(`long long ${task.name}(long long value) {`);
-  const moved = lines.splice(first, definitionLength(lines, first));
+  const first = lines.indexOf(`long long ${task.name ?? task.host}(long long value) {`);
+  const length = definitionLength(lines, first);
+  if (task.kind === "scoped-replace" || task.kind === "local-rename") {
+    let definition = lines.slice(first, first + length).join("\n");
+    if (task.kind === "scoped-replace") {
+      assert.equal(definition.split(task.before).length, 2, task.id);
+      definition = definition.replace(task.before, task.after);
+    } else {
+      const pattern = new RegExp(`\\b${task.local}\\b`, "g");
+      assert.equal(definition.match(pattern).length, task.occurrences, task.id);
+      definition = definition.replace(pattern, task.newName);
+    }
+    lines.splice(first, length, definition);
+    return lines.join("\n");
+  }
+  const moved = lines.splice(first, length);
   assert.equal(lines.splice(first, 1)[0], "", task.id);
   lines.splice(lines.indexOf(task.marker), 1, ...moved);
   return lines.join("\n");
@@ -130,7 +147,7 @@ test("each instruction, followed literally, gives exactly its task's result", ()
 });
 
 test("a trap and its control share their wording", () => {
-  const project = generateChecksumProject(11);
+  const project = generateChecksumProject(11, { clusters: ALL });
   const shape = (edit) =>
     edit.prompt.replace(/"(?:[^"\\]|\\.)*"/g, "Q").replace(/\d+ (occurrences|lines)/, "N $1");
   for (const cluster of Object.keys(CHECKSUM_CLUSTERS)) {
@@ -147,7 +164,7 @@ test("a trap and its control share their wording", () => {
 
 test("each trap differs from its control in its one factor", () => {
   for (let seed = 0; seed < 20; seed++) {
-    const project = generateChecksumProject(seed);
+    const project = generateChecksumProject(seed, { clusters: ALL });
     const { start } = project;
     for (const edit of atoms(project)) {
       const trap = edit.variant === "trap";
@@ -155,11 +172,17 @@ test("each trap differs from its control in its one factor", () => {
         assert.equal(start.split(edit.name).length - 1 > edit.occurrences, trap, edit.id);
       if (edit.cluster === "B")
         assert.equal(start.includes(`long long ${edit.name}(long long value);`), trap, edit.id);
-      const definition = new RegExp(
-        `^long long ${edit.name}\\(long long value\\) \\{\\n[\\s\\S]*?^\\}$`,
-        "m",
-      ).exec(start)?.[0];
-      if (edit.cluster === "C") assert.equal(/^ {2}for \(/m.test(definition), trap, edit.id);
+      // A C trap has a lone "}" line before the end of its definition.
+      if (edit.cluster === "C")
+        assert.equal(
+          definitionText(start, edit.name).split("\n").slice(0, -1).includes("}"),
+          trap,
+          edit.id,
+        );
+      if (edit.cluster === "F")
+        assert.equal(start.split(edit.before).length - 1, trap ? 3 : 1, edit.id);
+      if (edit.cluster === "G")
+        assert.equal(identifierCount(start, edit.local) > edit.occurrences, trap, edit.id);
       if (edit.cluster === "D") {
         assert.equal(edit.lines, 13, edit.id);
         assert.equal(
@@ -181,7 +204,8 @@ test("each trap differs from its control in its one factor", () => {
     }
     // Tabs, trailing spaces and no-break spaces stand only on E trap lines.
     const special = start.split("\n").filter((line) => /\t| $|\u00a0/.test(line));
-    assert.equal(special.length, 2 * project.counts.perVariant, `${seed}`);
+    const bytes = atoms(project).filter((edit) => edit.cluster === "E" && edit.variant === "trap");
+    assert.equal(special.length, 2 * bytes.length, `${seed}`);
   }
 });
 
@@ -190,14 +214,13 @@ test("tasks never edit the same text", () => {
     const project = generateChecksumProject(seed, CONFIGS[seed % CONFIGS.length]);
     const edits = atoms(project);
     const renamed = edits.filter(({ kind }) => kind === "rename").map(({ name }) => name);
-    const changed = edits.filter(({ kind }) => kind === "expression").map(({ before }) => before);
+    const changed = edits
+      .filter(({ cluster }) => "EF".includes(cluster))
+      .map(({ before }) => before);
     for (const edit of edits) {
       let text;
-      if (edit.kind === "move")
-        text = new RegExp(
-          `^long long ${edit.name}\\(long long value\\) \\{\\n[\\s\\S]*?^\\}$`,
-          "m",
-        ).exec(project.start)?.[0];
+      if (edit.kind === "move" || edit.kind === "local-rename")
+        text = definitionText(project.start, edit.name);
       if (edit.kind === "insert") text = edit.text;
       if (!text) continue;
       for (const name of renamed)
@@ -209,9 +232,9 @@ test("tasks never edit the same text", () => {
 
 test("density puts the edits of one zone next to each other", () => {
   for (const options of [
-    { density: 1 },
+    { density: 1, clusters: ALL },
     { density: 2 },
-    { density: 3 },
+    { density: 3, clusters: ALL },
     { density: 5 },
     { density: 1, edits: 2 },
     { density: 3, edits: 2 },
@@ -247,11 +270,13 @@ test("density puts the edits of one zone next to each other", () => {
         let hosts = null;
         const near = [];
         for (const edit of edits) {
-          if (edit.kind === "rename" || edit.kind === "expression") {
+          if (["rename", "expression", "scoped-replace"].includes(edit.kind)) {
             const own = where((paragraph) =>
               edit.kind === "rename"
                 ? identifierCount(paragraph, edit.name) > 0
-                : paragraph.includes(edit.before),
+                : edit.kind === "expression"
+                  ? paragraph.includes(edit.before)
+                  : paragraph.startsWith(`long long ${edit.host}(long long value) {`),
             );
             hosts = hosts ? hosts.filter((index) => own.includes(index)) : own;
           } else
@@ -269,9 +294,9 @@ test("density puts the edits of one zone next to each other", () => {
         if (hosts) assert.notEqual(host, undefined, label);
         const span = [...near, ...(host === undefined ? [] : [host])];
         assert.ok(Math.max(...span) - Math.min(...span) <= reach, label);
-        // No two zones share a paragraph. Only an E site pins the host: an A
+        // No two zones share a paragraph. Only an E or F site pins the host: an A
         // constant is also used in fillers.
-        const pinned = edits.some(({ kind }) => kind === "expression");
+        const pinned = edits.some(({ cluster }) => "EF".includes(cluster));
         for (const index of pinned ? span : near) {
           assert.ok(!used.has(index), label);
           used.add(index);
@@ -282,9 +307,9 @@ test("density puts the edits of one zone next to each other", () => {
 });
 
 test("the shared grade credits finished tasks and names damaged definitions", () => {
-  const project = generateChecksumProject(42);
+  const project = generateChecksumProject(42, { clusters: ALL });
   assert.deepEqual(
-    { exact: true, passed: 20, damaged: [], extra: [] },
+    { exact: true, passed: 28, damaged: [], extra: [] },
     (({ exact, passed, damaged, extra }) => ({ exact, passed, damaged, extra }))(
       gradeSharedChecksum(project, project.expected),
     ),
@@ -347,6 +372,21 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   // A longer spelling that contains the new name is a different name.
   const control = find("A", "control");
   assert.ok(failed(project.expected.replaceAll(control.newName, control.newName + "r"), control));
+  // A replacement of every copy of an F text, or a rename of every "b", fails its trap.
+  const scoped = find("F", "trap");
+  assert.ok(failed(project.expected.replaceAll(scoped.before, scoped.after), scoped));
+  const local = find("G", "trap");
+  assert.ok(failed(project.expected.replace(/\bb\b/g, local.newName), local));
+  // A C trap cut at its first lone "}" leaves the rest of its definition behind.
+  const extent = find("C", "trap");
+  const cut = followInstruction(project.start, extent);
+  const lines = project.start.split("\n");
+  const first = lines.indexOf(`long long ${extent.name}(long long value) {`);
+  const short = lines.indexOf("}", first) - first + 1;
+  const moved = lines.splice(first, short);
+  lines.splice(lines.indexOf(extent.marker), 1, ...moved);
+  assert.notEqual(lines.join("\n"), cut);
+  assert.ok(failed(lines.join("\n"), extent));
 });
 
 test("a composite task passes only when every one of its edits is done", () => {

@@ -16,11 +16,15 @@ export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v5";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
-  C: "structure",
-  D: "large supplied text",
+  C: "block extent",
+  D: "supplied text",
   E: "byte exactness",
+  F: "scoped replacement",
+  G: "scoped rename",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
+  // Clusters to generate, by letter.
+  clusters: "BCFG",
   // Trap edits and control edits per cluster.
   perVariant: 2,
   // Edits per zone.
@@ -167,6 +171,10 @@ const header = (name) => `${signature(name)} {`;
 /** Exact text in a prompt, as the original suite writes it: JSON string notation. */
 const q = (value) => JSON.stringify(value);
 
+/** The definition of a function in a main.cpp, as one paragraph, or undefined. */
+export const definitionText = (text, name) =>
+  text.split("\n\n").find((block) => block.startsWith(header(name)));
+
 /** Whole-identifier occurrences of a name: a longer identifier is another name. */
 export const identifierCount = (text, name) =>
   text.match(new RegExp(`\\b${name}\\b`, "g"))?.length ?? 0;
@@ -197,22 +205,7 @@ function itemLines(item, depth, context) {
     if (item.format === "control") return [`${pad}// ${item.comment.join(" ")}`, pad + text];
     return [pad + text];
   }
-  if (item.type === "update")
-    return [
-      `${pad}${item.variable} = (${item.variable} * ${item.factor} + ${item.offset}) % kModulus;`,
-    ];
-  if (item.type === "if")
-    return [
-      `${pad}if (${item.variable} % ${item.mod} == ${item.rem}) {`,
-      ...itemLines(item.action, depth + 1, context),
-      `${pad}}`,
-    ];
-  if (item.type === "for")
-    return [
-      `${pad}for (int i = 0; i < ${item.times}; ++i) {`,
-      ...item.body.flatMap((inner) => itemLines(inner, depth + 1, context)),
-      `${pad}}`,
-    ];
+  if (item.type === "raw") return item.lines;
   throw new Error(`Unknown body item ${item.type}`);
 }
 
@@ -224,6 +217,10 @@ function instruction(edit) {
     return `In main.cpp, move the complete definition of the function ${q(signature(edit.name))} to the placeholder line ${q(edit.marker)}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`;
   if (edit.kind === "insert")
     return `In main.cpp, replace the placeholder line ${q(edit.marker)} with the following ${edit.lines} lines: ${q(edit.text)}.`;
+  if (edit.kind === "scoped-replace")
+    return `In main.cpp, in the definition of the function ${q(signature(edit.host))}, replace ${q(edit.before)} with ${q(edit.after)}. The definition holds it once.`;
+  if (edit.kind === "local-rename")
+    return `In main.cpp, in the definition of the function ${q(signature(edit.name))}, rename the local variable ${q(edit.local)} to ${q(edit.newName)}: replace each of its ${edit.occurrences} occurrences in that definition.`;
   return `In main.cpp, replace its one occurrence of ${q(edit.before)} with ${q(edit.after)}.`;
 }
 
@@ -238,15 +235,34 @@ function mechanicalPrompt(text) {
   ].join("\n\n");
 }
 
-const KIND = { A: "rename", B: "move", C: "move", D: "insert", E: "expression" };
+const KIND = {
+  A: "rename",
+  B: "move",
+  C: "move",
+  D: "insert",
+  E: "expression",
+  F: "scoped-replace",
+  G: "local-rename",
+};
+// New names of G variables; no other identifier uses them.
+const LOCAL_NAMES = ["carry", "pivot", "tally", "stage", "inner", "accum", "blend", "sweep"];
+// Original names of G control variables, used by no other function.
+const UNIQUE_LOCALS = ["bq", "bx", "bk", "bj", "bv", "bw", "bz", "by"];
+// Words in the C functions' string literals.
+const LAYOUT_KINDS = ["grid", "panel", "table", "chart", "frame", "board"];
 
 /** Generate one project with its tasks and references. */
 export function generateChecksumProject(seed, options = {}) {
   assert.ok(Number.isSafeInteger(seed) && seed >= 0, "Seed must be a non-negative integer");
-  /** @type {{ perVariant: number, density: number, edits: number }} */
+  /** @type {{ clusters: string, perVariant: number, density: number, edits: number }} */
   const counts = { ...CHECKSUM_PROJECT_DEFAULTS, ...options };
   for (const key of ["perVariant", "density", "edits"])
     assert.ok(Number.isSafeInteger(counts[key]) && counts[key] >= 1, `${key} must be positive`);
+  const clusters = [...new Set(counts.clusters)].sort();
+  assert.ok(
+    clusters.length > 0 && clusters.every((cluster) => cluster in CHECKSUM_CLUSTERS),
+    `Unknown clusters ${counts.clusters}`,
+  );
   const random = generator(seed);
 
   // Distinct numbers keep every changed expression unique in the file.
@@ -273,7 +289,7 @@ export function generateChecksumProject(seed, options = {}) {
   // Edits, then zones in a random order. A zone holds the edits of `density` tasks,
   // so that many agents work in it at the same moment.
   const edits = [];
-  for (const cluster of Object.keys(CHECKSUM_CLUSTERS))
+  for (const cluster of clusters)
     for (const variant of ["trap", "control"])
       for (let index = 1; index <= counts.perVariant; index++)
         edits.push({ cluster, variant, kind: KIND[cluster] });
@@ -310,11 +326,15 @@ export function generateChecksumProject(seed, options = {}) {
   // E site.
   const functions = [];
   const library = [];
-  const build = (name, plan, { callees = library.map((entry) => entry.name), prototyped }) => {
+  const build = (
+    name,
+    plan,
+    { callees = library.map((entry) => entry.name), prototyped, variables = VARIABLES },
+  ) => {
     const body = [];
     const available = ["value"];
     for (const [index, entry] of plan.entries()) {
-      const variable = VARIABLES[index];
+      const variable = variables[index];
       assert.ok(variable, "Too many declarations in one function");
       const left = available[available.length - 1];
       const right = random.pick(available);
@@ -330,7 +350,17 @@ export function generateChecksumProject(seed, options = {}) {
         if (kind === "call") statement.callee = random.pick(callees);
       } else if (entry.constant)
         statement = { ...base, kind: "constant", constant: entry.constant, offset: number() };
-      else {
+      else if (entry.scoped) {
+        // An F site: a plain line whose text other functions may repeat.
+        statement = { ...base, kind: "linear", factor: number(), offset: number() };
+        Object.assign(entry.scoped, {
+          host: name,
+          position: index,
+          statement: statement.id,
+          factor: statement.factor,
+          before: expressionText(statement, { factors: new Map() }),
+        });
+      } else {
         statement = {
           ...base,
           kind: "linear",
@@ -381,45 +411,79 @@ export function generateChecksumProject(seed, options = {}) {
     return entry;
   });
 
-  // Hosts: one per zone, with the zone's A uses and E sites on neighbouring lines.
+  // Hosts: one per zone, with the zone's A uses and E and F sites on neighbouring
+  // lines.
   const hosts = zones.map((zone) => {
     const sites = zone
-      .filter(({ cluster }) => cluster === "A" || cluster === "E")
-      .map((edit) => (edit.cluster === "A" ? { constant: edit.name } : { site: edit }));
+      .filter(({ cluster }) => "AEF".includes(cluster))
+      .map((edit) =>
+        edit.cluster === "A"
+          ? { constant: edit.name }
+          : edit.cluster === "E"
+            ? { site: edit }
+            : { scoped: edit },
+      );
     return build(take(functionNames), ["plain", ...random.shuffle(sites), "plain"], {
       prototyped: false,
     });
   });
 
-  // B and C: moved functions. A B trap has a prototype; a C trap has nested blocks.
-  for (const edit of moves) {
-    const entry = build(
-      take(functionNames),
-      plain(edit.cluster === "C" ? 3 : random.integer(2, 4)),
-      {
-        prototyped: edit.cluster === "B" && edit.variant === "trap",
-      },
+  // B: moved functions; a trap has a prototype.
+  for (const edit of ofCluster("B"))
+    edit.name = build(take(functionNames), plain(random.integer(2, 4)), {
+      prototyped: edit.variant === "trap",
+    }).name;
+
+  // C: moved functions with a multi-line raw string literal. In a trap, a line of the
+  // literal is a lone "}", so the first such line is not the end of the definition;
+  // a control indents that brace. Nothing calls them, so the literal does not enter
+  // the checksum.
+  for (const edit of ofCluster("C")) {
+    const name = take(functionNames);
+    const kind = random.pick(LAYOUT_KINDS),
+      size = random.integer(2, 99);
+    const literal =
+      edit.variant === "trap"
+        ? ["{", `  "kind": "${kind}",`, `  "size": ${size}`, "}", ""]
+        : ["{", `    "kind": "${kind}",`, `    "size": ${size}`, "  }"];
+    const lines = literal.map((line, index) =>
+      index === 0 ? `  const char* layout = R"(${line}` : line,
     );
-    if (edit.cluster === "C" && edit.variant === "trap") {
-      const variable = entry.body[1].variable;
-      const update = () => ({
-        type: "update",
-        variable,
-        factor: random.integer(2, 9),
-        offset: number(),
-      });
-      const condition = () => {
-        const mod = random.integer(2, 5);
-        return { type: "if", variable, mod, rem: random.integer(0, mod - 1), action: update() };
-      };
-      entry.body.splice(
-        2,
-        0,
-        { type: "for", variable, times: random.integer(2, 4), body: [condition(), update()] },
-        condition(),
-      );
-    }
-    edit.name = entry.name;
+    lines[lines.length - 1] += `)";`;
+    functions.push({
+      name,
+      uncalled: true,
+      body: [
+        { type: "raw", lines },
+        {
+          type: "let",
+          id: `${name}:a`,
+          variable: "a",
+          kind: "linear",
+          left: "value",
+          factor: number(),
+          offset: number(),
+        },
+        {
+          type: "raw",
+          lines: ["  for (const char* p = layout; *p != 0; ++p) a = (a * 31 + *p) % kModulus;"],
+        },
+      ],
+      result: ["a", "value"],
+      prototyped: false,
+    });
+    edit.name = name;
+  }
+
+  // G: functions with one local variable to rename. A trap's variable is "b", which
+  // every other function also declares; a control's name is its own.
+  const locals = random.shuffle(UNIQUE_LOCALS);
+  const newLocals = random.shuffle(LOCAL_NAMES);
+  for (const edit of ofCluster("G")) {
+    edit.local = edit.variant === "trap" ? "b" : take(locals);
+    edit.newName = take(newLocals);
+    const variables = [VARIABLES[0], edit.local, ...VARIABLES.slice(2).split("")];
+    edit.name = build(take(functionNames), plain(4), { prototyped: false, variables }).name;
   }
 
   // D: a supplied function that nothing calls, so it changes text but not the answer.
@@ -436,7 +500,7 @@ export function generateChecksumProject(seed, options = {}) {
         .slice(0, SUPPLIED_LITERALS)
         .map((literal) => `    "${literal}",`),
       "  };",
-      `  long long total = (value * ${random.integer(3, 997)} + ${random.integer(3, 997)}) % kModulus;`,
+      `  long long total = (value * ${number()} + ${number()}) % kModulus;`,
       "  for (const char* label : labels)",
       "    for (const char* p = label; *p != 0; ++p) total = (total * 31 + *p) % kModulus;",
       "  return total;",
@@ -459,7 +523,9 @@ export function generateChecksumProject(seed, options = {}) {
     ...zones.map((zone, index) =>
       random.shuffle([
         { function: hosts[index].name },
-        ...zone.filter(({ kind }) => kind === "move").map(({ name }) => ({ function: name })),
+        ...zone
+          .filter(({ kind }) => kind === "move" || kind === "local-rename")
+          .map(({ name }) => ({ function: name })),
         ...zone.filter(({ kind }) => kind === "insert").map(({ marker }) => ({ marker })),
       ]),
     ),
@@ -477,7 +543,7 @@ export function generateChecksumProject(seed, options = {}) {
   const prototypes = random.shuffle(functions.filter(({ prototyped }) => prototyped));
   const declarations = random.shuffle(constants);
   const main = random
-    .shuffle(functions)
+    .shuffle(functions.filter(({ uncalled }) => !uncalled))
     .map(({ name }) => ({ name, weight: random.integer(2, 9), input: number() }));
 
   const byName = new Map(functions.map((entry) => [entry.name, entry]));
@@ -485,14 +551,7 @@ export function generateChecksumProject(seed, options = {}) {
     const memo = new Map();
     const step = (item, scope) => {
       const { variable } = item;
-      if (item.type === "update")
-        scope.set(variable, (scope.get(variable) * item.factor + item.offset) % MODULUS);
-      else if (item.type === "if") {
-        if (scope.get(variable) % item.mod === item.rem) step(item.action, scope);
-      } else if (item.type === "for") {
-        for (let round = 0; round < item.times; round++)
-          for (const inner of item.body) step(inner, scope);
-      } else {
+      if (item.type === "let") {
         const left = scope.get(item.left),
           right = scope.get(item.right);
         const factor = factors.get(item.id) ?? item.factor;
@@ -525,9 +584,36 @@ export function generateChecksumProject(seed, options = {}) {
     return String(total);
   };
 
-  // E: a new factor that changes the answer.
+  // F: a trap's expression also stands in two fillers, at the same position so its
+  // text is the same; one filler before the host when the layout allows it.
+  const position = new Map(layout.map((block, index) => [block.function, index]));
+  const decoyed = new Set();
+  for (const edit of ofCluster("F").filter(({ variant }) => variant === "trap")) {
+    const at = position.get(edit.host);
+    const candidates = fillers.filter(
+      (entry) =>
+        !decoyed.has(entry.name) &&
+        entry.body.length > edit.position &&
+        entry.body[edit.position].kind !== "constant",
+    );
+    const before = random.shuffle(candidates.filter(({ name }) => position.get(name) < at));
+    const after = random.shuffle(candidates.filter(({ name }) => position.get(name) > at));
+    const chosen = [...before.slice(0, 1), ...after.slice(0, 1)];
+    for (const entry of [...before.slice(1), ...after.slice(1)])
+      if (chosen.length < 2) chosen.push(entry);
+    assert.equal(chosen.length, 2, `${edit.id} has too few decoys`);
+    for (const entry of chosen) {
+      decoyed.add(entry.name);
+      const statement = entry.body[edit.position];
+      statement.kind = "linear";
+      statement.factor = edit.factor;
+      statement.offset = Number(edit.before.split(" + ")[1]);
+    }
+  }
+
+  // E and F: a new factor that changes the answer.
   const startAnswer = evaluate(new Map());
-  for (const edit of ofCluster("E")) {
+  for (const edit of edits.filter(({ cluster }) => cluster === "E" || cluster === "F")) {
     do edit.newFactor = number();
     while (evaluate(new Map([[edit.statement, edit.newFactor]])) === startAnswer);
     edit.after = edit.before.replace(` * ${edit.factor} + `, ` * ${edit.newFactor} + `);
@@ -535,11 +621,14 @@ export function generateChecksumProject(seed, options = {}) {
 
   const render = (done) => {
     const names = new Map(),
-      factors = new Map();
+      factors = new Map(),
+      locals = new Map();
     let order = layout;
     for (const edit of done.flatMap((task) => task.parts ?? [task])) {
       if (edit.kind === "rename") names.set(edit.name, edit.newName);
-      if (edit.kind === "expression") factors.set(edit.statement, edit.newFactor);
+      if (edit.kind === "expression" || edit.kind === "scoped-replace")
+        factors.set(edit.statement, edit.newFactor);
+      if (edit.kind === "local-rename") locals.set(edit.name, edit);
       if (edit.kind === "move")
         order = order
           .filter((block) => block.function !== edit.name)
@@ -548,13 +637,16 @@ export function generateChecksumProject(seed, options = {}) {
         order = order.map((block) => (block.marker === edit.marker ? { text: edit.text } : block));
     }
     const context = { factors, name: (name) => names.get(name) ?? name };
-    const definition = (entry) =>
-      [
+    const definition = (entry) => {
+      const text = [
         header(entry.name),
         ...entry.body.flatMap((item) => itemLines(item, 1, context)),
         `  return (${entry.result[0]} + ${entry.result[1]}) % kModulus;`,
         "}",
       ].join("\n");
+      const local = locals.get(entry.name);
+      return local ? text.replace(new RegExp(`\\b${local.local}\\b`, "g"), local.newName) : text;
+    };
     const sections = [
       [`// Checksum program generated from seed ${seed}.`, "#include <iostream>"].join("\n"),
       [
@@ -600,6 +692,22 @@ export function generateChecksumProject(seed, options = {}) {
     if (edit.kind === "move" || edit.kind === "insert")
       assert.equal(occurrences(edit.marker), 1, `${edit.id} marker is not unique`);
     if (edit.kind === "insert") assert.equal(occurrences(edit.name), 0, `${edit.id} name exists`);
+    if (edit.kind === "scoped-replace") {
+      // A trap's text also stands in two other functions.
+      const copies = edit.variant === "trap" ? 3 : 1;
+      assert.equal(occurrences(edit.before), copies, `${edit.id} copies`);
+      assert.equal(expected.split(edit.after).length, 2, `${edit.id} result is not unique`);
+    }
+    if (edit.kind === "local-rename") {
+      const own = definitionText(start, edit.name);
+      edit.occurrences = identifierCount(own, edit.local);
+      assert.ok(edit.occurrences >= 2, `${edit.id} has too few uses`);
+      // A trap's variable is declared elsewhere too; a control's is not.
+      const elsewhere = identifierCount(start, edit.local) - edit.occurrences;
+      if (edit.variant === "trap") assert.ok(elsewhere > 0, `${edit.id} is unique`);
+      else assert.equal(elsewhere, 0, `${edit.id} is used elsewhere`);
+      assert.equal(identifierCount(start, edit.newName), 0, `${edit.id} new name exists`);
+    }
     if (edit.kind === "expression") {
       assert.equal(occurrences(edit.before), 1, `${edit.id} expression is not unique`);
       assert.equal(expected.split(edit.after).length, 2, `${edit.id} result is not unique`);
@@ -637,7 +745,7 @@ export function generateChecksumProject(seed, options = {}) {
     new Map(
       done
         .flatMap((task) => task.parts ?? [task])
-        .filter(({ kind }) => kind === "expression")
+        .filter(({ kind }) => kind === "expression" || kind === "scoped-replace")
         .map((edit) => [edit.statement, edit.newFactor]),
     );
   const result = tasks.map((task) => ({

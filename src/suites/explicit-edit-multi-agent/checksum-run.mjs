@@ -10,6 +10,7 @@ import { startSharedSandbox } from "./execution/shared-sandbox.mjs";
 import {
   CHECKSUM_CLUSTERS,
   CHECKSUM_PROJECT_VERSION,
+  definitionText,
   generateChecksumProject,
   identifierCount,
 } from "./generation/checksum-project.mjs";
@@ -17,18 +18,22 @@ import {
 /** Passed edits per cluster, traps and controls side by side. */
 export function clusterSummary(edits) {
   return Object.fromEntries(
-    Object.keys(CHECKSUM_CLUSTERS).map((cluster) => [
-      cluster,
-      Object.fromEntries(
-        ["trap", "control"].map((variant) => {
-          const own = edits.filter((edit) => edit.cluster === cluster && edit.variant === variant);
-          return [
-            variant,
-            { passed: own.filter(({ passed }) => passed).length, total: own.length },
-          ];
-        }),
-      ),
-    ]),
+    Object.keys(CHECKSUM_CLUSTERS)
+      .filter((cluster) => edits.some((edit) => edit.cluster === cluster))
+      .map((cluster) => [
+        cluster,
+        Object.fromEntries(
+          ["trap", "control"].map((variant) => {
+            const own = edits.filter(
+              (edit) => edit.cluster === cluster && edit.variant === variant,
+            );
+            return [
+              variant,
+              { passed: own.filter(({ passed }) => passed).length, total: own.length },
+            ];
+          }),
+        ),
+      ]),
   );
 }
 
@@ -238,6 +243,16 @@ export function gradeSharedChecksum(project, candidate) {
     else if (edit.kind === "expression")
       passed = count(candidate, edit.before) === 0 && count(candidate, edit.context) === 1;
     else if (edit.kind === "insert") passed = placed((block) => block === edit.text, edit.marker);
+    // The other copies of an F text and the other uses of a G name stay unchanged.
+    else if (edit.kind === "scoped-replace")
+      passed =
+        count(candidate, edit.after) === 1 &&
+        count(candidate, edit.before) === count(project.expected, edit.before) &&
+        (definitionText(candidate, edit.host)?.includes(edit.after) ?? false);
+    else if (edit.kind === "local-rename")
+      passed =
+        definitionText(candidate, edit.name) === definitionText(project.expected, edit.name) &&
+        identifierCount(candidate, edit.local) === identifierCount(project.expected, edit.local);
     else {
       const signature = `long long ${edit.name}(long long value)`;
       passed =
