@@ -217,7 +217,7 @@ export async function runChecksumShared(
   seed,
   outputPath,
   config,
-  { agents, options = {}, sandbox = "separate", signal } = {},
+  { agents, options = {}, sandbox = "separate", notice = true, signal } = {},
 ) {
   assert.ok(["separate", "shared"].includes(sandbox), `Unknown sandbox mode ${sandbox}`);
   const source = await restoringSourceIdentity();
@@ -238,6 +238,8 @@ export async function runChecksumShared(
     thinking: config.thinking ?? null,
     agents: team,
     sandbox,
+    // Whether prompts say that other agents edit the same file.
+    notice,
     deadlineSeconds: CHECKSUM_DELIVERY_DEADLINE_MS / 1000,
   };
   const workspace = path.join(output, "workspace");
@@ -295,11 +297,15 @@ export async function runChecksumShared(
           rows.push(row);
           const begin = Date.now();
           try {
-            const outcome = await drivers.execute(slot.driver, sharedPrompt(task), {
-              signal,
-              session: slot.session,
-              timeoutMs: CHECKSUM_DELIVERY_DEADLINE_MS,
-            });
+            const outcome = await drivers.execute(
+              slot.driver,
+              notice ? sharedPrompt(task) : task.prompt,
+              {
+                signal,
+                session: slot.session,
+                timeoutMs: CHECKSUM_DELIVERY_DEADLINE_MS,
+              },
+            );
             row.status = outcome.status;
           } catch (error) {
             row.status = "error";

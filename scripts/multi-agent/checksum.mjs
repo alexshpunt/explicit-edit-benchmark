@@ -15,6 +15,7 @@ and grades each result byte for byte against that task's reference.
 shared-run starts N agents (all tasks by default) on one main.cpp, then gives them
 the tasks in waves of N at once, and grades the final file against the reference.
 --functions, --moves, --renames and --expressions set the project size.
+--no-notice leaves out the sentence that other agents edit main.cpp at the same time.
 shared-rescore SEED SAVED_RUN grades a saved shared run again with the current grader.`;
 
 const { values, positionals } = parseArgs({
@@ -23,6 +24,7 @@ const { values, positionals } = parseArgs({
     config: { type: "string" },
     agents: { type: "string" },
     sandbox: { type: "string" },
+    "no-notice": { type: "boolean" },
     "allow-model-calls": { type: "boolean" },
     functions: { type: "string" },
     moves: { type: "string" },
@@ -93,6 +95,7 @@ if (command === "show") {
     agents: values.agents === undefined ? undefined : Number(values.agents),
     options,
     ...(values.sandbox === undefined ? {} : { sandbox: values.sandbox }),
+    ...(values["no-notice"] ? { notice: false } : {}),
     signal: controller.signal,
   });
   const { identity: _identity, tasks, ...rest } = summary;
