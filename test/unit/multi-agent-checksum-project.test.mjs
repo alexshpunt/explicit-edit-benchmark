@@ -35,11 +35,13 @@ test("a seed fixes the checksum project and its tasks", () => {
 });
 
 const LARGE = { functions: 80, moves: 20, renames: 15, expressions: 15 };
+const COMPOSITE = { functions: 80, moves: 20, renames: 16, expressions: 16, edits: 4 };
 for (const { seed, options } of [
   { seed: 1, options: {} },
   { seed: 2, options: {} },
   { seed: 3, options: {} },
   { seed: 4, options: LARGE },
+  { seed: 5, options: COMPOSITE },
 ]) {
   test(`checksum project ${seed} ${JSON.stringify(options)}: every state builds and prints its answer`, async (t) => {
     const project = generateChecksumProject(seed, options);
@@ -49,9 +51,11 @@ for (const { seed, options } of [
     const counts = Object.fromEntries(
       ["move", "rename", "expression"].map((kind) => [
         kind,
-        project.tasks.filter((task) => task.kind === kind).length,
+        project.tasks.flatMap((task) => task.parts ?? [task]).filter((task) => task.kind === kind)
+          .length,
       ]),
     );
+    assert.equal(project.tasks.length * size.edits, size.moves + size.renames + size.expressions);
     assert.deepEqual(counts, {
       move: size.moves,
       rename: size.renames,
@@ -70,14 +74,17 @@ for (const { seed, options } of [
     states.forEach((state, index) => assert.equal(printed[index], `${state.answer}\n`, state.id));
     for (const task of project.tasks) {
       assert.notEqual(task.result, project.start);
+      const kinds = (task.parts ?? [task]).map(({ kind }) => kind);
+      // Only an expression change alters the answer; one alone always does.
       if (task.kind === "expression") assert.notEqual(task.answer, project.answers.start);
-      else assert.equal(task.answer, project.answers.start);
+      else if (!kinds.includes("expression")) assert.equal(task.answer, project.answers.start);
     }
   });
 }
 
 /** Follow one task's instruction literally, as plain text operations. */
 function followInstruction(start, task) {
+  if (task.kind === "composite") return task.parts.reduce(followInstruction, start);
   if (task.kind === "rename") return start.replaceAll(task.name, task.newName);
   if (task.kind === "expression") return start.replace(task.before, task.after);
   const lines = start.split("\n");
@@ -92,7 +99,7 @@ function followInstruction(start, task) {
 
 test("each instruction, followed literally, gives exactly its task's result", () => {
   for (let seed = 0; seed < 50; seed++) {
-    const project = generateChecksumProject(seed, seed % 5 === 0 ? LARGE : {});
+    const project = generateChecksumProject(seed, [{}, {}, {}, LARGE, COMPOSITE][seed % 5] ?? {});
     let all = project.start;
     for (const task of project.tasks) {
       assert.equal(followInstruction(project.start, task), task.result, `${seed}: ${task.id}`);
@@ -141,6 +148,21 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
     gradeSharedChecksum(project, longer).tasks.find(({ id }) => id === rename.id).passed,
     false,
   );
+});
+
+test("a composite task passes only when every one of its edits is done", () => {
+  const project = generateChecksumProject(5, COMPOSITE);
+  const [task] = project.tasks;
+  assert.match(task.prompt, /Make all 4 of the following edits:\n1\. In main\.cpp, /);
+  const all = project.tasks.reduce(followInstruction, project.start);
+  assert.equal(all, project.expected);
+  // Undo the last edit of the first task: that task fails, the others pass.
+  const partial = project.tasks
+    .slice(1)
+    .reduce(followInstruction, task.parts.slice(0, 3).reduce(followInstruction, project.start));
+  const grade = gradeSharedChecksum(project, partial);
+  assert.equal(grade.passed, project.tasks.length - 1);
+  assert.deepEqual(grade.tasks.find(({ id }) => id === task.id).failedEdits, [task.parts[3].id]);
 });
 
 test("tasks never edit the same text", () => {

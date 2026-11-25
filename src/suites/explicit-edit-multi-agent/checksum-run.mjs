@@ -133,7 +133,7 @@ export async function runChecksumIsolated(
     passed,
     total: tasks.length,
     byKind: Object.fromEntries(
-      ["move", "rename", "expression"].map((kind) => {
+      [...new Set(tasks.map((row) => row.kind))].map((kind) => {
         const own = tasks.filter((row) => row.kind === kind);
         return [kind, { passed: own.filter((row) => row.exact).length, total: own.length }];
       }),
@@ -176,7 +176,9 @@ export function gradeSharedChecksum(project, candidate) {
   const paragraphs = new Map();
   for (const block of got) paragraphs.set(block, (paragraphs.get(block) ?? 0) + 1);
   const damaged = wanted.filter((block) => paragraphs.get(block) !== 1);
-  const tasks = project.tasks.map((task) => {
+  const edits = project.tasks.flatMap((task) => task.parts ?? [task]);
+  const checks = new Map();
+  for (const task of edits) {
     let passed;
     if (task.kind === "rename")
       passed =
@@ -196,11 +198,21 @@ export function gradeSharedChecksum(project, candidate) {
         count(candidate, task.marker) === 0 &&
         (got[at - 1] === wanted[reference - 1] || got[at + 1] === wanted[reference + 1]);
     }
-    return { id: task.id, kind: task.kind, passed };
-  });
+    checks.set(task.id, { id: task.id, kind: task.kind, passed });
+  }
+  // A composite task passes only when every one of its edits does.
+  const tasks = project.tasks.map((task) => ({
+    id: task.id,
+    kind: task.kind,
+    passed: (task.parts ?? [task]).every(({ id }) => checks.get(id).passed),
+    failedEdits: (task.parts ?? [task])
+      .filter(({ id }) => !checks.get(id).passed)
+      .map(({ id }) => id),
+  }));
   return {
     exact: candidate === project.expected,
     tasks,
+    edits: [...checks.values()],
     passed: tasks.filter(({ passed }) => passed).length,
     // Paragraphs of the reference that are lost, changed or duplicated in the candidate.
     damaged: damaged.map((block) => block.split("\n")[0]),
@@ -348,10 +360,11 @@ export async function runChecksumShared(
     exact: grade.exact,
     passed: grade.passed,
     total: project.tasks.length,
+    // Single edits by kind; a composite task counts each of its edits here.
     byKind: Object.fromEntries(
       ["move", "rename", "expression"].map((kind) => {
-        const own = grade.tasks.filter((task) => task.kind === kind);
-        return [kind, { passed: own.filter((task) => task.passed).length, total: own.length }];
+        const own = grade.edits.filter((edit) => edit.kind === kind);
+        return [kind, { passed: own.filter((edit) => edit.passed).length, total: own.length }];
       }),
     ),
     damaged: grade.damaged,
@@ -362,7 +375,11 @@ export async function runChecksumShared(
     extraFiles: files.filter((file) => file !== "main.cpp"),
     waves,
     usage: total,
-    tasks: rows.map((row) => ({ ...row, passed: byId.get(row.id).passed })),
+    tasks: rows.map((row) => ({
+      ...row,
+      passed: byId.get(row.id).passed,
+      failedEdits: byId.get(row.id).failedEdits,
+    })),
   };
   await writeFile(path.join(output, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
     flag: "wx",

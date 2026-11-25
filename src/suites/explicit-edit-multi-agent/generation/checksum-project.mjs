@@ -7,12 +7,14 @@ import assert from "node:assert/strict";
  * No two tasks edit the same text: a moved function holds no renamed name and no
  * changed expression, so the reference does not depend on the order of the tasks.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v2";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v3";
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   functions: 18,
   moves: 4,
   renames: 3,
   expressions: 3,
+  // Edits per task; more than one makes composite tasks.
+  edits: 1,
 });
 const MODULUS = 1000003;
 const ADJECTIVES = [
@@ -270,7 +272,7 @@ export function generateChecksumProject(seed, options = {}) {
     const names = new Map(),
       constants = new Map();
     let order = blocks;
-    for (const task of done) {
+    for (const task of done.flatMap((entry) => entry.parts ?? [entry])) {
       if (task.kind === "rename") names.set(task.name, task.newName);
       if (task.kind === "expression") constants.set(task.statement, task.newFactor);
       if (task.kind === "move")
@@ -309,7 +311,7 @@ export function generateChecksumProject(seed, options = {}) {
     return sections.join("\n\n") + "\n";
   };
 
-  const tasks = [
+  const edits = [
     ...slots.map((slot) => ({
       id: `move-${slot.name}`,
       kind: "move",
@@ -334,9 +336,9 @@ export function generateChecksumProject(seed, options = {}) {
   ];
 
   const start = render([]);
-  const expected = render(tasks);
+  const expected = render(edits);
   const occurrences = (text) => start.split(text).length - 1;
-  for (const task of tasks) {
+  for (const task of edits) {
     if (task.kind === "move") {
       assert.equal(occurrences(header(task.name)), 1, `${task.id} header is not unique`);
       assert.equal(occurrences(task.marker), 1, `${task.id} marker is not unique`);
@@ -351,9 +353,34 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(occurrences(task.before), 1, `${task.id} expression is not unique`);
     task.prompt = mechanicalPrompt(instruction(task));
   }
+  // A composite task lists several edits from different parts of the file, so an
+  // agent works through them in steps instead of one quick write.
+  const tasks = [];
+  const perTask = /** @type {number} */ (counts.edits);
+  assert.ok(Number.isSafeInteger(perTask) && perTask >= 1, "Edits per task must be positive");
+  if (perTask === 1) tasks.push(...edits);
+  else {
+    assert.equal(edits.length % perTask, 0, "Edits do not divide into tasks");
+    const mixed = random.shuffle(edits);
+    for (let first = 0; first < mixed.length; first += perTask) {
+      const parts = mixed.slice(first, first + perTask);
+      tasks.push({
+        id: `task-${String(tasks.length + 1).padStart(2, "0")}`,
+        kind: "composite",
+        parts,
+        prompt: mechanicalPrompt(
+          [
+            `Make all ${parts.length} of the following edits:`,
+            ...parts.map((part, index) => `${index + 1}. ${instruction(part)}`),
+          ].join("\n"),
+        ),
+      });
+    }
+  }
   const constantsOf = (done) =>
     new Map(
       done
+        .flatMap((task) => task.parts ?? [task])
         .filter(({ kind }) => kind === "expression")
         .map((task) => [task.statement, task.newFactor]),
     );

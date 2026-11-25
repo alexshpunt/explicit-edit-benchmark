@@ -14,7 +14,8 @@ isolated-run gives every task to a new agent in its own copy of the start projec
 and grades each result byte for byte against that task's reference.
 shared-run starts N agents (all tasks by default) on one main.cpp, then gives them
 the tasks in waves of N at once, and grades the final file against the reference.
---functions, --moves, --renames and --expressions set the project size.
+--functions, --moves, --renames and --expressions set the project size; --edits N
+groups N edits into one composite task.
 --no-notice leaves out the sentence that other agents edit main.cpp at the same time.
 shared-rescore SEED SAVED_RUN grades a saved shared run again with the current grader.`;
 
@@ -30,6 +31,7 @@ const { values, positionals } = parseArgs({
     moves: { type: "string" },
     renames: { type: "string" },
     expressions: { type: "string" },
+    edits: { type: "string" },
   },
 });
 const [command, seedText, target] = positionals;
@@ -37,7 +39,7 @@ assert.ok(positionals.length === 3 && /^\d+$/.test(seedText ?? ""), help);
 const seed = Number(seedText);
 /** Project size options; omitted ones keep the generator's defaults. */
 const options = Object.fromEntries(
-  ["functions", "moves", "renames", "expressions"]
+  ["functions", "moves", "renames", "expressions", "edits"]
     .filter((key) => values[key] !== undefined)
     .map((key) => [key, Number(values[key])]),
 );
