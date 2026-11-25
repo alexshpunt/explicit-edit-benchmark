@@ -34,9 +34,16 @@ test("a seed fixes the checksum project and its tasks", () => {
   assert.notEqual(generateChecksumProject(7).start, generateChecksumProject(8).start);
 });
 
-for (const seed of [1, 2, 3]) {
-  test(`checksum project ${seed}: every state builds and prints its answer`, async (t) => {
-    const project = generateChecksumProject(seed);
+const LARGE = { functions: 80, moves: 20, renames: 15, expressions: 15 };
+for (const [seed, options] of [
+  [1, {}],
+  [2, {}],
+  [3, {}],
+  [4, LARGE],
+]) {
+  test(`checksum project ${seed} ${JSON.stringify(options)}: every state builds and prints its answer`, async (t) => {
+    const project = generateChecksumProject(seed, options);
+    const size = { ...CHECKSUM_PROJECT_DEFAULTS, ...options };
     const root = await mkdtemp(path.join(os.tmpdir(), "checksum-project-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     const counts = Object.fromEntries(
@@ -46,9 +53,9 @@ for (const seed of [1, 2, 3]) {
       ]),
     );
     assert.deepEqual(counts, {
-      move: CHECKSUM_PROJECT_DEFAULTS.moves,
-      rename: CHECKSUM_PROJECT_DEFAULTS.renames,
-      expression: CHECKSUM_PROJECT_DEFAULTS.expressions,
+      move: size.moves,
+      rename: size.renames,
+      expression: size.expressions,
     });
     assert.notEqual(project.answers.expected, project.answers.start);
     assert.doesNotMatch(project.expected, /__EXPLICIT_EDIT_SLOT_/);
@@ -85,7 +92,7 @@ function followInstruction(start, task) {
 
 test("each instruction, followed literally, gives exactly its task's result", () => {
   for (let seed = 0; seed < 50; seed++) {
-    const project = generateChecksumProject(seed);
+    const project = generateChecksumProject(seed, seed % 5 === 0 ? LARGE : {});
     let all = project.start;
     for (const task of project.tasks) {
       assert.equal(followInstruction(project.start, task), task.result, `${seed}: ${task.id}`);

@@ -13,7 +13,8 @@ show writes the seed's start main.cpp, its reference and its task prompts.
 isolated-run gives every task to a new agent in its own copy of the start project
 and grades each result byte for byte against that task's reference.
 shared-run starts N agents (all tasks by default) on one main.cpp, then gives them
-the tasks in waves of N at once, and grades the final file against the reference.`;
+the tasks in waves of N at once, and grades the final file against the reference.
+--functions, --moves, --renames and --expressions set the project size.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -22,16 +23,26 @@ const { values, positionals } = parseArgs({
     agents: { type: "string" },
     sandbox: { type: "string" },
     "allow-model-calls": { type: "boolean" },
+    functions: { type: "string" },
+    moves: { type: "string" },
+    renames: { type: "string" },
+    expressions: { type: "string" },
   },
 });
 const [command, seedText, target] = positionals;
 assert.ok(positionals.length === 3 && /^\d+$/.test(seedText ?? ""), help);
 const seed = Number(seedText);
+/** Project size options; omitted ones keep the generator's defaults. */
+const options = Object.fromEntries(
+  ["functions", "moves", "renames", "expressions"]
+    .filter((key) => values[key] !== undefined)
+    .map((key) => [key, Number(values[key])]),
+);
 
 if (command === "show") {
   const { generateChecksumProject } =
     await import("../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs");
-  const project = generateChecksumProject(seed);
+  const project = generateChecksumProject(seed, options);
   await mkdir(target, { mode: 0o700 });
   await writeFile(path.join(target, "main.cpp"), project.start);
   await writeFile(path.join(target, "expected-main.cpp"), project.expected);
@@ -63,6 +74,7 @@ if (command === "show") {
   const run = command === "shared-run" ? runChecksumShared : runChecksumIsolated;
   const summary = await run(seed, target, JSON.parse(await readFile(values.config, "utf8")), {
     agents: values.agents === undefined ? undefined : Number(values.agents),
+    options,
     ...(values.sandbox === undefined ? {} : { sandbox: values.sandbox }),
     signal: controller.signal,
   });
