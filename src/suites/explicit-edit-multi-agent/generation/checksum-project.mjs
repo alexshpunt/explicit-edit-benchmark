@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { renameProse } from "../extraction/mixed-probe.mjs";
 
 /** A small generated C++ project for Multi-Agent: one main.cpp whose functions each
  * add a weighted contribution to a checksum that main prints. A seed fixes the
- * program, its tasks and the reference. Every task has exactly one correct result,
- * and no two tasks edit the same text: a moved function holds no renamed name and no
+ * program, its tasks and the reference. Tasks are mechanical edits stated as exact
+ * text, as in the original suite: no task needs any understanding of the code.
+ * No two tasks edit the same text: a moved function holds no renamed name and no
  * changed expression, so the reference does not depend on the order of the tasks.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v1";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v2";
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   functions: 18,
   moves: 4,
@@ -98,6 +98,32 @@ function expressionText(statement, names, constants) {
   if (statement.kind === "mix") return `(${left} ^ ${factor}) + ${right}`;
   if (statement.kind === "call") return `${names.get(callee) ?? callee}(${left}) + ${offset}`;
   throw new Error(`Unknown statement kind ${statement.kind}`);
+}
+
+/** The first line of a function definition. */
+const header = (name) => `long long ${name}(long long value) {`;
+
+/** Exact text in a prompt, as the original suite writes it: JSON string notation. */
+const q = (value) => JSON.stringify(value);
+
+/** One task as a mechanical edit of exact text. */
+function instruction(task) {
+  if (task.kind === "move")
+    return `In main.cpp, move the ${task.lines} lines from the line ${q(header(task.name))} through the first following line ${q("}")} to the placeholder line ${q(task.marker)}: the moved lines replace that placeholder line. Also delete the empty line that directly followed the moved lines in their old place. Keep the text of the moved lines unchanged.`;
+  if (task.kind === "rename")
+    return `In main.cpp, replace all ${task.occurrences} occurrences of ${q(task.name)} with ${q(task.newName)}.`;
+  return `In main.cpp, replace its one occurrence of ${q(task.before)} with ${q(task.after)}.`;
+}
+
+/** The frame of the original suite's prompts around one instruction. */
+function mechanicalPrompt(text) {
+  return [
+    "Perform only the following mechanical file edits. The required change is fully specified; no bug investigation is needed.",
+    "All file paths are relative to the current working directory. Open explicitly named files directly; search for their location only if the supplied path cannot be resolved. Searching within files for the requested content is allowed.",
+    "Quoted text in this request uses JSON string notation: decode escapes to the actual characters. Treat it as literal text, not a regular expression.",
+    text,
+    "Leave all text outside the requested edits unchanged. Do not create extra files. Choose any available tools. Complete the edits and then finish.",
+  ].join("\n\n");
 }
 
 /** Generate one project with its tasks and references. */
@@ -206,12 +232,12 @@ export function generateChecksumProject(seed, options = {}) {
     .slice(0, counts.moves);
   assert.equal(moved.length, counts.moves, "Too few independent functions to move");
   const movedNames = new Set(moved.map(({ name }) => name));
-  // Expressions: one multiplier in each of a few functions that are neither moved
-  // nor renamed, so every prompt names a function that keeps its name.
+  // Expressions: one multiplier in each of a few unmoved functions. An expression
+  // never holds a function name, so a rename next to it leaves its text intact.
   const startAnswer = evaluate(new Map());
   const changeable = random.shuffle(
     functions
-      .filter(({ name }) => !movedNames.has(name) && !renamedNames.has(name))
+      .filter(({ name }) => !movedNames.has(name))
       .map((entry) => entry.statements.find(({ kind }) => kind === "linear" || kind === "mix"))
       .filter(Boolean),
   );
@@ -255,7 +281,7 @@ export function generateChecksumProject(seed, options = {}) {
     const current = (name) => names.get(name) ?? name;
     const definition = (entry) =>
       [
-        `long long ${current(entry.name)}(long long value) {`,
+        header(current(entry.name)),
         ...entry.statements.map(
           (statement) =>
             `  long long ${statement.variable} = (${expressionText(statement, names, constants)}) % kModulus;`,
@@ -283,55 +309,48 @@ export function generateChecksumProject(seed, options = {}) {
     return sections.join("\n\n") + "\n";
   };
 
-  const KEEP = "Leave all other code unchanged.";
   const tasks = [
     ...slots.map((slot) => ({
       id: `move-${slot.name}`,
       kind: "move",
       name: slot.name,
       marker: slot.marker,
-      prompt: [
-        `In main.cpp, move the definition of the function \`${slot.name}\` to the placeholder line \`${slot.marker}\`, replacing that line with the complete definition. Keep the definition's code exactly as it is. Remove it from its old place together with the empty line that follows it.`,
-        KEEP,
-      ].join("\n\n"),
+      lines: byName.get(slot.name).statements.length + 3,
     })),
-    ...renamed.map(({ name }) => {
-      const newName = fresh();
-      return {
-        id: `rename-${name}`,
-        kind: "rename",
-        name,
-        newName,
-        prompt: renameProse(
-          { kind: "unique", role: "function", name, newName },
-          { isolated: true },
-        ),
-      };
-    }),
-    ...changes.map(({ statement, factor }) => {
-      const name = statement.id.split(":")[0];
-      const before = expressionText(statement, new Map(), new Map());
-      const after = expressionText(statement, new Map(), new Map([[statement.id, factor]]));
-      return {
-        id: `expression-${name}`,
-        kind: "expression",
-        name,
-        statement: statement.id,
-        before,
-        after,
-        newFactor: factor,
-        prompt: [
-          `In main.cpp, in the function \`${name}\`, replace the expression \`${before}\` with \`${after}\`.`,
-          KEEP,
-        ].join("\n\n"),
-      };
-    }),
+    ...renamed.map(({ name }) => ({
+      id: `rename-${name}`,
+      kind: "rename",
+      name,
+      newName: fresh(),
+    })),
+    ...changes.map(({ statement, factor }) => ({
+      id: `expression-${statement.id.split(":")[0]}`,
+      kind: "expression",
+      statement: statement.id,
+      before: expressionText(statement, new Map(), new Map()),
+      after: expressionText(statement, new Map(), new Map([[statement.id, factor]])),
+      newFactor: factor,
+    })),
   ];
 
   const start = render([]);
   const expected = render(tasks);
-  for (const task of tasks.filter(({ kind }) => kind === "expression"))
-    assert.equal(start.split(task.before).length - 1, 1, `Expression ${task.before} is not unique`);
+  const occurrences = (text) => start.split(text).length - 1;
+  for (const task of tasks) {
+    if (task.kind === "move") {
+      assert.equal(occurrences(header(task.name)), 1, `${task.id} header is not unique`);
+      assert.equal(occurrences(task.marker), 1, `${task.id} marker is not unique`);
+    }
+    if (task.kind === "rename") {
+      // Plain text matches only whole identifiers, so a textual replace-all is exact.
+      task.occurrences = occurrences(task.name);
+      const words = start.match(new RegExp(`\\b${task.name}\\b`, "g")).length;
+      assert.equal(task.occurrences, words, `${task.id} is part of another identifier`);
+    }
+    if (task.kind === "expression")
+      assert.equal(occurrences(task.before), 1, `${task.id} expression is not unique`);
+    task.prompt = mechanicalPrompt(instruction(task));
+  }
   const constantsOf = (done) =>
     new Map(
       done
