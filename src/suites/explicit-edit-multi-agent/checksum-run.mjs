@@ -280,8 +280,10 @@ export async function runChecksumShared(
         slots.slice(0, wave.length).map(async (slot) => {
           if (slot.driver && slot.driver.closed !== true) return;
           await retire(slot);
-          slot.driver = await drivers.createDriver(null, ++sessions, { signal });
-          slot.session = sessions;
+          // Take the number before waiting: other slots start their agents meanwhile.
+          const session = ++sessions;
+          slot.driver = await drivers.createDriver(null, session, { signal });
+          slot.session = session;
         }),
       );
       const barrier = Date.now();
