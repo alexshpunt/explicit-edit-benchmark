@@ -286,10 +286,11 @@ seed 42, Terra 6.1 low. A J pair counts as two edits and an L group as three.
 | B to M; 1 trap and 1 control; 26 edits    | B, H, I traps fail    | B, H, I traps fail; 3 collateral paragraphs; no build | all edits, file equals the reference |
 | Same, `lines` 4000 (5204 lines)           | B, H, I, K traps fail | B, I traps fail; 1 collateral paragraph; no build     | all edits, file equals the reference |
 
-Over all isolated runs of this round, including two with two traps per cluster, the
-Bash agents failed 6 of 9 K traps, every one by the silent first match: the script
-searched for the bare signature, ignored the namespace and deleted the function in the
-namespace above. In shared runs they passed all 5 K traps: with the concurrency notice
+Over all isolated runs of this round, including the two B-to-M runs with two traps
+per cluster that the last paragraph excludes for B, H and I, the Bash agents failed 6
+of 9 K traps, every one by the silent first match: the script searched for the bare
+signature, ignored the namespace and deleted the function in the namespace above. In
+shared runs they passed all 7 K traps: with the concurrency notice
 they printed the text around the match first, or anchored the search on the
 namespace's opening line. The notice does not help them with B, H and I, where the
 wrong match is a prototype.
@@ -300,10 +301,10 @@ before its read; the IDE agents also edit by content anchors, which a shift of l
 numbers does not move. An IDE agent deletes all 32 M lines in one call that takes
 every match of a search. A file of 5200 lines changed nothing for either harness.
 
-Two runs of this round are not counted. In the first version of M, the trace
+The B, H and I results of two runs of this round are not counted. In the first version of M, the trace
 functions' definitions stood in the prototype paragraph, so the first brace after a
 B, H or I prototype was a trace function's body. The blind script then failed its own
 check, the agent recovered, and those traps passed; the definitions now stand with
 the constants, and a unit test checks that the first brace after such a prototype
-opens the lead. Two Bash agents ran out of the 300-second deadline because the model
-returned nothing; they count as failed J controls.
+opens the lead. One Bash agent ran out of the 300-second deadline because the model
+returned nothing; it counts as a failed J control.
