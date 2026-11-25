@@ -19,7 +19,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFG";
+const ALL = "ABCDEFGHI";
 const CONFIGS = [
   {},
   { clusters: ALL },
@@ -72,7 +72,8 @@ for (const { seed, options } of [
     assert.notEqual(project.answers.expected, project.answers.start);
     assert.doesNotMatch(project.expected, /__EXPLICIT_EDIT_SLOT_/);
     const lines = project.start.split("\n").length;
-    assert.ok(lines > 300 && lines < 900, `${lines} lines`);
+    // Generated code stays near 20 lines per edit, so a run's file stays readable.
+    assert.ok(lines > 15 * edits.length && lines < 40 * edits.length, `${lines} lines`);
     const states = [
       { id: "start", source: project.start, answer: project.answers.start },
       { id: "expected", source: project.expected, answer: project.answers.expected },
@@ -84,7 +85,7 @@ for (const { seed, options } of [
     states.forEach((state, index) => assert.equal(printed[index], `${state.answer}\n`, state.id));
     for (const task of project.tasks) {
       // Only a changed factor alters the answer, and one always does.
-      const changes = (task.parts ?? [task]).some(({ cluster }) => "EF".includes(cluster));
+      const changes = (task.parts ?? [task]).some(({ cluster }) => "EFI".includes(cluster));
       assert.equal(task.answer !== project.answers.start, changes, task.id);
     }
   });
@@ -131,7 +132,7 @@ function followInstruction(start, task) {
   }
   const moved = lines.splice(first, length);
   assert.equal(lines.splice(first, 1)[0], "", task.id);
-  lines.splice(lines.indexOf(task.marker), 1, ...moved);
+  if (task.kind === "move") lines.splice(lines.indexOf(task.marker), 1, ...moved);
   return lines.join("\n");
 }
 
@@ -172,8 +173,17 @@ test("each trap differs from its control in its one factor", () => {
       const trap = edit.variant === "trap";
       if (edit.cluster === "A")
         assert.equal(start.split(edit.name).length - 1 > edit.occurrences, trap, edit.id);
-      if (edit.cluster === "B")
-        assert.equal(start.includes(`long long ${edit.name}(long long value);`), trap, edit.id);
+      if ("BHI".includes(edit.cluster))
+        assert.equal(
+          start.includes(`long long ${edit.name ?? edit.host}(long long value);`),
+          trap,
+          edit.id,
+        );
+      // The first definition after the prototypes repeats every I expression.
+      if (edit.cluster === "I") {
+        const lead = start.split("\n\n")[3];
+        assert.ok(lead.includes(edit.before) && !lead.startsWith(`long long ${edit.host}(`));
+      }
       // A C trap scans for a brace character.
       if (edit.cluster === "C")
         assert.equal(/'[{}]'/.test(definitionText(start, edit.name)), trap, edit.id);
@@ -213,11 +223,11 @@ test("tasks never edit the same text", () => {
     const edits = atoms(project);
     const renamed = edits.filter(({ kind }) => kind === "rename").map(({ name }) => name);
     const changed = edits
-      .filter(({ cluster }) => "EF".includes(cluster))
+      .filter(({ cluster }) => "EFI".includes(cluster))
       .map(({ before }) => before);
     for (const edit of edits) {
       let text;
-      if (edit.kind === "move" || edit.kind === "local-rename")
+      if (["move", "local-rename", "delete"].includes(edit.kind))
         text = definitionText(project.start, edit.name);
       if (edit.kind === "insert") text = edit.text;
       if (!text) continue;
@@ -268,7 +278,7 @@ test("density puts the edits of one zone next to each other", () => {
         let hosts = null;
         const near = [];
         for (const edit of edits) {
-          if (["rename", "expression", "scoped-replace"].includes(edit.kind)) {
+          if ("AEF".includes(edit.cluster)) {
             const own = where((paragraph) =>
               edit.kind === "rename"
                 ? identifierCount(paragraph, edit.name) > 0
@@ -282,7 +292,7 @@ test("density puts the edits of one zone next to each other", () => {
               ...where((paragraph) =>
                 edit.kind === "insert"
                   ? paragraph === edit.marker
-                  : paragraph.startsWith(`long long ${edit.name}(long long value) {`),
+                  : paragraph.startsWith(`long long ${edit.name ?? edit.host}(long long value) {`),
               ),
             );
         }
@@ -307,7 +317,7 @@ test("density puts the edits of one zone next to each other", () => {
 test("the shared grade credits finished tasks and names damaged definitions", () => {
   const project = generateChecksumProject(42, { clusters: ALL });
   assert.deepEqual(
-    { exact: true, passed: 28, damaged: [], extra: [] },
+    { exact: true, passed: 36, damaged: [], extra: [] },
     (({ exact, passed, damaged, extra }) => ({ exact, passed, damaged, extra }))(
       gradeSharedChecksum(project, project.expected),
     ),
@@ -385,6 +395,23 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   lines.splice(lines.indexOf(extent.marker), 1, ...moved);
   assert.notEqual(lines.join("\n"), cut);
   assert.ok(failed(lines.join("\n"), extent));
+  // An H or I trap that takes the lead function for its target fails and harms the
+  // lead, which no edit was meant to change.
+  const paragraphs = project.start.split("\n\n");
+  const lead = paragraphs[3];
+  const deletion = find("H", "trap");
+  const wrong = paragraphs.filter((block) => block !== lead).join("\n\n");
+  assert.ok(failed(wrong, deletion));
+  assert.deepEqual(gradeSharedChecksum(project, wrong).collateral, [lead.split("\n")[0]]);
+  const inPlace = find("I", "trap");
+  assert.ok(
+    failed(
+      project.expected
+        .replace(inPlace.after, inPlace.before)
+        .replace(inPlace.before, inPlace.after),
+      inPlace,
+    ),
+  );
 });
 
 test("a composite task passes only when every one of its edits is done", () => {

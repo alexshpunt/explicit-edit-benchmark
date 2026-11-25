@@ -21,10 +21,12 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   E: "byte exactness",
   F: "scoped replacement",
   G: "scoped rename",
+  H: "deletion target",
+  I: "in-place target",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
-  clusters: "BCFG",
+  clusters: "BCFGHI",
   // Trap edits and control edits per cluster.
   perVariant: 2,
   // Edits per zone.
@@ -219,6 +221,8 @@ function instruction(edit) {
     return `In main.cpp, replace the placeholder line ${q(edit.marker)} with the following ${edit.lines} lines: ${q(edit.text)}.`;
   if (edit.kind === "scoped-replace")
     return `In main.cpp, in the definition of the function ${q(signature(edit.host))}, replace ${q(edit.before)} with ${q(edit.after)}. The definition holds it once.`;
+  if (edit.kind === "delete")
+    return `In main.cpp, delete the complete definition of the function ${q(signature(edit.name))}. Also delete the empty line that directly followed the definition.`;
   if (edit.kind === "local-rename")
     return `In main.cpp, in the definition of the function ${q(signature(edit.name))}, rename the local variable ${q(edit.local)} to ${q(edit.newName)}: replace each of its ${edit.occurrences} occurrences in that definition.`;
   return `In main.cpp, replace its one occurrence of ${q(edit.before)} with ${q(edit.after)}.`;
@@ -243,6 +247,8 @@ const KIND = {
   E: "expression",
   F: "scoped-replace",
   G: "local-rename",
+  H: "delete",
+  I: "scoped-replace",
 };
 // New names of G variables; no other identifier uses them.
 const LOCAL_NAMES = ["carry", "pivot", "tally", "stage", "inner", "accum", "blend", "sweep"];
@@ -486,6 +492,34 @@ export function generateChecksumProject(seed, options = {}) {
     edit.name = build(take(functionNames), plain(4), { prototyped: false, variables }).name;
   }
 
+  // H: functions to delete; a trap has a prototype. Nothing calls them, so the
+  // file builds without them.
+  for (const edit of ofCluster("H")) {
+    const entry = build(take(functionNames), plain(random.integer(2, 4)), {
+      prototyped: edit.variant === "trap",
+    });
+    entry.uncalled = true;
+    edit.name = entry.name;
+  }
+
+  // I: one expression to replace inside a function; a trap's function has a
+  // prototype. Each I site has its own position, and the lead function, the first
+  // definition after the prototypes, repeats every I expression at that position.
+  for (const [index, edit] of ofCluster("I").entries()) {
+    const plan = plain(index + 3);
+    plan[index + 1] = { scoped: edit };
+    build(take(functionNames), plan, { prototyped: edit.variant === "trap" });
+  }
+  const lead = build(take(functionNames), plain(Math.max(4, ofCluster("I").length + 3)), {
+    prototyped: false,
+  });
+  for (const edit of ofCluster("I")) {
+    const statement = lead.body[edit.position];
+    statement.kind = "linear";
+    statement.factor = edit.factor;
+    statement.offset = Number(edit.before.split(" + ")[1]);
+  }
+
   // D: a supplied function that nothing calls, so it changes text but not the answer.
   // A trap's string literals hold escapes and shell characters; a control's hold
   // plain words in the same shape.
@@ -524,8 +558,8 @@ export function generateChecksumProject(seed, options = {}) {
       random.shuffle([
         { function: hosts[index].name },
         ...zone
-          .filter(({ kind }) => kind === "move" || kind === "local-rename")
-          .map(({ name }) => ({ function: name })),
+          .filter(({ cluster }) => "BCGHI".includes(cluster))
+          .map((edit) => ({ function: edit.name ?? edit.host })),
         ...zone.filter(({ kind }) => kind === "insert").map(({ marker }) => ({ marker })),
       ]),
     ),
@@ -535,7 +569,8 @@ export function generateChecksumProject(seed, options = {}) {
   assert.ok(units.length <= fillerOrder.length + 1, "Too few fillers to separate the zones");
   const gaps = random.shuffle(Array.from({ length: fillerOrder.length + 1 }, (_, gap) => gap));
   const unitAt = new Map(units.map((unit, index) => [gaps[index], unit]));
-  const layout = [];
+  // The lead function is the first definition after the prototypes.
+  const layout = [{ function: lead.name }];
   for (let gap = 0; gap <= fillerOrder.length; gap++) {
     layout.push(...(unitAt.get(gap) ?? []));
     if (gap < fillerOrder.length) layout.push({ function: fillerOrder[gap].name });
@@ -611,9 +646,9 @@ export function generateChecksumProject(seed, options = {}) {
     }
   }
 
-  // E and F: a new factor that changes the answer.
+  // E, F and I: a new factor that changes the answer.
   const startAnswer = evaluate(new Map());
-  for (const edit of edits.filter(({ cluster }) => cluster === "E" || cluster === "F")) {
+  for (const edit of edits.filter(({ cluster }) => "EFI".includes(cluster))) {
     do edit.newFactor = number();
     while (evaluate(new Map([[edit.statement, edit.newFactor]])) === startAnswer);
     edit.after = edit.before.replace(` * ${edit.factor} + `, ` * ${edit.newFactor} + `);
@@ -629,6 +664,7 @@ export function generateChecksumProject(seed, options = {}) {
       if (edit.kind === "expression" || edit.kind === "scoped-replace")
         factors.set(edit.statement, edit.newFactor);
       if (edit.kind === "local-rename") locals.set(edit.name, edit);
+      if (edit.kind === "delete") order = order.filter((block) => block.function !== edit.name);
       if (edit.kind === "move")
         order = order
           .filter((block) => block.function !== edit.name)
@@ -684,17 +720,19 @@ export function generateChecksumProject(seed, options = {}) {
       else assert.equal(longer, 0, `${edit.id} is part of another identifier`);
       assert.equal(occurrences(edit.newName), 0, `${edit.id} new name exists`);
     }
-    if (edit.kind === "move") {
-      assert.equal(occurrences(header(edit.name)), 1, `${edit.id} header is not unique`);
-      const declared = edit.cluster === "B" && edit.variant === "trap" ? 1 : 0;
-      assert.equal(occurrences(`${signature(edit.name)};`), declared, `${edit.id} prototype`);
+    // B, H and I traps, and only they, have a prototype.
+    if ("BCFGHI".includes(edit.cluster)) {
+      const target = edit.name ?? edit.host;
+      const declared = "BHI".includes(edit.cluster) && edit.variant === "trap" ? 1 : 0;
+      assert.equal(occurrences(header(target)), 1, `${edit.id} header is not unique`);
+      assert.equal(occurrences(`${signature(target)};`), declared, `${edit.id} prototype`);
     }
     if (edit.kind === "move" || edit.kind === "insert")
       assert.equal(occurrences(edit.marker), 1, `${edit.id} marker is not unique`);
     if (edit.kind === "insert") assert.equal(occurrences(edit.name), 0, `${edit.id} name exists`);
     if (edit.kind === "scoped-replace") {
-      // A trap's text also stands in two other functions.
-      const copies = edit.variant === "trap" ? 3 : 1;
+      // An F trap's text also stands in two fillers; an I text also in the lead.
+      const copies = edit.cluster === "I" ? 2 : edit.variant === "trap" ? 3 : 1;
       assert.equal(occurrences(edit.before), copies, `${edit.id} copies`);
       assert.equal(expected.split(edit.after).length, 2, `${edit.id} result is not unique`);
     }

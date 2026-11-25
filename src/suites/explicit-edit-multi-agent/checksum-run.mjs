@@ -139,7 +139,9 @@ export async function runChecksumIsolated(
       main === null ? null : await buildAndRun(path.join(directory, "build"), main, signal);
     // The same per-edit checks as in a shared run, against this task's reference.
     const grade =
-      main === null ? null : gradeSharedChecksum({ expected: task.result, tasks: [task] }, main);
+      main === null
+        ? null
+        : gradeSharedChecksum({ start: project.start, expected: task.result, tasks: [task] }, main);
     tasks.push({
       ...rows.get(task.id),
       cluster: task.cluster,
@@ -212,6 +214,17 @@ export function gradeSharedChecksum(project, candidate) {
   const paragraphs = new Map();
   for (const block of got) paragraphs.set(block, (paragraphs.get(block) ?? 0) + 1);
   const damaged = wanted.filter((block) => paragraphs.get(block) !== 1);
+  // Paragraphs that stand unchanged in the start and that no edit moves.
+  const moved = new Set(
+    project.tasks
+      .flatMap((task) => task.parts ?? [task])
+      .filter(({ kind }) => kind === "move")
+      .map(({ name }) => `long long ${name}(long long value) {`),
+  );
+  const original = new Set(blocks(project.start ?? ""));
+  const untouched = new Set(
+    wanted.filter((block) => original.has(block) && !moved.has(block.split("\n")[0])),
+  );
   // A neighbour is known by its first line, so another agent's unfinished edit
   // inside it does not fail this one.
   const first = (block) => block?.split("\n")[0];
@@ -250,6 +263,11 @@ export function gradeSharedChecksum(project, candidate) {
         count(candidate, edit.after) === 1 &&
         count(candidate, edit.before) === count(project.expected, edit.before) &&
         (definitionText(candidate, edit.host)?.includes(edit.after) ?? false);
+    else if (edit.kind === "delete")
+      passed =
+        definitionText(candidate, edit.name) === undefined &&
+        count(candidate, `long long ${edit.name}(long long value);`) ===
+          count(project.expected, `long long ${edit.name}(long long value);`);
     else if (edit.kind === "local-rename")
       passed =
         definitionText(candidate, edit.name) === definitionText(project.expected, edit.name) &&
@@ -286,6 +304,11 @@ export function gradeSharedChecksum(project, candidate) {
     passed: tasks.filter(({ passed }) => passed).length,
     // Paragraphs of the reference that are lost, changed or duplicated in the candidate.
     damaged: damaged.map((block) => block.split("\n")[0]),
+    // Damaged paragraphs that no edit was meant to change or move: harm that one
+    // agent's mistake did to text outside every task.
+    collateral: damaged
+      .filter((block) => untouched.has(block))
+      .map((block) => block.split("\n")[0]),
     extra: got.filter((block) => !wanted.includes(block)).map((block) => block.split("\n")[0]),
   };
 }
@@ -436,6 +459,7 @@ export async function runChecksumShared(
     // Single edits by cluster; a composite task counts each of its edits here.
     byCluster: clusterSummary(grade.edits),
     damaged: grade.damaged,
+    collateral: grade.collateral,
     extra: grade.extra,
     built: run.built,
     answer: run.output,
