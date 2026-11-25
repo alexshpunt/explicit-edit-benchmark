@@ -9,6 +9,10 @@ import {
   CHECKSUM_PROJECT_DEFAULTS,
   generateChecksumProject,
 } from "../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs";
+import {
+  gradeSharedChecksum,
+  sharedPrompt,
+} from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
 
@@ -90,6 +94,39 @@ test("each instruction, followed literally, gives exactly its task's result", ()
     }
     assert.equal(all, project.expected, `${seed}: all tasks`);
   }
+});
+
+test("the shared grade credits finished tasks and names damaged definitions", () => {
+  const project = generateChecksumProject(42);
+  assert.deepEqual(
+    { exact: true, passed: 10, damaged: [], extra: [] },
+    (({ exact, passed, damaged, extra }) => ({ exact, passed, damaged, extra }))(
+      gradeSharedChecksum(project, project.expected),
+    ),
+  );
+  assert.equal(gradeSharedChecksum(project, project.start).passed, 0);
+  let partial = project.start;
+  const done = project.tasks.slice(0, 5);
+  for (const task of done) partial = followInstruction(partial, task);
+  const grade = gradeSharedChecksum(project, partial);
+  assert.deepEqual(
+    grade.tasks.filter(({ passed }) => passed).map(({ id }) => id),
+    done.map(({ id }) => id),
+  );
+  // A writer that drops a whole definition loses it without touching its neighbours.
+  const lost = project.tasks.find(({ kind }) => kind === "expression");
+  const header = project.expected
+    .split("\n\n")
+    .find((block) => block.includes(lost.after))
+    .split("\n")[0];
+  const broken = project.expected
+    .split("\n\n")
+    .filter((block) => !block.startsWith(header))
+    .join("\n\n");
+  const damaged = gradeSharedChecksum(project, broken);
+  assert.deepEqual(damaged.damaged, [header]);
+  assert.equal(damaged.tasks.find(({ id }) => id === lost.id).passed, false);
+  assert.match(sharedPrompt(lost), /^Perform only[^\n]*\n\nSeveral agents are editing main\.cpp/);
 });
 
 test("tasks never edit the same text", () => {

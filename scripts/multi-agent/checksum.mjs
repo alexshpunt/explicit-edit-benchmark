@@ -7,16 +7,20 @@ import { parseArgs } from "node:util";
 const help = `Usage:
   node scripts/multi-agent/checksum.mjs show SEED NEW_DIRECTORY
   node scripts/multi-agent/checksum.mjs isolated-run SEED NEW_RUN --config PRIVATE_JSON [--agents N] --allow-model-calls
+  node scripts/multi-agent/checksum.mjs shared-run SEED NEW_RUN --config PRIVATE_JSON [--agents N] [--sandbox separate|shared] --allow-model-calls
 
 show writes the seed's start main.cpp, its reference and its task prompts.
 isolated-run gives every task to a new agent in its own copy of the start project
-and grades each result byte for byte against that task's reference.`;
+and grades each result byte for byte against that task's reference.
+shared-run starts N agents (all tasks by default) on one main.cpp, then gives them
+the tasks in waves of N at once, and grades the final file against the reference.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     config: { type: "string" },
     agents: { type: "string" },
+    sandbox: { type: "string" },
     "allow-model-calls": { type: "boolean" },
   },
 });
@@ -44,30 +48,31 @@ if (command === "show") {
       ...tasks,
     ].join("\n"),
   );
-} else if (command === "isolated-run") {
+} else if (command === "isolated-run" || command === "shared-run") {
   assert.equal(
     values["allow-model-calls"],
     true,
     "Model calls require explicit --allow-model-calls",
   );
   assert.equal(typeof values.config, "string", help);
-  const { runChecksumIsolated } =
+  assert.ok(command === "shared-run" || values.sandbox === undefined, help);
+  const { runChecksumIsolated, runChecksumShared } =
     await import("../../src/suites/explicit-edit-multi-agent/checksum-run.mjs");
   const controller = new AbortController();
   for (const name of ["SIGINT", "SIGTERM"]) process.once(name, () => controller.abort());
-  const summary = await runChecksumIsolated(
-    seed,
-    target,
-    JSON.parse(await readFile(values.config, "utf8")),
-    {
-      agents: values.agents === undefined ? undefined : Number(values.agents),
-      signal: controller.signal,
-    },
-  );
+  const run = command === "shared-run" ? runChecksumShared : runChecksumIsolated;
+  const summary = await run(seed, target, JSON.parse(await readFile(values.config, "utf8")), {
+    agents: values.agents === undefined ? undefined : Number(values.agents),
+    ...(values.sandbox === undefined ? {} : { sandbox: values.sandbox }),
+    signal: controller.signal,
+  });
   const { identity: _identity, tasks, ...rest } = summary;
   console.log(JSON.stringify(rest));
   for (const task of tasks)
     console.log(
-      `${task.exact ? "pass" : "FAIL"} ${task.id} status=${task.status} built=${task.built} answer=${task.answer}/${task.expectedAnswer}`,
+      `${task.exact || task.passed ? "pass" : "FAIL"} ${task.id} status=${task.status}` +
+        (command === "isolated-run"
+          ? ` built=${task.built} answer=${task.answer}/${task.expectedAnswer}`
+          : ` wave=${task.wave} seconds=${task.seconds}`),
     );
 } else throw new Error(help);
