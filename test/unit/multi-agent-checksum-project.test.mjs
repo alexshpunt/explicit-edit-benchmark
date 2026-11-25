@@ -35,11 +35,11 @@ test("a seed fixes the checksum project and its tasks", () => {
 });
 
 const LARGE = { functions: 80, moves: 20, renames: 15, expressions: 15 };
-for (const [seed, options] of [
-  [1, {}],
-  [2, {}],
-  [3, {}],
-  [4, LARGE],
+for (const { seed, options } of [
+  { seed: 1, options: {} },
+  { seed: 2, options: {} },
+  { seed: 3, options: {} },
+  { seed: 4, options: LARGE },
 ]) {
   test(`checksum project ${seed} ${JSON.stringify(options)}: every state builds and prints its answer`, async (t) => {
     const project = generateChecksumProject(seed, options);
