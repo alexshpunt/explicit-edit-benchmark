@@ -258,12 +258,15 @@ export function gradeSharedChecksum(project, candidate) {
     else if (edit.kind === "insert") passed = placed((block) => block === edit.text, edit.marker);
     // The other copies of an F text stay unchanged, and a G name is new only in its
     // own function. New G names differ per edit, while two G traps share "b".
-    else if (edit.kind === "scoped-replace")
+    // A copy of the text elsewhere that turned into the new text counts against the
+    // edit; a copy that another agent destroyed does not.
+    else if (edit.kind === "scoped-replace") {
+      const own = definitionText(candidate, edit.host) ?? "";
       passed =
         count(candidate, edit.after) === 1 &&
-        count(candidate, edit.before) === count(project.expected, edit.before) &&
-        (definitionText(candidate, edit.host)?.includes(edit.after) ?? false);
-    else if (edit.kind === "delete")
+        own.includes(edit.after) &&
+        !own.includes(edit.before);
+    } else if (edit.kind === "delete")
       passed =
         definitionText(candidate, edit.name) === undefined &&
         count(candidate, `long long ${edit.name}(long long value);`) ===
