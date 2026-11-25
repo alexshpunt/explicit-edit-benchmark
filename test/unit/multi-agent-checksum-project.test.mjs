@@ -18,7 +18,14 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const CONFIGS = [{}, { density: 2 }, { density: 3 }, { density: 5 }, { edits: 4 }];
+const CONFIGS = [
+  {},
+  { density: 2 },
+  { density: 3 },
+  { density: 5 },
+  { edits: 4 },
+  { density: 3, edits: 2 },
+];
 const atoms = (project) => project.tasks.flatMap((task) => task.parts ?? [task]);
 
 /** Build one main.cpp with warnings as errors and return what it prints. */
@@ -153,7 +160,20 @@ test("each trap differs from its control in its one factor", () => {
         "m",
       ).exec(start)?.[0];
       if (edit.cluster === "C") assert.equal(/^ {2}for \(/m.test(definition), trap, edit.id);
-      if (edit.cluster === "D") assert.equal(edit.lines, trap ? 40 : 5, edit.id);
+      if (edit.cluster === "D") {
+        assert.equal(edit.lines, 13, edit.id);
+        assert.equal(
+          /[\\$`%"]/.test(
+            edit.text
+              .split("\n")
+              .slice(2, 7)
+              .join("\n")
+              .replaceAll(/^ {4}"|",$/gm, ""),
+          ),
+          trap,
+          edit.id,
+        );
+      }
       if (edit.cluster === "E") {
         const line = start.split("\n").find((text) => text.includes(edit.before));
         assert.equal(line.startsWith("\t") && line.endsWith("  "), trap, edit.id);
@@ -188,9 +208,19 @@ test("tasks never edit the same text", () => {
 });
 
 test("density puts the edits of one zone next to each other", () => {
-  for (const density of [1, 2, 3, 5]) {
+  for (const options of [
+    { density: 1 },
+    { density: 2 },
+    { density: 3 },
+    { density: 5 },
+    { density: 1, edits: 2 },
+    { density: 3, edits: 2 },
+  ]) {
+    const { density, edits: perTask = 1 } = options;
+    // Paragraphs a zone can span: its host and one per moved or inserted function.
+    const reach = density * perTask;
     for (let seed = 0; seed < 10; seed++) {
-      const project = generateChecksumProject(seed, { density });
+      const project = generateChecksumProject(seed, options);
       const paragraphs = project.start.split("\n\n");
       // Definitions and slots only: the constants paragraph holds every name.
       const where = (find) =>
@@ -204,9 +234,15 @@ test("density puts the edits of one zone next to each other", () => {
         [...zones.keys()].flatMap((zone) => zones.get(zone).map(() => zone)),
       );
       const used = new Set();
-      for (const [zone, edits] of zones) {
-        assert.ok(edits.length <= density, `${density}/${seed}: zone ${zone}`);
-        if (zone < zones.size) assert.equal(edits.length, density);
+      for (const [zone, tasks] of zones) {
+        const label = `${JSON.stringify(options)}/${seed}: zone ${zone}`;
+        assert.ok(tasks.length <= density, label);
+        if (zone < zones.size) assert.equal(tasks.length, density, label);
+        const edits = tasks.flatMap((task) => task.parts ?? [task]);
+        assert.ok(
+          edits.every((edit) => edit.zone === zone),
+          label,
+        );
         // The host: the one function that holds every A use and E site of the zone.
         let hosts = null;
         const near = [];
@@ -228,16 +264,16 @@ test("density puts the edits of one zone next to each other", () => {
             );
         }
         const host = (hosts ?? []).find((index) =>
-          near.every((other) => Math.abs(other - index) <= density),
+          near.every((other) => Math.abs(other - index) <= reach),
         );
-        if (hosts) assert.notEqual(host, undefined, `${density}/${seed}: zone ${zone}`);
+        if (hosts) assert.notEqual(host, undefined, label);
         const span = [...near, ...(host === undefined ? [] : [host])];
-        assert.ok(Math.max(...span) - Math.min(...span) <= density, `${density}/${seed}`);
+        assert.ok(Math.max(...span) - Math.min(...span) <= reach, label);
         // No two zones share a paragraph. Only an E site pins the host: an A
         // constant is also used in fillers.
         const pinned = edits.some(({ kind }) => kind === "expression");
         for (const index of pinned ? span : near) {
-          assert.ok(!used.has(index), `${density}/${seed}: zone ${zone}`);
+          assert.ok(!used.has(index), label);
           used.add(index);
         }
       }

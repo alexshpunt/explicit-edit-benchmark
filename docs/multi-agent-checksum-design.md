@@ -33,13 +33,13 @@ Two execution modes run the same tasks:
 
 ## Clusters
 
-| Cluster                | Failure it catches                                                   | Trap                                                                                                                                                  | Control                                                                                                | Likely easier for                        |
-| ---------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| A. Completeness        | A missed occurrence, or an edit inside a longer identifier           | Rename a global constant with 12 to 20 uses where longer identifiers contain its spelling (`gain_rate` next to `gain_rate_limit` and `max_gain_rate`) | Rename a global constant with the same number of uses and a spelling that no other identifier contains | Bash (`sed -E 's/\bgain_rate\b/…/g'`)    |
-| B. Target selection    | Editing a look-alike instead of the target                           | Move the definition of a function named by its signature, where the same signature also stands in a prototype above it                                | Move the definition of a function that has no prototype                                                | Tools that show every match with context |
-| C. Structure           | Losing or duplicating lines when the extent of a block must be found | Move the definition of a function whose body has nested `if` and `for` blocks, so its first closing brace line is not its end                         | Move the definition of a function with a flat body                                                     | Neither by design                        |
-| D. Large supplied text | Changing supplied text on the way into the file                      | Insert a supplied function of about 40 lines at a placeholder                                                                                         | Insert a supplied function of about 5 lines at a placeholder                                           | Bash (heredoc)                           |
-| E. Byte exactness      | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space                             | Replace an expression on an ordinary line                                                              | Neither by design                        |
+| Cluster             | Failure it catches                                                   | Trap                                                                                                                                                  | Control                                                                                                | Likely easier for                                                                           |
+| ------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| A. Completeness     | A missed occurrence, or an edit inside a longer identifier           | Rename a global constant with 12 to 20 uses where longer identifiers contain its spelling (`gain_rate` next to `gain_rate_limit` and `max_gain_rate`) | Rename a global constant with the same number of uses and a spelling that no other identifier contains | Bash (`sed -E 's/\bgain_rate\b/…/g'`)                                                       |
+| B. Target selection | Editing a look-alike instead of the target                           | Move the definition of a function named by its signature, where the same signature also stands in a prototype above it                                | Move the definition of a function that has no prototype                                                | Tools that show every match with context                                                    |
+| C. Structure        | Losing or duplicating lines when the extent of a block must be found | Move the definition of a function whose body has nested `if` and `for` blocks, so its first closing brace line is not its end                         | Move the definition of a function with a flat body                                                     | Neither by design                                                                           |
+| D. Supplied text    | Changing supplied text on the way into the file                      | Insert a supplied 13-line function whose five string literals hold backslash escapes, quotes, `$HOME`, `$(date)`, backticks and `%`                   | Insert a supplied 13-line function of the same shape whose literals hold plain words                   | Neither by design: a heredoc needs a quoted delimiter, a JSON argument needs exact escaping |
+| E. Byte exactness   | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space                             | Replace an expression on an ordinary line                                                              | Neither by design                                                                           |
 
 Each trap differs from its control in one factor. Within a cluster, both variants use
 the same wording, so the prompt does not reveal which one is the trap.
@@ -73,6 +73,9 @@ Constants use snake case, so a trap `gain_rate` has the look-alikes
 - E traps put the only tabs, trailing spaces and no-break spaces of the file on their
   own lines and comments, so a tool that normalizes them elsewhere fails integrity, and
   a tool that normalizes the edited line fails the task.
+- D literals pass through several layers: JSON escapes in the prompt, C++ escapes in
+  the file, and whatever the harness adds, such as shell quoting. The literal
+  `"C:\\temp\\$USER\\new"` stands in the prompt as `\"C:\\\\temp\\\\$USER\\\\new\"`.
 - Inserted D functions are not called, so they change the text but not the checksum.
   E edits change the checksum; A, B, C and D do not.
 - Moved functions contain no renamed constant and no changed expression; inserted text
@@ -90,7 +93,13 @@ fall in the same function on neighbouring lines:
   the same moment, for example an E edit on one line while an A rename changes the
   line below it and a C move takes the function that follows.
 
-The generator builds one zone per group of `density` edits: a host function that
+A zone holds the edits of `density` tasks. With one edit per task, a zone has
+`density` edits. With composite tasks of `edits` edits each, a zone has
+`density × edits` edits and every task takes its edits from one zone, so `density`
+agents work through several edits each, side by side, for longer. Composite tasks at
+density 1 are the baseline for the same task size.
+
+The generator builds one zone per group of edits: a host function that
 holds the zone's A uses and E sites on neighbouring lines, with the zone's moved
 functions and D placeholders as the paragraphs next to it. Fillers separate zones,
 and each move's destination stands in a gap of its own. The file keeps about the

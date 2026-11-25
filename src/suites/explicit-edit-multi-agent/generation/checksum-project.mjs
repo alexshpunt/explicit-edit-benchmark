@@ -32,8 +32,30 @@ const MODULUS = 1000003;
 // Library functions have prototypes and are the only functions other functions call,
 // so every other function can stand anywhere above main.
 const LIBRARY_SIZE = 6;
-// Statements of a D trap's supplied function, which then spans 40 lines; a control has 2.
-const LARGE_INSERT_STATEMENTS = 37;
+// String literals of a D function, written as they stand in main.cpp. A trap's
+// literals need care at every layer between the prompt and the file: JSON escapes,
+// C++ escapes, shell quoting and expansion, and printf-style formats.
+const SUPPLIED_LITERALS = 5;
+const ESCAPED_LITERALS = [
+  String.raw`C:\\temp\\$USER\\new`,
+  String.raw`say \"hi\" to ` + "`whoami`" + String.raw` at 100%\n`,
+  String.raw`tab\there, \\n is not a newline`,
+  String.raw`${"$"}{HOME} and $(date) stay literal`,
+  String.raw`quote ' and \" and \\\" mixed`,
+  String.raw`100% of $5 \\ 2 is %d`,
+  String.raw`line one\nline two\r\n`,
+  String.raw`back\\slash and \\\\ double`,
+];
+const PLAIN_LITERALS = [
+  "temp user folder",
+  "say hi to the team",
+  "tab here is not a newline",
+  "home and date stay literal",
+  "quote and mixed text",
+  "five of ten in two",
+  "line one line two",
+  "back slash and double",
+];
 // Variable names: "i" is the loop variable of nested blocks, and "e" would make an
 // expression such as "e * 37 + 11" part of "value * 37 + 11" in supplied text.
 const VARIABLES = "abcdfghjkmnpqrtuwxyz";
@@ -248,18 +270,21 @@ export function generateChecksumProject(seed, options = {}) {
     return name;
   };
 
-  // Edits, then zones of `density` edits each in a random order.
+  // Edits, then zones in a random order. A zone holds the edits of `density` tasks,
+  // so that many agents work in it at the same moment.
   const edits = [];
   for (const cluster of Object.keys(CHECKSUM_CLUSTERS))
     for (const variant of ["trap", "control"])
       for (let index = 1; index <= counts.perVariant; index++)
         edits.push({ cluster, variant, kind: KIND[cluster] });
+  assert.equal(edits.length % counts.edits, 0, "Edits do not divide into tasks");
   const zones = [];
   const ordered = random.shuffle(edits);
   // Neutral ids: an agent can see the id in its working directory.
   ordered.forEach((edit, index) => (edit.id = `edit-${String(index + 1).padStart(2, "0")}`));
-  for (let first = 0; first < ordered.length; first += counts.density)
-    zones.push(ordered.slice(first, first + counts.density));
+  const zoneSize = counts.density * counts.edits;
+  for (let first = 0; first < ordered.length; first += zoneSize)
+    zones.push(ordered.slice(first, first + zoneSize));
   zones.forEach((zone, index) => zone.forEach((edit) => (edit.zone = index + 1)));
   const ofCluster = (cluster) => edits.filter((edit) => edit.cluster === cluster);
 
@@ -398,24 +423,25 @@ export function generateChecksumProject(seed, options = {}) {
   }
 
   // D: a supplied function that nothing calls, so it changes text but not the answer.
+  // A trap's string literals hold escapes and shell characters; a control's hold
+  // plain words in the same shape.
   for (const edit of ofCluster("D")) {
     const name = take(functionNames);
-    const length = edit.variant === "trap" ? LARGE_INSERT_STATEMENTS : 2;
-    const lines = [header(name)];
-    let previous = "value";
-    for (let index = 1; index <= length; index++) {
-      const variable = `s${index}`;
-      const factor = random.integer(3, 997),
-        offset = random.integer(3, 997);
-      const expression = random.pick([
-        `${previous} * ${factor} + ${offset}`,
-        `(${previous} ^ ${factor}) + ${offset}`,
-        `${previous} * ${previous === "value" ? factor : "s1"} + ${offset}`,
-      ]);
-      lines.push(`  long long ${variable} = (${expression}) % kModulus;`);
-      previous = variable;
-    }
-    lines.push(`  return (${previous} + value) % kModulus;`, "}");
+    const pool = edit.variant === "trap" ? ESCAPED_LITERALS : PLAIN_LITERALS;
+    const lines = [
+      header(name),
+      "  const char* labels[] = {",
+      ...random
+        .shuffle(pool)
+        .slice(0, SUPPLIED_LITERALS)
+        .map((literal) => `    "${literal}",`),
+      "  };",
+      `  long long total = (value * ${random.integer(3, 997)} + ${random.integer(3, 997)}) % kModulus;`,
+      "  for (const char* label : labels)",
+      "    for (const char* p = label; *p != 0; ++p) total = (total * 31 + *p) % kModulus;",
+      "  return total;",
+      "}",
+    ];
     edit.name = name;
     edit.text = lines.join("\n");
     edit.lines = lines.length;
@@ -586,27 +612,27 @@ export function generateChecksumProject(seed, options = {}) {
   }
 
   // Tasks keep the zone order, so a wave whose size is a multiple of the density
-  // holds whole zones. A composite task lists several edits from random zones.
+  // holds whole zones. A composite task lists several edits of one zone, so its
+  // agent keeps working next to the zone's other agents for longer.
   const tasks = [];
   if (counts.edits === 1) tasks.push(...ordered);
-  else {
-    assert.equal(edits.length % counts.edits, 0, "Edits do not divide into tasks");
-    const mixed = random.shuffle(edits);
-    for (let first = 0; first < mixed.length; first += counts.edits) {
-      const parts = mixed.slice(first, first + counts.edits);
-      tasks.push({
-        id: `task-${String(tasks.length + 1).padStart(2, "0")}`,
-        kind: "composite",
-        parts,
-        prompt: mechanicalPrompt(
-          [
-            `Make all ${parts.length} of the following edits:`,
-            ...parts.map((part, index) => `${index + 1}. ${instruction(part)}`),
-          ].join("\n"),
-        ),
-      });
-    }
-  }
+  else
+    for (const [index, zone] of zones.entries())
+      for (let first = 0; first < zone.length; first += counts.edits) {
+        const parts = random.shuffle(zone.slice(first, first + counts.edits));
+        tasks.push({
+          id: `task-${String(tasks.length + 1).padStart(2, "0")}`,
+          kind: "composite",
+          zone: index + 1,
+          parts,
+          prompt: mechanicalPrompt(
+            [
+              `Make all ${parts.length} of the following edits:`,
+              ...parts.map((part, number) => `${number + 1}. ${instruction(part)}`),
+            ].join("\n"),
+          ),
+        });
+      }
   const factorsOf = (done) =>
     new Map(
       done
