@@ -134,6 +134,13 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   assert.deepEqual(damaged.damaged, [header]);
   assert.equal(damaged.tasks.find(({ id }) => id === lost.id).passed, false);
   assert.match(sharedPrompt(lost), /^Perform only[^\n]*\n\nSeveral agents are editing main\.cpp/);
+  // A longer spelling that contains the new name is a different name.
+  const rename = project.tasks.find(({ kind }) => kind === "rename");
+  const longer = project.expected.replaceAll(rename.newName, rename.newName + "r");
+  assert.equal(
+    gradeSharedChecksum(project, longer).tasks.find(({ id }) => id === rename.id).passed,
+    false,
+  );
 });
 
 test("tasks never edit the same text", () => {

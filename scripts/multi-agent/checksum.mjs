@@ -14,7 +14,8 @@ isolated-run gives every task to a new agent in its own copy of the start projec
 and grades each result byte for byte against that task's reference.
 shared-run starts N agents (all tasks by default) on one main.cpp, then gives them
 the tasks in waves of N at once, and grades the final file against the reference.
---functions, --moves, --renames and --expressions set the project size.`;
+--functions, --moves, --renames and --expressions set the project size.
+shared-rescore SEED SAVED_RUN grades a saved shared run again with the current grader.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -59,6 +60,22 @@ if (command === "show") {
       ...tasks,
     ].join("\n"),
   );
+} else if (command === "shared-rescore") {
+  // Grade a saved shared run again with the current grader, without model calls.
+  const { gradeSharedChecksum } =
+    await import("../../src/suites/explicit-edit-multi-agent/checksum-run.mjs");
+  const { generateChecksumProject } =
+    await import("../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs");
+  const saved = JSON.parse(await readFile(path.join(target, "summary.json"), "utf8"));
+  assert.equal(saved.identity.seed, seed, "The run belongs to another seed");
+  const project = generateChecksumProject(seed, saved.identity.counts);
+  const grade = gradeSharedChecksum(
+    project,
+    await readFile(path.join(target, "workspace", "main.cpp"), "utf8"),
+  );
+  const { tasks, ...rest } = grade;
+  console.log(JSON.stringify(rest));
+  for (const task of tasks.filter(({ passed }) => !passed)) console.log(`FAIL ${task.id}`);
 } else if (command === "isolated-run" || command === "shared-run") {
   assert.equal(
     values["allow-model-calls"],

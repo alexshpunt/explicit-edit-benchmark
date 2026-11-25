@@ -171,6 +171,8 @@ export function gradeSharedChecksum(project, candidate) {
   const wanted = blocks(project.expected),
     got = blocks(candidate);
   const count = (text, part) => text.split(part).length - 1;
+  // Whole identifiers only: a name with extra letters is another name.
+  const identifiers = (text, name) => text.match(new RegExp(`\\b${name}\\b`, "g"))?.length ?? 0;
   const paragraphs = new Map();
   for (const block of got) paragraphs.set(block, (paragraphs.get(block) ?? 0) + 1);
   const damaged = wanted.filter((block) => paragraphs.get(block) !== 1);
@@ -179,6 +181,7 @@ export function gradeSharedChecksum(project, candidate) {
     if (task.kind === "rename")
       passed =
         count(candidate, task.name) === 0 &&
+        identifiers(candidate, task.newName) === identifiers(project.expected, task.newName) &&
         count(candidate, task.newName) === count(project.expected, task.newName);
     else if (task.kind === "expression")
       passed = count(candidate, task.before) === 0 && count(candidate, task.after) === 1;
