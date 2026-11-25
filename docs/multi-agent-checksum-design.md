@@ -77,25 +77,34 @@ variants, and it adds information rather than hiding a difficulty.
 
 ## Concurrency
 
-Concurrency is a mode, not a cluster. Its knob is zone density:
+Concurrency applies to every cluster: each run measures the same edits isolated and
+shared. Its main knob is zone density, the number of agents of one wave whose edits
+fall in the same function on neighbouring lines:
 
-- Spread: edits of a wave fall in different functions.
-- Packed: several agents of a wave edit neighbouring lines of the same function, for
-  example an E edit on one line while an A rename changes the line below it.
+- Density 1: every edit of a wave is in a different function.
+- Density 2, 3 and higher: that many agents edit neighbouring lines of one function at
+  the same moment, for example an E edit on one line while an A rename changes the
+  line below it and a C move takes the function that follows.
 
-So far edits were spread. The shared mode then cost almost nothing: with exact
+A second knob is agents per file, which grows with the wave size. Runs sweep density
+at a fixed wave size, so the robustness of a harness is a curve: how its shared result
+falls below its isolated one as density grows.
+
+So far every run had density 1. The shared mode then cost almost nothing: with exact
 instructions an agent edits in one quick command, and two writes rarely overlap in
-time. Packed zones target the failures that remain: rewriting a whole function from a
-copy read earlier, and line numbers that went stale while a neighbour edited.
+time. Higher densities target the failures that remain: rewriting a whole function
+from a copy read earlier, line numbers that went stale while a neighbour edited, and
+a read that lands in the middle of a neighbour's non-atomic write.
 
 ## Fairness rules
 
-1. Every trap must be solvable with plain Bash: Sol 6.2 with the Bash-only baseline
-   agent passes most traps in the isolated mode. A trap that no Bash agent passes is
-   removed.
-2. The model-free reference follows every instruction literally with plain text
-   operations and must produce each task's reference exactly. A unit test checks this
-   for many seeds.
+1. Every instruction has exactly one correct result for a careful reader, and the
+   model-free reference reaches it by following the instruction literally with plain
+   text operations. A unit test checks this for many seeds. Any harness can then solve
+   every task; a low score means its agent did not, not that the task was impossible.
+2. Trap and control differ in one factor, use the same wording, and come from the
+   same generator, so a trap cannot be tuned to one tool without the control showing
+   it.
 3. The design, the generator and the grading rules are frozen before other harnesses
    are measured. Changes after a measurement start a new version, and earlier results
    stay with their version.
