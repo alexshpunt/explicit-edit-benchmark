@@ -33,13 +33,13 @@ Two execution modes run the same tasks:
 
 ## Clusters
 
-| Cluster                | Failure it catches                                                   | Trap                                                                                                                                    | Control                                                                                                | Likely easier for                        |
-| ---------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| A. Completeness        | A missed occurrence, or an edit inside a longer identifier           | Rename a global constant with 12 to 20 uses where longer identifiers contain its spelling (`kGain` next to `kGainLimit` and `kPreGain`) | Rename a global constant with the same number of uses and a spelling that no other identifier contains | Bash (`sed -E 's/\bkGain\b/…/g'`)        |
-| B. Target selection    | Editing a look-alike instead of the target                           | Move the definition of a function named by its signature, where the same signature also stands in a prototype above it                  | Move the definition of a function that has no prototype                                                | Tools that show every match with context |
-| C. Structure           | Losing or duplicating lines when the extent of a block must be found | Move the definition of a function whose body has nested `if` and `for` blocks, so its first closing brace line is not its end           | Move the definition of a function with a flat body                                                     | Neither by design                        |
-| D. Large supplied text | Changing supplied text on the way into the file                      | Insert a supplied function of about 40 lines at a placeholder                                                                           | Insert a supplied function of about 5 lines at a placeholder                                           | Bash (heredoc)                           |
-| E. Byte exactness      | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space               | Replace an expression on an ordinary line                                                              | Neither by design                        |
+| Cluster                | Failure it catches                                                   | Trap                                                                                                                                                  | Control                                                                                                | Likely easier for                        |
+| ---------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
+| A. Completeness        | A missed occurrence, or an edit inside a longer identifier           | Rename a global constant with 12 to 20 uses where longer identifiers contain its spelling (`gain_rate` next to `gain_rate_limit` and `max_gain_rate`) | Rename a global constant with the same number of uses and a spelling that no other identifier contains | Bash (`sed -E 's/\bgain_rate\b/…/g'`)    |
+| B. Target selection    | Editing a look-alike instead of the target                           | Move the definition of a function named by its signature, where the same signature also stands in a prototype above it                                | Move the definition of a function that has no prototype                                                | Tools that show every match with context |
+| C. Structure           | Losing or duplicating lines when the extent of a block must be found | Move the definition of a function whose body has nested `if` and `for` blocks, so its first closing brace line is not its end                         | Move the definition of a function with a flat body                                                     | Neither by design                        |
+| D. Large supplied text | Changing supplied text on the way into the file                      | Insert a supplied function of about 40 lines at a placeholder                                                                                         | Insert a supplied function of about 5 lines at a placeholder                                           | Bash (heredoc)                           |
+| E. Byte exactness      | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space                             | Replace an expression on an ordinary line                                                              | Neither by design                        |
 
 Each trap differs from its control in one factor. Within a cluster, both variants use
 the same wording, so the prompt does not reveal which one is the trap.
@@ -50,14 +50,18 @@ All prompts use the original suite's frame: "Perform only the following mechanic
 edits…", quoted text in JSON string notation, and "Leave all text outside the requested
 edits unchanged…". The cluster instructions are:
 
-- A: `In main.cpp, replace every occurrence of the identifier "kGain" with "kBoost": N occurrences. Identifiers that only contain this spelling, such as "kGainLimit", stay unchanged.`
+- A: `In main.cpp, replace every occurrence of the identifier "gain_rate" with "tilt_step"; there are N occurrences. Longer identifiers that contain this spelling stay unchanged.`
 - B and C: `In main.cpp, move the complete definition of the function "long long f(long long value)" to the placeholder line "// __EXPLICIT_EDIT_SLOT_n_1__": the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`
-- D: `In main.cpp, replace the placeholder line "// __EXPLICIT_EDIT_SLOT_n_1__" with exactly "…".`
+- D: `In main.cpp, replace the placeholder line "// __EXPLICIT_EDIT_SLOT_n_1__" with the following N lines: "long long f(long long value) {\n…".`
 - E: `In main.cpp, replace its one occurrence of "a * 37 + 11" with "a * 41 + 11".`
 
-The A wording names the look-alikes only for traps that have them; a control names
-none, because it has none. This is the one place where the prompt differs between
-variants, and it adds information rather than hiding a difficulty.
+The A wording is the same for traps and controls; for a control, the last sentence
+has nothing to apply to. Task ids are neutral (`edit-07`), because an agent can see
+its task id in its working directory.
+
+Constants use snake case, so a trap `gain_rate` has the look-alikes
+`gain_rate_limit` and `max_gain_rate`, and a whole-word replacement such as
+`sed -E 's/\bgain_rate\b/tilt_step/g'` leaves both unchanged.
 
 ### Generator constraints
 
@@ -85,6 +89,14 @@ fall in the same function on neighbouring lines:
 - Density 2, 3 and higher: that many agents edit neighbouring lines of one function at
   the same moment, for example an E edit on one line while an A rename changes the
   line below it and a C move takes the function that follows.
+
+The generator builds one zone per group of `density` edits: a host function that
+holds the zone's A uses and E sites on neighbouring lines, with the zone's moved
+functions and D placeholders as the paragraphs next to it. Fillers separate zones,
+and each move's destination stands in a gap of its own. The file keeps about the
+same size at every density, because each host a higher density saves becomes a
+filler. Tasks keep the zone order, so a wave whose size is a multiple of the density
+holds whole zones.
 
 A second knob is agents per file, which grows with the wave size. Runs sweep density
 at a fixed wave size, so the robustness of a harness is a curve: how its shared result

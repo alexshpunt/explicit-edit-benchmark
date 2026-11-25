@@ -6,15 +6,20 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import {
+  CHECKSUM_CLUSTERS,
   CHECKSUM_PROJECT_DEFAULTS,
   generateChecksumProject,
+  identifierCount,
 } from "../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs";
 import {
+  clusterSummary,
   gradeSharedChecksum,
   sharedPrompt,
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
+const CONFIGS = [{}, { density: 2 }, { density: 3 }, { density: 5 }, { edits: 4 }];
+const atoms = (project) => project.tasks.flatMap((task) => task.parts ?? [task]);
 
 /** Build one main.cpp with warnings as errors and return what it prints. */
 async function output(root, name, source, signal) {
@@ -34,35 +39,30 @@ test("a seed fixes the checksum project and its tasks", () => {
   assert.notEqual(generateChecksumProject(7).start, generateChecksumProject(8).start);
 });
 
-const LARGE = { functions: 80, moves: 20, renames: 15, expressions: 15 };
-const COMPOSITE = { functions: 80, moves: 20, renames: 16, expressions: 16, edits: 4 };
 for (const { seed, options } of [
   { seed: 1, options: {} },
-  { seed: 2, options: {} },
-  { seed: 3, options: {} },
-  { seed: 4, options: LARGE },
-  { seed: 5, options: COMPOSITE },
+  { seed: 2, options: { density: 2 } },
+  { seed: 3, options: { density: 3 } },
+  { seed: 4, options: { edits: 4 } },
+  { seed: 5, options: { perVariant: 3, density: 4 } },
 ]) {
   test(`checksum project ${seed} ${JSON.stringify(options)}: every state builds and prints its answer`, async (t) => {
     const project = generateChecksumProject(seed, options);
     const size = { ...CHECKSUM_PROJECT_DEFAULTS, ...options };
     const root = await mkdtemp(path.join(os.tmpdir(), "checksum-project-"));
     t.after(() => rm(root, { recursive: true, force: true }));
-    const counts = Object.fromEntries(
-      ["move", "rename", "expression"].map((kind) => [
-        kind,
-        project.tasks.flatMap((task) => task.parts ?? [task]).filter((task) => task.kind === kind)
-          .length,
-      ]),
-    );
-    assert.equal(project.tasks.length * size.edits, size.moves + size.renames + size.expressions);
-    assert.deepEqual(counts, {
-      move: size.moves,
-      rename: size.renames,
-      expression: size.expressions,
-    });
+    const edits = atoms(project);
+    assert.equal(edits.length, 10 * size.perVariant);
+    assert.equal(project.tasks.length * size.edits, edits.length);
+    for (const summary of Object.values(clusterSummary(edits)))
+      assert.deepEqual(summary, {
+        trap: { passed: 0, total: size.perVariant },
+        control: { passed: 0, total: size.perVariant },
+      });
     assert.notEqual(project.answers.expected, project.answers.start);
     assert.doesNotMatch(project.expected, /__EXPLICIT_EDIT_SLOT_/);
+    const lines = project.start.split("\n").length;
+    assert.ok(lines > 300 && lines < 900, `${lines} lines`);
     const states = [
       { id: "start", source: project.start, answer: project.answers.start },
       { id: "expected", source: project.expected, answer: project.answers.expected },
@@ -73,25 +73,37 @@ for (const { seed, options } of [
     );
     states.forEach((state, index) => assert.equal(printed[index], `${state.answer}\n`, state.id));
     for (const task of project.tasks) {
-      assert.notEqual(task.result, project.start);
-      const kinds = (task.parts ?? [task]).map(({ kind }) => kind);
-      // Only an expression change alters the answer; one alone always does.
-      if (task.kind === "expression") assert.notEqual(task.answer, project.answers.start);
-      else if (!kinds.includes("expression")) assert.equal(task.answer, project.answers.start);
+      // Only an expression change alters the answer, and one always does.
+      const changes = (task.parts ?? [task]).some(({ kind }) => kind === "expression");
+      assert.equal(task.answer !== project.answers.start, changes, task.id);
     }
   });
+}
+
+/** The lines of the definition that starts at `first`, found by counting braces. */
+function definitionLength(lines, first) {
+  let depth = 0;
+  for (let index = first; index < lines.length; index++) {
+    for (const character of lines[index])
+      depth += character === "{" ? 1 : character === "}" ? -1 : 0;
+    if (depth === 0) return index - first + 1;
+  }
+  throw new Error("Unbalanced definition");
 }
 
 /** Follow one task's instruction literally, as plain text operations. */
 function followInstruction(start, task) {
   if (task.kind === "composite") return task.parts.reduce(followInstruction, start);
-  if (task.kind === "rename") return start.replaceAll(task.name, task.newName);
+  if (task.kind === "rename") {
+    const pattern = new RegExp(`\\b${task.name}\\b`, "g");
+    assert.equal(start.match(pattern).length, task.occurrences, task.id);
+    return start.replace(pattern, task.newName);
+  }
   if (task.kind === "expression") return start.replace(task.before, task.after);
+  if (task.kind === "insert") return start.replace(task.marker, task.text);
   const lines = start.split("\n");
   const first = lines.indexOf(`long long ${task.name}(long long value) {`);
-  const last = lines.indexOf("}", first);
-  assert.equal(last - first + 1, task.lines, task.id);
-  const moved = lines.splice(first, task.lines);
+  const moved = lines.splice(first, definitionLength(lines, first));
   assert.equal(lines.splice(first, 1)[0], "", task.id);
   lines.splice(lines.indexOf(task.marker), 1, ...moved);
   return lines.join("\n");
@@ -99,7 +111,7 @@ function followInstruction(start, task) {
 
 test("each instruction, followed literally, gives exactly its task's result", () => {
   for (let seed = 0; seed < 50; seed++) {
-    const project = generateChecksumProject(seed, [{}, {}, {}, LARGE, COMPOSITE][seed % 5] ?? {});
+    const project = generateChecksumProject(seed, CONFIGS[seed % CONFIGS.length]);
     let all = project.start;
     for (const task of project.tasks) {
       assert.equal(followInstruction(project.start, task), task.result, `${seed}: ${task.id}`);
@@ -110,25 +122,153 @@ test("each instruction, followed literally, gives exactly its task's result", ()
   }
 });
 
+test("a trap and its control share their wording", () => {
+  const project = generateChecksumProject(11);
+  const shape = (edit) =>
+    edit.prompt.replace(/"(?:[^"\\]|\\.)*"/g, "Q").replace(/\d+ (occurrences|lines)/, "N $1");
+  for (const cluster of Object.keys(CHECKSUM_CLUSTERS)) {
+    const prompts = new Set(
+      atoms(project)
+        .filter((edit) => edit.cluster === cluster)
+        .map(shape),
+    );
+    assert.equal(prompts.size, 1, cluster);
+  }
+  // Nothing an agent sees names the variant.
+  for (const task of project.tasks) assert.doesNotMatch(task.id + task.prompt, /trap|control/);
+});
+
+test("each trap differs from its control in its one factor", () => {
+  for (let seed = 0; seed < 20; seed++) {
+    const project = generateChecksumProject(seed);
+    const { start } = project;
+    for (const edit of atoms(project)) {
+      const trap = edit.variant === "trap";
+      if (edit.cluster === "A")
+        assert.equal(start.split(edit.name).length - 1 > edit.occurrences, trap, edit.id);
+      if (edit.cluster === "B")
+        assert.equal(start.includes(`long long ${edit.name}(long long value);`), trap, edit.id);
+      const definition = new RegExp(
+        `^long long ${edit.name}\\(long long value\\) \\{\\n[\\s\\S]*?^\\}$`,
+        "m",
+      ).exec(start)?.[0];
+      if (edit.cluster === "C") assert.equal(/^ {2}for \(/m.test(definition), trap, edit.id);
+      if (edit.cluster === "D") assert.equal(edit.lines, trap ? 40 : 5, edit.id);
+      if (edit.cluster === "E") {
+        const line = start.split("\n").find((text) => text.includes(edit.before));
+        assert.equal(line.startsWith("\t") && line.endsWith("  "), trap, edit.id);
+      }
+    }
+    // Tabs, trailing spaces and no-break spaces stand only on E trap lines.
+    const special = start.split("\n").filter((line) => /\t| $|\u00a0/.test(line));
+    assert.equal(special.length, 2 * project.counts.perVariant, `${seed}`);
+  }
+});
+
+test("tasks never edit the same text", () => {
+  for (let seed = 0; seed < 50; seed++) {
+    const project = generateChecksumProject(seed, CONFIGS[seed % CONFIGS.length]);
+    const edits = atoms(project);
+    const renamed = edits.filter(({ kind }) => kind === "rename").map(({ name }) => name);
+    const changed = edits.filter(({ kind }) => kind === "expression").map(({ before }) => before);
+    for (const edit of edits) {
+      let text;
+      if (edit.kind === "move")
+        text = new RegExp(
+          `^long long ${edit.name}\\(long long value\\) \\{\\n[\\s\\S]*?^\\}$`,
+          "m",
+        ).exec(project.start)?.[0];
+      if (edit.kind === "insert") text = edit.text;
+      if (!text) continue;
+      for (const name of renamed)
+        assert.equal(identifierCount(text, name), 0, `${seed}: ${edit.id}`);
+      for (const before of changed) assert.ok(!text.includes(before), `${seed}: ${edit.id}`);
+    }
+  }
+});
+
+test("density puts the edits of one zone next to each other", () => {
+  for (const density of [1, 2, 3, 5]) {
+    for (let seed = 0; seed < 10; seed++) {
+      const project = generateChecksumProject(seed, { density });
+      const paragraphs = project.start.split("\n\n");
+      // Definitions and slots only: the constants paragraph holds every name.
+      const where = (find) =>
+        paragraphs.flatMap((paragraph, index) =>
+          index > 2 && index < paragraphs.length - 1 && find(paragraph) ? [index] : [],
+        );
+      const zones = Map.groupBy(project.tasks, ({ zone }) => zone);
+      // Tasks keep the zone order, so waves hold whole zones.
+      assert.deepEqual(
+        project.tasks.map(({ zone }) => zone),
+        [...zones.keys()].flatMap((zone) => zones.get(zone).map(() => zone)),
+      );
+      const used = new Set();
+      for (const [zone, edits] of zones) {
+        assert.ok(edits.length <= density, `${density}/${seed}: zone ${zone}`);
+        if (zone < zones.size) assert.equal(edits.length, density);
+        // The host: the one function that holds every A use and E site of the zone.
+        let hosts = null;
+        const near = [];
+        for (const edit of edits) {
+          if (edit.kind === "rename" || edit.kind === "expression") {
+            const own = where((paragraph) =>
+              edit.kind === "rename"
+                ? identifierCount(paragraph, edit.name) > 0
+                : paragraph.includes(edit.before),
+            );
+            hosts = hosts ? hosts.filter((index) => own.includes(index)) : own;
+          } else
+            near.push(
+              ...where((paragraph) =>
+                edit.kind === "insert"
+                  ? paragraph === edit.marker
+                  : paragraph.startsWith(`long long ${edit.name}(long long value) {`),
+              ),
+            );
+        }
+        const host = (hosts ?? []).find((index) =>
+          near.every((other) => Math.abs(other - index) <= density),
+        );
+        if (hosts) assert.notEqual(host, undefined, `${density}/${seed}: zone ${zone}`);
+        const span = [...near, ...(host === undefined ? [] : [host])];
+        assert.ok(Math.max(...span) - Math.min(...span) <= density, `${density}/${seed}`);
+        // No two zones share a paragraph. Only an E site pins the host: an A
+        // constant is also used in fillers.
+        const pinned = edits.some(({ kind }) => kind === "expression");
+        for (const index of pinned ? span : near) {
+          assert.ok(!used.has(index), `${density}/${seed}: zone ${zone}`);
+          used.add(index);
+        }
+      }
+    }
+  }
+});
+
 test("the shared grade credits finished tasks and names damaged definitions", () => {
   const project = generateChecksumProject(42);
   assert.deepEqual(
-    { exact: true, passed: 10, damaged: [], extra: [] },
+    { exact: true, passed: 20, damaged: [], extra: [] },
     (({ exact, passed, damaged, extra }) => ({ exact, passed, damaged, extra }))(
       gradeSharedChecksum(project, project.expected),
     ),
   );
   assert.equal(gradeSharedChecksum(project, project.start).passed, 0);
   let partial = project.start;
-  const done = project.tasks.slice(0, 5);
+  const done = project.tasks.slice(0, 8);
   for (const task of done) partial = followInstruction(partial, task);
   const grade = gradeSharedChecksum(project, partial);
   assert.deepEqual(
     grade.tasks.filter(({ passed }) => passed).map(({ id }) => id),
     done.map(({ id }) => id),
   );
+  const find = (cluster, variant) =>
+    project.tasks.find((task) => task.cluster === cluster && task.variant === variant);
+  const failed = (candidate, task) =>
+    !gradeSharedChecksum(project, candidate).tasks.find(({ id }) => id === task.id).passed;
+
   // A writer that drops a whole definition loses it without touching its neighbours.
-  const lost = project.tasks.find(({ kind }) => kind === "expression");
+  const lost = find("E", "control");
   const header = project.expected
     .split("\n\n")
     .find((block) => block.includes(lost.after))
@@ -137,21 +277,44 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
     .split("\n\n")
     .filter((block) => !block.startsWith(header))
     .join("\n\n");
-  const damaged = gradeSharedChecksum(project, broken);
-  assert.deepEqual(damaged.damaged, [header]);
-  assert.equal(damaged.tasks.find(({ id }) => id === lost.id).passed, false);
+  assert.deepEqual(gradeSharedChecksum(project, broken).damaged, [header]);
+  assert.ok(failed(broken, lost));
   assert.match(sharedPrompt(lost), /^Perform only[^\n]*\n\nSeveral agents are editing main\.cpp/);
-  // A longer spelling that contains the new name is a different name.
-  const rename = project.tasks.find(({ kind }) => kind === "rename");
-  const longer = project.expected.replaceAll(rename.newName, rename.newName + "r");
-  assert.equal(
-    gradeSharedChecksum(project, longer).tasks.find(({ id }) => id === rename.id).passed,
-    false,
+
+  // A rename of the look-alikes too, a normalized trap line and a lost prototype fail.
+  const rename = find("A", "trap");
+  assert.ok(
+    failed(
+      project.expected
+        .replaceAll(rename.newName, rename.name)
+        .replaceAll(rename.name, rename.newName),
+      rename,
+    ),
   );
+  const bytes = find("E", "trap");
+  assert.ok(
+    failed(
+      project.expected.replace(
+        `${bytes.context.split("\n")[1]}`,
+        `  ${bytes.context.split("\n")[1].trim()}`,
+      ),
+      bytes,
+    ),
+  );
+  assert.ok(
+    failed(project.expected.replace(bytes.context, bytes.context.replace("\u00a0", " ")), bytes),
+  );
+  const target = find("B", "trap");
+  assert.ok(
+    failed(project.expected.replace(`long long ${target.name}(long long value);\n`, ""), target),
+  );
+  // A longer spelling that contains the new name is a different name.
+  const control = find("A", "control");
+  assert.ok(failed(project.expected.replaceAll(control.newName, control.newName + "r"), control));
 });
 
 test("a composite task passes only when every one of its edits is done", () => {
-  const project = generateChecksumProject(5, COMPOSITE);
+  const project = generateChecksumProject(5, { edits: 4 });
   const [task] = project.tasks;
   assert.match(task.prompt, /Make all 4 of the following edits:\n1\. In main\.cpp, /);
   const all = project.tasks.reduce(followInstruction, project.start);
@@ -163,31 +326,4 @@ test("a composite task passes only when every one of its edits is done", () => {
   const grade = gradeSharedChecksum(project, partial);
   assert.equal(grade.passed, project.tasks.length - 1);
   assert.deepEqual(grade.tasks.find(({ id }) => id === task.id).failedEdits, [task.parts[3].id]);
-});
-
-test("tasks never edit the same text", () => {
-  for (let seed = 0; seed < 50; seed++) {
-    const project = generateChecksumProject(seed);
-    const renamed = new Set(
-      project.tasks.filter(({ kind }) => kind === "rename").map(({ name }) => name),
-    );
-    const moved = new Set(
-      project.tasks.filter(({ kind }) => kind === "move").map(({ name }) => name),
-    );
-    for (const task of project.tasks) {
-      if (task.kind === "move") {
-        const definition = new RegExp(
-          `^long long ${task.name}\\(long long value\\) \\{\\n[\\s\\S]*?^\\}$`,
-          "m",
-        ).exec(project.start)?.[0];
-        assert.ok(definition, `${seed}: ${task.id} has no definition`);
-        for (const name of renamed) assert.doesNotMatch(definition, new RegExp(`\\b${name}\\b`));
-      }
-      if (task.kind === "expression") {
-        assert.ok(!moved.has(task.id.slice("expression-".length)), `${seed}: ${task.id}`);
-        for (const name of renamed) assert.ok(!task.before.includes(name), `${seed}: ${task.id}`);
-        assert.equal(project.start.split(task.before).length, 2, `${seed}: ${task.id}`);
-      }
-    }
-  }
 });

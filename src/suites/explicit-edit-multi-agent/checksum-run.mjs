@@ -8,9 +8,29 @@ import { runAgentQueue } from "./execution/fresh-agent-queue.mjs";
 import { restoringSourceIdentity } from "./execution/restoring-identity.mjs";
 import { startSharedSandbox } from "./execution/shared-sandbox.mjs";
 import {
+  CHECKSUM_CLUSTERS,
   CHECKSUM_PROJECT_VERSION,
   generateChecksumProject,
+  identifierCount,
 } from "./generation/checksum-project.mjs";
+
+/** Passed edits per cluster, traps and controls side by side. */
+export function clusterSummary(edits) {
+  return Object.fromEntries(
+    Object.keys(CHECKSUM_CLUSTERS).map((cluster) => [
+      cluster,
+      Object.fromEntries(
+        ["trap", "control"].map((variant) => {
+          const own = edits.filter((edit) => edit.cluster === cluster && edit.variant === variant);
+          return [
+            variant,
+            { passed: own.filter(({ passed }) => passed).length, total: own.length },
+          ];
+        }),
+      ),
+    ]),
+  );
+}
 
 /** Isolated runs of a generated checksum project: every task goes to a new agent in
  * its own copy of the start project, as in the original suite. A task passes when
@@ -112,9 +132,23 @@ export async function runChecksumIsolated(
     const files = (await readdir(workspace)).sort();
     const run =
       main === null ? null : await buildAndRun(path.join(directory, "build"), main, signal);
+    // The same per-edit checks as in a shared run, against this task's reference.
+    const grade =
+      main === null ? null : gradeSharedChecksum({ expected: task.result, tasks: [task] }, main);
     tasks.push({
       ...rows.get(task.id),
+      cluster: task.cluster,
+      variant: task.variant,
       status: results[index]?.status ?? rows.get(task.id)?.status ?? "not-run",
+      edits:
+        grade?.edits ??
+        (task.parts ?? [task]).map(({ id, cluster, variant }) => ({
+          id,
+          cluster,
+          variant,
+          passed: false,
+        })),
+      damaged: grade?.damaged ?? [],
       exact: main === task.result,
       built: run?.built ?? false,
       answer: run?.output ?? null,
@@ -132,12 +166,8 @@ export async function runChecksumIsolated(
     minutes: Number(minutes.toFixed(2)),
     passed,
     total: tasks.length,
-    byKind: Object.fromEntries(
-      [...new Set(tasks.map((row) => row.kind))].map((kind) => {
-        const own = tasks.filter((row) => row.kind === kind);
-        return [kind, { passed: own.filter((row) => row.exact).length, total: own.length }];
-      }),
-    ),
+    // Edits whose own checks pass, even when other bytes of the file differ.
+    byCluster: clusterSummary(tasks.flatMap((row) => row.edits)),
     usage,
     tasks,
   };
@@ -163,42 +193,65 @@ const blocks = (text) => text.replace(/\n$/, "").split("\n\n");
 
 /** Grade a shared main.cpp against the project's reference. A block passes when it
  * stands in the candidate exactly once, as a whole paragraph. A rename passes when
- * no old spelling remains and the new one appears as often as in the reference;
- * an expression when only its new text remains; a move when its definition stands
- * once, its slot is gone and at least one neighbour paragraph matches the reference.
+ * the old identifier is gone, the new one appears as often as in the reference and
+ * longer identifiers that contain the old spelling are unchanged. An expression
+ * passes when its comment line and edited line stand once, byte for byte as in the
+ * reference. A move or an insert passes when its paragraph stands once, its slot is
+ * gone and a neighbour paragraph matches the reference; a moved function also keeps
+ * its prototype, if it has one.
  */
 export function gradeSharedChecksum(project, candidate) {
   const wanted = blocks(project.expected),
     got = blocks(candidate);
   const count = (text, part) => text.split(part).length - 1;
-  // Whole identifiers only: a name with extra letters is another name.
-  const identifiers = (text, name) => text.match(new RegExp(`\\b${name}\\b`, "g"))?.length ?? 0;
   const paragraphs = new Map();
   for (const block of got) paragraphs.set(block, (paragraphs.get(block) ?? 0) + 1);
   const damaged = wanted.filter((block) => paragraphs.get(block) !== 1);
+  // A neighbour is known by its first line, so another agent's unfinished edit
+  // inside it does not fail this one.
+  const first = (block) => block?.split("\n")[0];
+  const placed = (find, marker) => {
+    const at = got.findIndex(find),
+      reference = wanted.findIndex(find);
+    return (
+      at >= 0 &&
+      reference >= 0 &&
+      paragraphs.get(got[at]) === 1 &&
+      got[at] === wanted[reference] &&
+      count(candidate, marker) === 0 &&
+      (first(got[at - 1]) === first(wanted[reference - 1]) ||
+        first(got[at + 1]) === first(wanted[reference + 1]))
+    );
+  };
   const edits = project.tasks.flatMap((task) => task.parts ?? [task]);
   const checks = new Map();
-  for (const task of edits) {
+  for (const edit of edits) {
     let passed;
-    if (task.kind === "rename")
+    if (edit.kind === "rename")
       passed =
-        count(candidate, task.name) === 0 &&
-        identifiers(candidate, task.newName) === identifiers(project.expected, task.newName) &&
-        count(candidate, task.newName) === count(project.expected, task.newName);
-    else if (task.kind === "expression")
-      passed = count(candidate, task.before) === 0 && count(candidate, task.after) === 1;
+        identifierCount(candidate, edit.name) === 0 &&
+        identifierCount(candidate, edit.newName) ===
+          identifierCount(project.expected, edit.newName) &&
+        edit.lookAlikes.every(
+          (name) => identifierCount(candidate, name) === identifierCount(project.expected, name),
+        );
+    else if (edit.kind === "expression")
+      passed = count(candidate, edit.before) === 0 && count(candidate, edit.context) === 1;
+    else if (edit.kind === "insert") passed = placed((block) => block === edit.text, edit.marker);
     else {
-      const header = `long long ${task.name}(long long value) {`;
-      const at = got.findIndex((block) => block.startsWith(header));
-      const reference = wanted.findIndex((block) => block.startsWith(header));
+      const signature = `long long ${edit.name}(long long value)`;
       passed =
-        at >= 0 &&
-        paragraphs.get(got[at]) === 1 &&
-        got[at] === wanted[reference] &&
-        count(candidate, task.marker) === 0 &&
-        (got[at - 1] === wanted[reference - 1] || got[at + 1] === wanted[reference + 1]);
+        placed((block) => block.startsWith(`${signature} {`), edit.marker) &&
+        count(candidate, `${signature};`) === count(project.expected, `${signature};`);
     }
-    checks.set(task.id, { id: task.id, kind: task.kind, passed });
+    checks.set(edit.id, {
+      id: edit.id,
+      kind: edit.kind,
+      cluster: edit.cluster,
+      variant: edit.variant,
+      zone: edit.zone,
+      passed,
+    });
   }
   // A composite task passes only when every one of its edits does.
   const tasks = project.tasks.map((task) => ({
@@ -305,6 +358,9 @@ export async function runChecksumShared(
           const row = {
             id: task.id,
             kind: task.kind,
+            cluster: task.cluster,
+            variant: task.variant,
+            zone: task.zone,
             wave: waves.length + 1,
             session: slot.session,
           };
@@ -360,13 +416,8 @@ export async function runChecksumShared(
     exact: grade.exact,
     passed: grade.passed,
     total: project.tasks.length,
-    // Single edits by kind; a composite task counts each of its edits here.
-    byKind: Object.fromEntries(
-      ["move", "rename", "expression"].map((kind) => {
-        const own = grade.edits.filter((edit) => edit.kind === kind);
-        return [kind, { passed: own.filter((edit) => edit.passed).length, total: own.length }];
-      }),
-    ),
+    // Single edits by cluster; a composite task counts each of its edits here.
+    byCluster: clusterSummary(grade.edits),
     damaged: grade.damaged,
     extra: grade.extra,
     built: run.built,
