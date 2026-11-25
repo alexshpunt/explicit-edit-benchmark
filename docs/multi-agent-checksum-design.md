@@ -239,3 +239,19 @@ another agent's edit then shifted the lines, the agent read 30 lines from the ol
 line number, took the body of the next function for its own and deleted from its
 function's first line through the blank line after the next function. Both functions
 went, and the file no longer built.
+
+Fifth round: J pairs. One agent moves a function while another, in the same wave,
+changes an expression; in a trap the expression is inside the moved function, in a
+control it is in the function right next to it. Every order of the two edits gives
+the same file, so a lost edit means that one agent wrote text from a copy read
+before its partner's edit. Seed 42, Terra 6.1 low.
+
+| Run                                                 | Bash                                             | IDE          |
+| --------------------------------------------------- | ------------------------------------------------ | ------------ |
+| Clusters B, C, F, G, H, I, J; 32 agents             | J traps 4/4, J controls 3/4 (a 300 s model hang) | all 32 edits |
+| J only, 6 trap pairs and 6 control pairs; 24 agents | all 24 edits, file equals the reference          | all 24 edits |
+
+No pair collided. Both harnesses apply an edit in one atomic step shortly after the
+agent reads the text, while agents start their edits seconds apart, so two writes to
+the same function never overlapped. The pairs stay in the set as a check for
+harnesses that rewrite a function or a whole file from an earlier read.
