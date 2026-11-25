@@ -142,3 +142,23 @@ a prototype for every function (all moves were B traps):
 Bash agents matched the prototype first and cut from it to the next closing brace. The
 IDE agents saw both matches and chose the definition. This is a precision result for
 cluster B. It does not measure concurrency, and it has no control yet.
+
+First runs of the cluster generator (`multi-agent-checksum-project-v5`): Terra 6.1 low,
+seed 42, 20 edits, one run per cell. Each cell gives passed traps and passed controls
+per cluster, 2 of each; the shared runs had 20 agents in one wave.
+
+| Harness, mode   | Density | A        | B        | C        | D        | E        | Shared file          |
+| --------------- | ------- | -------- | -------- | -------- | -------- | -------- | -------------------- |
+| Bash, isolated  | 1       | 2/2, 2/2 | 0/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 |                      |
+| Bash, shared    | 1       | 2/2, 2/2 | 1/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | does not build       |
+| Bash, isolated  | 3       | 2/2, 2/2 | 0/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 |                      |
+| Bash, shared    | 3       | 2/2, 2/2 | 0/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | does not build       |
+| Bash, isolated  | 5       | 2/2, 2/2 | 0/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | 1/2, 2/2 |                      |
+| Bash, shared    | 5       | 2/2, 2/2 | 0/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | does not build       |
+| IDE, both modes | 1, 3, 5 | 2/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | 2/2, 2/2 | equals the reference |
+
+The failed E trap at density 5 is a delivery in which the model returned nothing for
+the whole 300-second deadline; it says nothing about the edit. With this model, only
+the B trap separates the harnesses, and no density up to 5 costs either harness an
+edit: every agent edits with one quick command, so two read-modify-write cycles
+almost never overlap.
