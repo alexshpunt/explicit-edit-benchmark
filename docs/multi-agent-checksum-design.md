@@ -190,3 +190,28 @@ wrote one Python script, and its pattern for a moved function was anchored on th
 definition line, while single-edit agents searched for the bare signature and took
 the prototype. Five agents working through four edits each in one zone cost neither
 harness an edit.
+
+Third round: clusters B, C, F and G, three traps and three controls each, 24 single
+edits. F replaces an expression inside one named function while two other functions
+hold the same text; G renames the local variable `b` inside one function while every
+function declares a `b`; C moves a function that compares a character with `'}'`.
+
+| Harness | Isolated: failed edits | Shared: failed edits        | Shared file          |
+| ------- | ---------------------- | --------------------------- | -------------------- |
+| Bash    | all 3 B traps          | all 3 B traps, one F trap\* | does not build       |
+| IDE     | none                   | none                        | equals the reference |
+
+\* The F host was the function that follows the prototypes, so a B agent moved it by
+mistake while the F agent edited it.
+
+The traces explain the pattern. A Terra Bash agent does not read `main.cpp` first: it
+writes one Python script that finds the first occurrence of the quoted signature,
+counts braces from the next `{`, checks that a blank line follows, and edits. F and G
+pass because the signature of their function is unique, so the script scopes to the
+right definition. The C trap fails the script's own check, because the brace count
+stops inside the line `if (*p == '}')`; the agent then looks at the file and uses
+another method that works. A B trap passes the check with the wrong text: the first
+occurrence is the prototype, the next `{` opens whichever function follows the
+prototypes, and that function ends cleanly, so the script moves it without any
+error. A trap separates harnesses when the wrong target passes every check an agent
+makes.
