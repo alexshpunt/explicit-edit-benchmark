@@ -243,7 +243,8 @@ export function gradeSharedChecksum(project, candidate) {
     else if (edit.kind === "expression")
       passed = count(candidate, edit.before) === 0 && count(candidate, edit.context) === 1;
     else if (edit.kind === "insert") passed = placed((block) => block === edit.text, edit.marker);
-    // The other copies of an F text and the other uses of a G name stay unchanged.
+    // The other copies of an F text stay unchanged, and a G name is new only in its
+    // own function. New G names differ per edit, while two G traps share "b".
     else if (edit.kind === "scoped-replace")
       passed =
         count(candidate, edit.after) === 1 &&
@@ -252,7 +253,8 @@ export function gradeSharedChecksum(project, candidate) {
     else if (edit.kind === "local-rename")
       passed =
         definitionText(candidate, edit.name) === definitionText(project.expected, edit.name) &&
-        identifierCount(candidate, edit.local) === identifierCount(project.expected, edit.local);
+        identifierCount(candidate, edit.newName) ===
+          identifierCount(project.expected, edit.newName);
     else {
       const signature = `long long ${edit.name}(long long value)`;
       passed =

@@ -90,12 +90,14 @@ for (const { seed, options } of [
   });
 }
 
-/** The lines of the definition that starts at `first`, found by counting braces. */
-function definitionLength(lines, first) {
+/** The lines of the definition that starts at `first`, found by counting braces
+ * outside character and string literals, or inside them too when `naive`.
+ */
+function definitionLength(lines, first, naive = false) {
   let depth = 0;
   for (let index = first; index < lines.length; index++) {
-    for (const character of lines[index])
-      depth += character === "{" ? 1 : character === "}" ? -1 : 0;
+    const code = naive ? lines[index] : lines[index].replace(/'(?:\\.|[^'])'|"(?:\\.|[^"])*"/g, "");
+    for (const character of code) depth += character === "{" ? 1 : character === "}" ? -1 : 0;
     if (depth === 0) return index - first + 1;
   }
   throw new Error("Unbalanced definition");
@@ -172,13 +174,9 @@ test("each trap differs from its control in its one factor", () => {
         assert.equal(start.split(edit.name).length - 1 > edit.occurrences, trap, edit.id);
       if (edit.cluster === "B")
         assert.equal(start.includes(`long long ${edit.name}(long long value);`), trap, edit.id);
-      // A C trap has a lone "}" line before the end of its definition.
+      // A C trap scans for a brace character.
       if (edit.cluster === "C")
-        assert.equal(
-          definitionText(start, edit.name).split("\n").slice(0, -1).includes("}"),
-          trap,
-          edit.id,
-        );
+        assert.equal(/'[{}]'/.test(definitionText(start, edit.name)), trap, edit.id);
       if (edit.cluster === "F")
         assert.equal(start.split(edit.before).length - 1, trap ? 3 : 1, edit.id);
       if (edit.cluster === "G")
@@ -377,13 +375,13 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   assert.ok(failed(project.expected.replaceAll(scoped.before, scoped.after), scoped));
   const local = find("G", "trap");
   assert.ok(failed(project.expected.replace(/\bb\b/g, local.newName), local));
-  // A C trap cut at its first lone "}" leaves the rest of its definition behind.
+  // A C trap moved by counting every brace, even the one in a literal, fails.
   const extent = find("C", "trap");
   const cut = followInstruction(project.start, extent);
   const lines = project.start.split("\n");
   const first = lines.indexOf(`long long ${extent.name}(long long value) {`);
-  const short = lines.indexOf("}", first) - first + 1;
-  const moved = lines.splice(first, short);
+  const naive = definitionLength(lines, first, true);
+  const moved = lines.splice(first, naive);
   lines.splice(lines.indexOf(extent.marker), 1, ...moved);
   assert.notEqual(lines.join("\n"), cut);
   assert.ok(failed(lines.join("\n"), extent));
@@ -400,6 +398,10 @@ test("a composite task passes only when every one of its edits is done", () => {
     .slice(1)
     .reduce(followInstruction, task.parts.slice(0, 3).reduce(followInstruction, project.start));
   const grade = gradeSharedChecksum(project, partial);
-  assert.equal(grade.passed, project.tasks.length - 1);
+  assert.equal(
+    grade.passed,
+    project.tasks.length - 1,
+    JSON.stringify(grade.tasks.filter(({ passed }) => !passed)),
+  );
   assert.deepEqual(grade.tasks.find(({ id }) => id === task.id).failedEdits, [task.parts[3].id]);
 });

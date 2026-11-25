@@ -248,7 +248,7 @@ const KIND = {
 const LOCAL_NAMES = ["carry", "pivot", "tally", "stage", "inner", "accum", "blend", "sweep"];
 // Original names of G control variables, used by no other function.
 const UNIQUE_LOCALS = ["bq", "bx", "bk", "bj", "bv", "bw", "bz", "by"];
-// Words in the C functions' string literals.
+// Words in the C functions' strings.
 const LAYOUT_KINDS = ["grid", "panel", "table", "chart", "frame", "board"];
 
 /** Generate one project with its tasks and references. */
@@ -434,22 +434,22 @@ export function generateChecksumProject(seed, options = {}) {
       prototyped: edit.variant === "trap",
     }).name;
 
-  // C: moved functions with a multi-line raw string literal. In a trap, a line of the
-  // literal is a lone "}", so the first such line is not the end of the definition;
-  // a control indents that brace. Nothing calls them, so the literal does not enter
-  // the checksum.
+  // C: moved functions that scan a string for one character. In a trap that
+  // character is a closing brace, so counting braces in the text, without reading
+  // literals, ends the definition in the middle of its body, and nothing reports
+  // it; a control scans for a closing bracket. Nothing calls them, so the scan does
+  // not enter the checksum.
   for (const edit of ofCluster("C")) {
     const name = take(functionNames);
-    const kind = random.pick(LAYOUT_KINDS),
-      size = random.integer(2, 99);
-    const literal =
-      edit.variant === "trap"
-        ? ["{", `  "kind": "${kind}",`, `  "size": ${size}`, "}", ""]
-        : ["{", `    "kind": "${kind}",`, `    "size": ${size}`, "  }"];
-    const lines = literal.map((line, index) =>
-      index === 0 ? `  const char* layout = R"(${line}` : line,
-    );
-    lines[lines.length - 1] += `)";`;
+    const kind = random.pick(LAYOUT_KINDS);
+    const target = edit.variant === "trap" ? "}" : "]";
+    const lines = [
+      `  const char* layout = "${kind}: ${random.integer(2, 99)}, ${random.integer(2, 99)}";`,
+    ];
+    const scan = [
+      "  for (const char* p = layout; *p != 0; ++p)",
+      `    if (*p == '${target}') a = (a * 31 + ${random.integer(2, 99)}) % kModulus;`,
+    ];
     functions.push({
       name,
       uncalled: true,
@@ -466,7 +466,7 @@ export function generateChecksumProject(seed, options = {}) {
         },
         {
           type: "raw",
-          lines: ["  for (const char* p = layout; *p != 0; ++p) a = (a * 31 + *p) % kModulus;"],
+          lines: scan,
         },
       ],
       result: ["a", "value"],
