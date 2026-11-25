@@ -37,9 +37,23 @@ Two execution modes run the same tasks:
 | ------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
 | A. Completeness     | A missed occurrence, or an edit inside a longer identifier           | Rename a global constant with 12 to 20 uses where longer identifiers contain its spelling (`gain_rate` next to `gain_rate_limit` and `max_gain_rate`) | Rename a global constant with the same number of uses and a spelling that no other identifier contains | Bash (`sed -E 's/\bgain_rate\b/…/g'`)                                                       |
 | B. Target selection | Editing a look-alike instead of the target                           | Move the definition of a function named by its signature, where the same signature also stands in a prototype above it                                | Move the definition of a function that has no prototype                                                | Tools that show every match with context                                                    |
-| C. Structure        | Losing or duplicating lines when the extent of a block must be found | Move the definition of a function whose body has nested `if` and `for` blocks, so its first closing brace line is not its end                         | Move the definition of a function with a flat body                                                     | Neither by design                                                                           |
+| C. Structure        | Losing or duplicating lines when the extent of a block must be found | Move the definition of a function that compares a character with `'}'`, so counting braces without reading literals ends it inside its body           | Move the same kind of function comparing with `']'`                                                    | Neither by design                                                                           |
 | D. Supplied text    | Changing supplied text on the way into the file                      | Insert a supplied 13-line function whose five string literals hold backslash escapes, quotes, `$HOME`, `$(date)`, backticks and `%`                   | Insert a supplied 13-line function of the same shape whose literals hold plain words                   | Neither by design: a heredoc needs a quoted delimiter, a JSON argument needs exact escaping |
 | E. Byte exactness   | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space                             | Replace an expression on an ordinary line                                                              | Neither by design                                                                           |
+
+Later rounds added clusters F to M. Each targets a failure seen in a trace or a
+mechanism a harness could plausibly have:
+
+| Cluster               | Trap                                                                                                                                                              | Control                                            |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| F. Scoped replacement | Replace an expression inside one named function while two other functions hold the same text                                                                      | The expression stands only in that function        |
+| G. Scoped rename      | Rename the local variable `b` inside one function while every function declares a `b`                                                                             | The local variable's name is unique                |
+| H. Deletion target    | Delete a function named by its signature, which also stands in a prototype                                                                                        | The function has no prototype                      |
+| I. In-place target    | Replace an expression inside a function with a prototype; the first definition after the prototypes repeats the expression                                        | The function has no prototype                      |
+| J. Overlapping pair   | Two agents at once: one moves a function, the other changes an expression inside it                                                                               | The expression is in the function right next to it |
+| K. Namespace target   | Delete the definition of `f` in the namespace `slow`, while the namespace `fast` above it defines a function with the same signature                              | The function in `fast` has another name            |
+| L. Shifted lines      | Delete a function with the comment lines above it, whose number the prompt does not give; two neighbours insert 29-line functions right above it in the same wave | The neighbours insert right below it               |
+| M. Bulk deletion      | Delete each of 32 lines, spread over the file, that call an empty trace function, and keep its definition                                                         | Three such lines                                   |
 
 Each trap differs from its control in one factor. Within a cluster, both variants use
 the same wording, so the prompt does not reveal which one is the trap.
@@ -54,6 +68,9 @@ edits unchanged…". The cluster instructions are:
 - B and C: `In main.cpp, move the complete definition of the function "long long f(long long value)" to the placeholder line "// __EXPLICIT_EDIT_SLOT_n_1__": the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`
 - D: `In main.cpp, replace the placeholder line "// __EXPLICIT_EDIT_SLOT_n_1__" with the following N lines: "long long f(long long value) {\n…".`
 - E: `In main.cpp, replace its one occurrence of "a * 37 + 11" with "a * 41 + 11".`
+- K: `In main.cpp, delete the complete definition of the function "long long f(long long value)" in the namespace "slow". Also delete the empty line that directly followed the definition.`
+- L: `In main.cpp, delete the complete definition of the function "long long f(long long value)" together with the comment lines directly above it. Also delete the empty line that directly followed the definition.` The neighbours use the D wording.
+- M: `In main.cpp, delete each line that calls the function "trace_step"; there are N lines. Keep its definition.`
 
 The A wording is the same for traps and controls; for a control, the last sentence
 has nothing to apply to. Task ids are neutral (`edit-07`), because an agent can see
@@ -133,9 +150,13 @@ a read that lands in the middle of a neighbour's non-atomic write.
 
 ## Size
 
-One file of 500 to 800 lines. Five clusters with two traps and two controls each give
-20 edits. With one edit per task and 20 agents, a run is one wave. Composite tasks,
-which list several edits in one prompt, remain available as an option.
+The file grows with the number of edits, about 20 lines per edit: the default set of
+clusters B, C, F, G, H, I and J with two traps and two controls each gives 32 edits
+and about 900 lines. With one edit per task, a shared run gives every task its own
+agent in one wave. Composite tasks, which list several edits in one prompt, remain
+available as an option. The `lines` option adds longer filler functions until the
+fillers alone hold that many lines, so the same edits can stand in a file of several
+thousand lines: `lines` 4000 with clusters B to M gives about 5200.
 
 ## Evidence so far
 
@@ -255,3 +276,34 @@ No pair collided. Both harnesses apply an edit in one atomic step shortly after 
 agent reads the text, while agents start their edits seconds apart, so two writes to
 the same function never overlapped. The pairs stay in the set as a check for
 harnesses that rewrite a function or a whole file from an earlier read.
+
+Sixth round: clusters K, L and M and the size option (`multi-agent-checksum-project-v6`),
+seed 42, Terra 6.1 low. A J pair counts as two edits and an L group as three.
+
+| Run                                       | Bash, isolated        | Bash, shared                                          | IDE, both modes                      |
+| ----------------------------------------- | --------------------- | ----------------------------------------------------- | ------------------------------------ |
+| K, L, M; 3 traps and 3 controls; 30 edits | 2 of 3 K traps fail   | all 30 edits, file equals the reference               | all edits, file equals the reference |
+| B to M; 1 trap and 1 control; 26 edits    | B, H, I traps fail    | B, H, I traps fail; 3 collateral paragraphs; no build | all edits, file equals the reference |
+| Same, `lines` 4000 (5204 lines)           | B, H, I, K traps fail | B, I traps fail; 1 collateral paragraph; no build     | all edits, file equals the reference |
+
+Over all isolated runs of this round, including two with two traps per cluster, the
+Bash agents failed 6 of 9 K traps, every one by the silent first match: the script
+searched for the bare signature, ignored the namespace and deleted the function in the
+namespace above. In shared runs they passed all 5 K traps: with the concurrency notice
+they printed the text around the match first, or anchored the search on the
+namespace's opening line. The notice does not help them with B, H and I, where the
+wrong match is a prototype.
+
+L and M cost neither harness an edit. An L neighbour inserts in one call, while the
+agent that deletes searches, reads and then edits, so both inserts usually land
+before its read; the IDE agents also edit by content anchors, which a shift of line
+numbers does not move. An IDE agent deletes all 32 M lines in one call that takes
+every match of a search. A file of 5200 lines changed nothing for either harness.
+
+Two runs of this round are not counted. In the first version of M, the trace
+functions' definitions stood in the prototype paragraph, so the first brace after a
+B, H or I prototype was a trace function's body. The blind script then failed its own
+check, the agent recovered, and those traps passed; the definitions now stand with
+the constants, and a unit test checks that the first brace after such a prototype
+opens the lead. Two Bash agents ran out of the 300-second deadline because the model
+returned nothing; they count as failed J controls.
