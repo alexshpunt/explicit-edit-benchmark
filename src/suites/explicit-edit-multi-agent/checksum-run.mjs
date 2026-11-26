@@ -255,7 +255,9 @@ export function gradeSharedChecksum(project, candidate) {
         ? [`long long ${edit.name}(long long value) {`]
         : edit.kind === "commented-delete"
           ? [edit.comment[0]]
-          : [],
+          : edit.kind === "prune"
+            ? edit.removed.map((key) => `long long ${key.split("::")[1]}(long long value) {`)
+            : [],
     ),
   );
   const passing = (block) =>
@@ -291,6 +293,19 @@ export function gradeSharedChecksum(project, candidate) {
         edit.lookAlikes.every(
           (name) => identifierCount(candidate, name) === identifierCount(project.expected, name),
         );
+    // A T rename leaves the comment and the literal that mention the old name.
+    else if (edit.kind === "function-rename")
+      passed =
+        [edit.name, edit.newName].every(
+          (name) => identifierCount(candidate, name) === identifierCount(project.expected, name),
+        ) && edit.mentions.every((line) => count(candidate, line) === 1);
+    // A U namespace and its caller stand as in the reference.
+    else if (edit.kind === "prune")
+      passed =
+        namespaceText(candidate, edit.namespace) !== undefined &&
+        namespaceText(candidate, edit.namespace) ===
+          namespaceText(project.expected, edit.namespace) &&
+        definitionText(candidate, edit.caller) === definitionText(project.expected, edit.caller);
     else if (edit.kind === "expression")
       passed =
         count(candidate, edit.before) === 0 && count(candidate, edit.context ?? edit.after) === 1;

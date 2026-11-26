@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
  * agents of a wave edit neighbouring lines of one function at the same moment.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v7";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v8";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
@@ -33,6 +33,8 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   Q: "located by its callee",
   R: "located by its neighbour",
   S: "located by a constant",
+  T: "rename in code only",
+  U: "unused functions",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -211,10 +213,12 @@ function expressionText(statement, context) {
   if (statement.kind === "mix") return `(${left} ^ ${factor}) + ${right}`;
   // A call passes the previous variable; a P decoy's call passes a number and adds
   // the previous variable.
-  if (statement.kind === "call")
+  if (statement.kind === "call") {
+    const callee = context.call?.(statement.callee) ?? statement.callee;
     return statement.literal === undefined
-      ? `${statement.callee}(${left}) + ${offset}`
-      : `${statement.callee}(${statement.literal}) + ${left}`;
+      ? `${callee}(${left}) + ${offset}`
+      : `${callee}(${statement.literal}) + ${left}`;
+  }
   if (statement.kind === "constant")
     return `${left} * ${context.name(statement.constant)} + ${offset}`;
   throw new Error(`Unknown statement kind ${statement.kind}`);
@@ -239,6 +243,10 @@ function itemLines(item, depth, context) {
 function instruction(edit) {
   if (edit.kind === "rename")
     return `In main.cpp, replace every occurrence of the identifier ${q(edit.name)} with ${q(edit.newName)}; there are ${edit.occurrences} occurrences. Longer identifiers that contain this spelling stay unchanged.`;
+  if (edit.kind === "function-rename")
+    return `In main.cpp, rename the function ${q(edit.name)} to ${q(edit.newName)}: change its prototype, its definition and every call of it. Comments and string literals that mention the function stay unchanged.`;
+  if (edit.kind === "prune")
+    return `In main.cpp, delete the complete definition of every function in the namespace ${q(edit.namespace)} that no code calls, and the empty line that directly followed each deleted definition. Keep the namespace and the functions that are called.`;
   if (edit.kind === "move")
     return `In main.cpp, move the complete definition of the function ${q(signature(edit.name))} to the placeholder line ${q(edit.marker)}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`;
   if (edit.kind === "insert")
@@ -301,7 +309,22 @@ const KIND = {
   Q: "scoped-replace",
   R: "scoped-replace",
   S: "scoped-replace",
+  T: "function-rename",
+  U: "prune",
 };
+// Namespace names of U edits.
+const PRUNED_NAMESPACES = [
+  "diag",
+  "debug",
+  "inspect",
+  "survey",
+  "sample",
+  "monitor",
+  "bench",
+  "stats",
+  "checks",
+  "metrics",
+];
 // Namespace names of K edits: the first namespace of a pair in the file holds the
 // decoy, the second the target.
 const NAMESPACES = [
@@ -540,7 +563,10 @@ export function generateChecksumProject(seed, options = {}) {
     ofCluster("P").length +
     2 * ofCluster("Q").length +
     ofCluster("R").length +
-    ofCluster("S").length;
+    ofCluster("S").length +
+    // T stands in two gaps, U with its caller in one.
+    2 * ofCluster("T").length +
+    ofCluster("U").length;
   const lengths = [];
   while (
     lengths.length <
@@ -852,6 +878,75 @@ export function generateChecksumProject(seed, options = {}) {
     });
   }
 
+  // T: a function to rename in code only: its prototype, its definition, the calls
+  // in its two callers and main's call. A trap's function is also named in a comment
+  // of one caller and in a string literal of a function that nothing calls, and both
+  // stay unchanged; a control's comment and literal name a function that does not
+  // exist.
+  for (const edit of ofCluster("T")) {
+    edit.name = build(take(functionNames), plain(random.integer(2, 4)), { prototyped: true }).name;
+    edit.newName = take(functionNames);
+    const mention = edit.variant === "trap" ? edit.name : take(functionNames);
+    const callers = [0, 1].map(() =>
+      build(take(functionNames), ["plain", { callee: edit.name }, "plain"], {
+        prototyped: false,
+      }),
+    );
+    const comment = `  // Calls ${mention}(a) once; keep it cheap.`;
+    callers[0].body.splice(1, 0, { type: "raw", lines: [comment] });
+    const label = `  const char* label = "${mention} feeds the total";`;
+    const reporter = take(functionNames);
+    functions.push({
+      name: reporter,
+      uncalled: true,
+      body: [
+        { type: "raw", lines: [label] },
+        {
+          type: "let",
+          id: `${reporter}:a`,
+          variable: "a",
+          kind: "linear",
+          left: "value",
+          factor: number(),
+          offset: number(),
+        },
+        {
+          type: "raw",
+          lines: ["  for (const char* p = label; *p != 0; ++p) a = (a * 31 + *p) % kModulus;"],
+        },
+      ],
+      result: ["a", "value"],
+      prototyped: false,
+    });
+    edit.mentions = [comment, label];
+    pairs.push(
+      random.shuffle([{ function: edit.name }, { function: callers[0].name }]),
+      random.shuffle([{ function: callers[1].name }, { function: reporter }]),
+    );
+  }
+
+  // U: the functions of a namespace that no code calls, to delete. Of four
+  // functions, a caller right after the namespace calls two. The caller also holds a
+  // commented-out call: in a trap of a function to delete, so a search for its calls
+  // finds one; in a control of a called function.
+  const pruned = random.shuffle(PRUNED_NAMESPACES);
+  for (const edit of ofCluster("U")) {
+    edit.namespace = take(pruned);
+    const members = [0, 1, 2, 3].map(() => namespaced(edit.namespace, take(functionNames)));
+    const [first, second, ...removed] = members.map((member) => member.function);
+    edit.removed = removed;
+    const caller = build(
+      take(functionNames),
+      ["plain", { callee: first }, { callee: second }, "plain"],
+      { prototyped: false },
+    );
+    edit.caller = caller.name;
+    const mention = edit.variant === "trap" ? removed[0] : first;
+    edit.mention = `  // long long d = (${mention}(c) + ${number()}) % kModulus;  // disabled`;
+    caller.body.splice(3, 0, { type: "raw", lines: [edit.mention] });
+    pairs.push([...namespaceBlock(edit.namespace, members), { function: caller.name }]);
+  }
+
   // H: functions to delete; a trap has a prototype. Nothing calls them, so the
   // file builds without them.
   for (const edit of ofCluster("H")) {
@@ -1055,15 +1150,19 @@ export function generateChecksumProject(seed, options = {}) {
     const names = new Map(),
       factors = new Map(),
       locals = new Map(),
-      silenced = new Set();
+      silenced = new Set(),
+      calls = new Map();
     let order = layout;
     for (const edit of done.flatMap((task) => task.parts ?? [task])) {
       if (edit.kind === "rename") names.set(edit.name, edit.newName);
+      if (edit.kind === "function-rename") calls.set(edit.name, edit.newName);
       if (edit.kind === "expression" || edit.kind === "scoped-replace")
         factors.set(edit.statement, edit.newFactor);
       if (edit.kind === "local-rename") locals.set(edit.name, edit);
       if (["delete", "namespace-delete", "commented-delete"].includes(edit.kind))
         order = order.filter((block) => block.function !== (edit.key ?? edit.name));
+      if (edit.kind === "prune")
+        order = order.filter((block) => !edit.removed.includes(block.function));
       if (edit.kind === "bulk-delete") silenced.add(edit.name);
       if (edit.kind === "move")
         order = order
@@ -1072,11 +1171,12 @@ export function generateChecksumProject(seed, options = {}) {
       if (edit.kind === "insert")
         order = order.map((block) => (block.marker === edit.marker ? { text: edit.text } : block));
     }
-    const context = { factors, name: (name) => names.get(name) ?? name };
+    const call = (name) => calls.get(name) ?? name;
+    const context = { factors, name: (name) => names.get(name) ?? name, call };
     const definition = (entry) => {
       const text = [
         ...(entry.comment ?? []),
-        header(entry.display ?? entry.name),
+        header(entry.display ?? call(entry.name)),
         ...entry.body
           .filter((item) => !silenced.has(item.trace))
           .flatMap((item) => itemLines(item, 1, context)),
@@ -1098,7 +1198,7 @@ export function generateChecksumProject(seed, options = {}) {
         // make a blind search for the definition fail loudly instead of silently.
         ...ofCluster("M").map(({ definition }) => definition),
       ].join("\n"),
-      prototypes.map(({ name }) => `${signature(name)};`).join("\n"),
+      prototypes.map(({ name }) => `${signature(call(name))};`).join("\n"),
       ...order.map(
         (block) =>
           block.marker ?? block.text ?? block.raw ?? definition(byName.get(block.function)),
@@ -1107,7 +1207,8 @@ export function generateChecksumProject(seed, options = {}) {
         "int main() {",
         "  long long total = 0;",
         ...main.map(
-          (call) => `  total = (total + ${call.weight} * ${call.name}(${call.input})) % kModulus;`,
+          (entry) =>
+            `  total = (total + ${entry.weight} * ${call(entry.name)}(${entry.input})) % kModulus;`,
         ),
         "  std::cout << total << '\\n';",
         "  return 0;",
@@ -1191,6 +1292,31 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(occurrences(`${signature(edit.name)};`), 0, `${edit.id} prototype`);
       for (const space of [edit.decoy, edit.namespace])
         assert.equal(occurrences(`namespace ${space} {`), 1, `${edit.id} namespace`);
+    }
+    if (edit.kind === "function-rename") {
+      // Code names the function five times: its prototype, its definition, two
+      // callers and main. Only a trap's comment and literal name it too.
+      const mentioned = trap ? 2 : 0;
+      assert.equal(identifierCount(start, edit.name), 5 + mentioned, `${edit.id} uses`);
+      assert.equal(occurrences(`${signature(edit.name)};`), 1, `${edit.id} prototype`);
+      assert.equal(identifierCount(start, edit.newName), 0, `${edit.id} new name exists`);
+      assert.equal(identifierCount(expected, edit.name), mentioned, `${edit.id} mentions`);
+      assert.equal(identifierCount(expected, edit.newName), 5, `${edit.id} new uses`);
+      for (const line of edit.mentions) assert.equal(occurrences(line), 1, `${edit.id} mention`);
+    }
+    if (edit.kind === "prune") {
+      // Each of the namespace's functions stands once; the caller calls two, and only
+      // a trap's commented-out call names a function to delete.
+      const space = start.slice(start.indexOf(`namespace ${edit.namespace} {\n`));
+      for (const key of edit.removed) {
+        const own = header(key.split("::")[1]);
+        assert.equal(occurrences(own), 1, `${edit.id} header is not unique`);
+        assert.ok(space.indexOf(own) < space.indexOf(`}  // namespace ${edit.namespace}`));
+        assert.ok(!expected.includes(own), `${edit.id} kept`);
+        assert.equal(occurrences(`${key}(`), key === edit.removed[0] && trap ? 1 : 0, edit.id);
+      }
+      assert.equal(occurrences(edit.mention), 1, `${edit.id} mention`);
+      assert.equal(occurrences(`namespace ${edit.namespace} {`), 1, `${edit.id} namespace`);
     }
     if (edit.kind === "commented-delete") {
       assert.equal(occurrences(header(edit.name)), 1, `${edit.id} header is not unique`);

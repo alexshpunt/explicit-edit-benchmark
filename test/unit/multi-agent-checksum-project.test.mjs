@@ -19,7 +19,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJKLMNOPQRS";
+const ALL = "ABCDEFGHIJKLMNOPQRSTU";
 const CONFIGS = [
   {},
   { clusters: ALL },
@@ -194,7 +194,49 @@ function followInstruction(start, task) {
   }
   if (task.kind === "expression") return start.replace(task.before, task.after);
   if (task.kind === "insert") return start.replace(task.marker, task.text);
+  // Code without comment lines and string literals; a naive follower reads them as
+  // code too.
+  const code = (line) =>
+    task.naive || !line.trimStart().startsWith("//")
+      ? line.split(task.naive ? /(?!)/ : /("(?:\\.|[^"\\])*")/)
+      : ["", line];
+  if (task.kind === "function-rename") {
+    const pattern = new RegExp(`\\b${task.name}\\b`, "g");
+    return start
+      .split("\n")
+      .map((line) =>
+        code(line)
+          .map((part, index) => (index % 2 ? part : part.replace(pattern, task.newName)))
+          .join(""),
+      )
+      .join("\n");
+  }
   const lines = start.split("\n");
+  if (task.kind === "prune") {
+    // Every definition of the namespace that no code outside it calls.
+    const open = lines.indexOf(`namespace ${task.namespace} {`);
+    const close = lines.indexOf(`}  // namespace ${task.namespace}`, open);
+    const unused = [];
+    for (let first = open; first < close; first++) {
+      const name = /^long long (\w+)\(long long value\) \{$/.exec(lines[first])?.[1];
+      if (!name) continue;
+      const length = definitionLength(lines, first);
+      const called = lines.some(
+        (line, at) =>
+          (at < first || at >= first + length) &&
+          code(line)
+            .filter((_, index) => index % 2 === 0)
+            .some((part) => part.includes(`${task.namespace}::${name}(`)),
+      );
+      if (!called) unused.push({ first, length });
+    }
+    assert.ok(unused.length > 0, task.id);
+    for (const { first, length } of unused.reverse()) {
+      assert.equal(lines[first + length], "", task.id);
+      lines.splice(first, length + 1);
+    }
+    return lines.join("\n");
+  }
   if (task.kind === "bulk-delete") {
     const kept = lines.filter((line) => !line.trimStart().startsWith(`${task.name}(`));
     assert.equal(lines.length - kept.length, task.occurrences, task.id);
@@ -332,6 +374,12 @@ test("each trap differs from its control in its one factor", () => {
       }
       if (edit.cluster === "R")
         assert.equal(start.includes(`long long ${edit.anchor}(long long value);`), trap, edit.id);
+      // A T trap's comment and literal name the function; a U trap's commented-out
+      // call names a function to delete.
+      if (edit.cluster === "T")
+        assert.ok(edit.mentions.every((line) => identifierCount(line, edit.name) === +trap));
+      if (edit.cluster === "U")
+        assert.equal(edit.mention.includes(`${edit.removed[0]}(`), trap, edit.id);
       // A C trap scans for a brace character.
       if (edit.cluster === "C")
         assert.equal(/'[{}]'/.test(definitionText(start, edit.name)), trap, edit.id);
@@ -369,7 +417,9 @@ test("tasks never edit the same text", () => {
   for (let seed = 0; seed < 50; seed++) {
     const project = generateChecksumProject(seed, CONFIGS[seed % CONFIGS.length]);
     const edits = atoms(project);
-    const renamed = edits.filter(({ kind }) => kind === "rename").map(({ name }) => name);
+    const renamed = edits
+      .filter(({ kind }) => kind === "rename" || kind === "function-rename")
+      .map(({ name }) => name);
     const changed = edits
       .filter(({ statement }) => statement !== undefined)
       .map(({ before }) => before);
@@ -426,9 +476,9 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J, K, L, N, P, Q, R and S edits stand in gaps of their own, and M edits
+        // J, K, L, N and P to U edits stand in gaps of their own, and M edits
         // everywhere.
-        const edits = all.filter(({ cluster }) => !"JKLMNPQRS".includes(cluster));
+        const edits = all.filter(({ cluster }) => !"JKLMNPQRSTU".includes(cluster));
         if (edits.length === 0) continue;
         // An O definition holds an empty line, so it spans two paragraphs.
         const reach = zoneReach + edits.filter(({ cluster }) => cluster === "O").length;
@@ -629,6 +679,14 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
     for (const variant of ["trap", "control"]) {
       const task = find(cluster, variant);
       assert.ok(failed(project.start.replace(task.before, task.after), task), task.id);
+    }
+  // A rename of every occurrence of a T name, and a deletion of only the U functions
+  // that nothing names, fail their traps and pass their controls.
+  for (const cluster of "TU")
+    for (const variant of ["trap", "control"]) {
+      const task = find(cluster, variant);
+      const naive = followInstruction(project.start, { ...task, naive: true });
+      assert.equal(failed(naive, task), variant === "trap", task.id);
     }
   // An M edit that deletes the definition too fails.
   const bulk = find("M", "trap");
