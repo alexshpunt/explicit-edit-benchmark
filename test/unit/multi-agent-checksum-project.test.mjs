@@ -889,6 +889,23 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
       const naive = followInstruction(project.start, { ...task, naive: true });
       assert.equal(failed(naive, task), variant === "trap", task.id);
     }
+  // Damage that another agent did does not fail an edit: a T rename whose prototype
+  // went with a neighbour's cut, an A rename that lost a use in a destroyed paragraph
+  // and an insert glued to the paragraph above it still pass.
+  const renamed = find("T", "control");
+  const unprototyped = project.expected.replace(
+    `long long ${renamed.newName}(long long value);\n`,
+    "",
+  );
+  assert.ok(unprototyped !== project.expected && !failed(unprototyped, renamed));
+  const spread = find("A", "trap");
+  const user = project.expected
+    .split("\n\n")
+    .find((block) => block.startsWith("long long ") && identifierCount(block, spread.newName) > 0);
+  assert.ok(!failed(project.expected.replace(`${user}\n\n`, ""), spread));
+  const supplied = find("D", "control");
+  const glued = project.expected.replace(`\n\n${supplied.text}`, `\n${supplied.text}`);
+  assert.ok(glued !== project.expected && !failed(glued, supplied));
   // An M edit that deletes the definition too fails.
   const bulk = find("M", "trap");
   assert.ok(failed(project.expected.replace(`${bulk.definition}\n`, ""), bulk));

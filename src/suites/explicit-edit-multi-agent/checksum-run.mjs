@@ -321,20 +321,41 @@ export function gradeSharedChecksum(project, candidate, files = {}) {
   const checks = new Map();
   for (const edit of edits) {
     let passed;
-    if (edit.kind === "rename")
+    // A rename leaves no old name and renames no look-alike. A use that another
+    // agent's mistake destroyed lowers the counts without failing the edit.
+    if (edit.kind === "rename") {
+      const uses = identifierCount(candidate, edit.newName);
       passed =
         identifierCount(candidate, edit.name) === 0 &&
-        identifierCount(candidate, edit.newName) ===
-          identifierCount(project.expected, edit.newName) &&
+        uses > 0 &&
+        uses <= identifierCount(project.expected, edit.newName) &&
         edit.lookAlikes.every(
-          (name) => identifierCount(candidate, name) === identifierCount(project.expected, name),
+          (name) =>
+            identifierCount(candidate, name.replace(edit.name, edit.newName)) === 0 &&
+            identifierCount(candidate, name) <= identifierCount(project.expected, name),
         );
-    // A T rename leaves the comment and the literal that mention the old name.
-    else if (edit.kind === "function-rename")
+    }
+    // A T rename changes each line of code that names the function and leaves the
+    // comment and the literal that mention it. A line that another agent's mistake
+    // destroyed, such as a prototype cut with a neighbour's, counts neither way.
+    else if (edit.kind === "function-rename") {
+      const spelled = (line, from, to) => line.replace(new RegExp(`\\b${from}\\b`, "g"), to);
+      const states = new Set(
+        [
+          ...project.expected
+            .split("\n")
+            .filter((line) => identifierCount(line, edit.newName) > 0)
+            .map((line) => [line, spelled(line, edit.newName, edit.name)]),
+          ...edit.mentions.map((line) => [line, spelled(line, edit.name, edit.newName)]),
+        ].map(([right, wrong]) =>
+          count(candidate, right) > 0 ? "right" : count(candidate, wrong) > 0 ? "wrong" : "gone",
+        ),
+      );
       passed =
-        [edit.name, edit.newName].every(
-          (name) => identifierCount(candidate, name) === identifierCount(project.expected, name),
-        ) && edit.mentions.every((line) => count(candidate, line) === 1);
+        states.has("right") &&
+        !states.has("wrong") &&
+        identifierCount(candidate, edit.name) <= identifierCount(project.expected, edit.name);
+    }
     // A file beside main.cpp equals its reference byte for byte; nobody else edits it.
     else if (edit.kind === "file-delete" || edit.kind === "file-insert")
       passed = files[edit.file] === project.expectedFiles[edit.file];
@@ -364,7 +385,18 @@ export function gradeSharedChecksum(project, candidate, files = {}) {
     else if (edit.kind === "expression")
       passed =
         count(candidate, edit.before) === 0 && count(candidate, edit.context ?? edit.after) === 1;
-    else if (edit.kind === "insert") passed = placed((block) => block === edit.text, edit.marker);
+    // An insert that another agent's cut glued to the paragraph above it passes when
+    // its slot is gone and the paragraph below it is the reference one.
+    else if (edit.kind === "insert") {
+      const at = candidate.indexOf(edit.text);
+      const below = neighbour(wanted, wanted.indexOf(edit.text), 1);
+      passed =
+        placed((block) => block === edit.text, edit.marker) ||
+        (count(candidate, edit.text) === 1 &&
+          count(candidate, edit.marker) === 0 &&
+          below !== undefined &&
+          candidate.startsWith(`\n\n${below}\n`, at + edit.text.length));
+    }
     // The other copies of an F text stay unchanged, and a G name is new only in its
     // own function. New G names differ per edit, while two G traps share "b".
     // A copy of the text elsewhere that turned into the new text counts against the
