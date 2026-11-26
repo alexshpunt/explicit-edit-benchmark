@@ -47,12 +47,36 @@ export const CHECKSUM_SHARED_VERSION = "multi-agent-checksum-shared-v1";
 export const CHECKSUM_DELIVERY_DEADLINE_MS = 300_000;
 const execFileAsync = promisify(execFile);
 
-/** Build one main.cpp and run it; the result records what it printed. */
-export async function buildAndRun(directory, source, signal) {
+/** Write files beside main.cpp, by name, byte for byte. */
+export async function writeProjectFiles(directory, files = {}) {
+  for (const [name, text] of Object.entries(files))
+    await writeFile(path.join(directory, name), text);
+}
+
+/** Read the named files beside main.cpp; a missing file reads as null. */
+export async function readProjectFiles(directory, names) {
+  return Object.fromEntries(
+    await Promise.all(
+      names.map(async (name) => [
+        name,
+        await readFile(path.join(directory, name), "utf8").catch(() => null),
+      ]),
+    ),
+  );
+}
+
+/** Build one main.cpp with the files it includes and run it; the result records
+ * what it printed.
+ */
+export async function buildAndRun(directory, source, signal, files = {}) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const file = path.join(directory, "main.cpp"),
     binary = path.join(directory, "program");
   await writeFile(file, source);
+  await writeProjectFiles(
+    directory,
+    Object.fromEntries(Object.entries(files).filter(([, text]) => text !== null)),
+  );
   try {
     await execFileAsync("clang++", ["-std=c++17", file, "-o", binary], { signal });
   } catch (error) {
@@ -106,6 +130,7 @@ export async function runChecksumIsolated(
       const workspace = path.join(directory, "workspace");
       await mkdir(workspace, { recursive: true, mode: 0o700 });
       await writeFile(path.join(workspace, "main.cpp"), project.start);
+      await writeProjectFiles(workspace, project.startFiles);
       const drivers = chunkModelDrivers(directory, workspace, config, "");
       pools.set(task.id, { drivers, workspace, directory });
       return drivers.createDriver(null, session, context);
@@ -134,14 +159,19 @@ export async function runChecksumIsolated(
   for (const [index, task] of project.tasks.entries()) {
     const { workspace, directory } = pools.get(task.id);
     const main = await readFile(path.join(workspace, "main.cpp"), "utf8").catch(() => null);
+    const names = Object.keys(project.startFiles);
+    const own = await readProjectFiles(workspace, names);
     const files = (await readdir(workspace)).sort();
     const run =
-      main === null ? null : await buildAndRun(path.join(directory, "build"), main, signal);
+      main === null ? null : await buildAndRun(path.join(directory, "build"), main, signal, own);
     // The same per-edit checks as in a shared run, against this task's reference.
-    const grade =
-      main === null
-        ? null
-        : gradeSharedChecksum({ start: project.start, expected: task.result, tasks: [task] }, main);
+    const reference = {
+      start: project.start,
+      expected: task.result,
+      expectedFiles: task.resultFiles,
+      tasks: [task],
+    };
+    const grade = main === null ? null : gradeSharedChecksum(reference, main, own);
     tasks.push({
       ...rows.get(task.id),
       cluster: task.cluster,
@@ -156,11 +186,11 @@ export async function runChecksumIsolated(
           passed: false,
         })),
       damaged: grade?.damaged ?? [],
-      exact: main === task.result,
+      exact: main === task.result && names.every((name) => own[name] === task.resultFiles[name]),
       built: run?.built ?? false,
       answer: run?.output ?? null,
       expectedAnswer: task.answer,
-      extraFiles: files.filter((file) => file !== "main.cpp"),
+      extraFiles: files.filter((file) => file !== "main.cpp" && !names.includes(file)),
     });
   }
   const usage = { input: 0, output: 0, cacheRead: 0, cost: 0 };
@@ -215,9 +245,10 @@ function namespaceText(text, name) {
  * passes when its comment line and edited line stand once, byte for byte as in the
  * reference. A move or an insert passes when its paragraph stands once, its slot is
  * gone and a neighbour paragraph matches the reference; a moved function also keeps
- * its prototype, if it has one.
+ * its prototype, if it has one. `files` holds the files beside main.cpp by name; an
+ * edit of one passes when the file equals its reference.
  */
-export function gradeSharedChecksum(project, candidate) {
+export function gradeSharedChecksum(project, candidate, files = {}) {
   const wanted = blocks(project.expected),
     got = blocks(candidate);
   const count = (text, part) => text.split(part).length - 1;
@@ -299,6 +330,9 @@ export function gradeSharedChecksum(project, candidate) {
         [edit.name, edit.newName].every(
           (name) => identifierCount(candidate, name) === identifierCount(project.expected, name),
         ) && edit.mentions.every((line) => count(candidate, line) === 1);
+    // A W or X file equals its reference byte for byte; nobody else edits it.
+    else if (edit.kind === "file-expression")
+      passed = files[edit.file] === project.expectedFiles[edit.file];
     // A U namespace and its caller stand as in the reference.
     else if (edit.kind === "prune")
       passed =
@@ -385,7 +419,9 @@ export function gradeSharedChecksum(project, candidate) {
       .map(({ id }) => id),
   }));
   return {
-    exact: candidate === project.expected,
+    exact:
+      candidate === project.expected &&
+      Object.entries(project.expectedFiles ?? {}).every(([name, text]) => files[name] === text),
     tasks,
     edits: [...checks.values()],
     passed: tasks.filter(({ passed }) => passed).length,
@@ -438,6 +474,7 @@ export async function runChecksumShared(
   const workspace = path.join(output, "workspace");
   await mkdir(workspace, { mode: 0o700 });
   await writeFile(path.join(workspace, "main.cpp"), project.start);
+  await writeProjectFiles(workspace, project.startFiles);
   await writeFile(path.join(output, "start-main.cpp"), project.start);
   await writeFile(path.join(output, "expected-main.cpp"), project.expected);
 
@@ -531,9 +568,11 @@ export async function runChecksumShared(
   }
   const minutes = (Date.now() - started) / 60000;
   const main = await readFile(path.join(workspace, "main.cpp"), "utf8");
+  const names = Object.keys(project.startFiles);
+  const own = await readProjectFiles(workspace, names);
   const files = (await readdir(workspace)).sort();
-  const grade = gradeSharedChecksum(project, main);
-  const run = await buildAndRun(path.join(output, "build"), main, signal);
+  const grade = gradeSharedChecksum(project, main, own);
+  const run = await buildAndRun(path.join(output, "build"), main, signal, own);
   const total = { input: 0, output: 0, cacheRead: 0, cost: 0 };
   for (const entry of usage) for (const key of Object.keys(total)) total[key] += entry?.[key] ?? 0;
   const byId = new Map(grade.tasks.map((task) => [task.id, task]));
@@ -552,7 +591,7 @@ export async function runChecksumShared(
     built: run.built,
     answer: run.output,
     expectedAnswer: project.answers.expected,
-    extraFiles: files.filter((file) => file !== "main.cpp"),
+    extraFiles: files.filter((file) => file !== "main.cpp" && !names.includes(file)),
     waves,
     usage: total,
     tasks: rows.map((row) => ({

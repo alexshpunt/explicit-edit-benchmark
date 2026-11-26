@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -19,7 +19,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJKLMNOPQRSTUV";
+const ALL = "ABCDEFGHIJKLMNOPQRSTUVWX";
 const CONFIGS = [
   {},
   { clusters: ALL },
@@ -31,11 +31,17 @@ const CONFIGS = [
 ];
 const atoms = (project) => project.tasks.flatMap((task) => task.parts ?? [task]);
 
-/** Build one main.cpp with warnings as errors and return what it prints. */
-async function output(root, name, source, signal) {
-  const file = path.join(root, `${name}.cpp`),
-    binary = path.join(root, name);
+/** Build one main.cpp and the files it includes with warnings as errors and return
+ * what it prints.
+ */
+async function output(root, name, source, signal, files = {}) {
+  const directory = path.join(root, name);
+  await mkdir(directory);
+  const file = path.join(directory, "main.cpp"),
+    binary = path.join(directory, "program");
   await writeFile(file, source);
+  for (const [included, text] of Object.entries(files))
+    await writeFile(path.join(directory, included), text);
   await exec("clang++", ["-std=c++17", "-Wall", "-Wextra", "-Werror", file, "-o", binary], {
     signal,
   });
@@ -82,12 +88,27 @@ for (const { seed, options } of [
       assert.ok(lines > 15 * edits.length && lines < 40 * edits.length, `${lines} lines`);
     else assert.ok(lines >= size.lines && lines < 1.2 * size.lines + 40 * edits.length);
     const states = [
-      { id: "start", source: project.start, answer: project.answers.start },
-      { id: "expected", source: project.expected, answer: project.answers.expected },
-      ...project.tasks.map((task) => ({ id: task.id, source: task.result, answer: task.answer })),
+      {
+        id: "start",
+        source: project.start,
+        files: project.startFiles,
+        answer: project.answers.start,
+      },
+      {
+        id: "expected",
+        source: project.expected,
+        files: project.expectedFiles,
+        answer: project.answers.expected,
+      },
+      ...project.tasks.map((task) => ({
+        id: task.id,
+        source: task.result,
+        files: task.resultFiles,
+        answer: task.answer,
+      })),
     ];
     const printed = await Promise.all(
-      states.map((state) => output(root, state.id, state.source, t.signal)),
+      states.map((state) => output(root, state.id, state.source, t.signal, state.files)),
     );
     states.forEach((state, index) => assert.equal(printed[index], `${state.answer}\n`, state.id));
     for (const task of project.tasks) {
@@ -194,6 +215,8 @@ function followInstruction(start, task) {
   }
   if (task.kind === "expression") return start.replace(task.before, task.after);
   if (task.kind === "insert") return start.replace(task.marker, task.text);
+  // A W or X edit changes its own file only; see followFiles.
+  if (task.kind === "file-expression") return start;
   // Code without comment lines and string literals; a naive follower reads them as
   // code too.
   const code = (line) =>
@@ -277,16 +300,34 @@ function followInstruction(start, task) {
   return lines.join("\n");
 }
 
+/** Follow one task's instructions for the files beside main.cpp, byte for byte, or
+ * in text mode, which writes every line ending as LF.
+ */
+function followFiles(files, task, textMode = false) {
+  const result = { ...files };
+  for (const edit of task.parts ?? [task])
+    if (edit.kind === "file-expression") {
+      const text = result[edit.file].replace(edit.before, edit.after);
+      result[edit.file] = textMode ? text.replaceAll("\r\n", "\n") : text;
+    }
+  return result;
+}
+
 test("each instruction, followed literally, gives exactly its task's result", () => {
   for (let seed = 0; seed < 50; seed++) {
     const project = generateChecksumProject(seed, CONFIGS[seed % CONFIGS.length]);
     let all = project.start;
+    let files = project.startFiles;
     for (const task of project.tasks) {
-      assert.equal(followInstruction(project.start, task), task.result, `${seed}: ${task.id}`);
+      const label = `${seed}: ${task.id}`;
+      assert.equal(followInstruction(project.start, task), task.result, label);
+      assert.deepEqual(followFiles(project.startFiles, task), task.resultFiles, label);
       assert.match(task.prompt, /^Perform only the following mechanical file edits\./);
       all = followInstruction(all, task);
+      files = followFiles(files, task);
     }
     assert.equal(all, project.expected, `${seed}: all tasks`);
+    assert.deepEqual(files, project.expectedFiles, `${seed}: all files`);
   }
 });
 
@@ -307,7 +348,8 @@ test("a trap and its control share their wording", () => {
     edit.prompt
       .replace(/"(?:[^"\\]|\\.)*"/g, "Q")
       .replace(/\d+ (occurrences|lines)/, "N $1")
-      .replace(/argument \d+/, "argument N");
+      .replace(/argument \d+/, "argument N")
+      .replace(/In \w+\.inc,/, "In F,");
   for (const cluster of Object.keys(CHECKSUM_CLUSTERS)) {
     const prompts = new Set(
       atoms(project)
@@ -400,6 +442,11 @@ test("each trap differs from its control in its one factor", () => {
         assert.equal(edit.mention.includes(`${edit.removed[0]}(`), trap, edit.id);
       // A V trap's entry calls its helper without the namespace.
       if (edit.cluster === "V") assert.equal(!start.includes(`${edit.helper}(`), trap, edit.id);
+      // A W trap's file ends its lines with CRLF; an X trap's starts with a byte
+      // order mark.
+      const own = project.startFiles[edit.file];
+      if (edit.cluster === "W") assert.equal(own.includes("\r\n"), trap, edit.id);
+      if (edit.cluster === "X") assert.equal(own.startsWith("\ufeff"), trap, edit.id);
       // A C trap scans for a brace character.
       if (edit.cluster === "C")
         assert.equal(/'[{}]'/.test(definitionText(start, edit.name)), trap, edit.id);
@@ -496,9 +543,9 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J, K, L, N and P to V edits stand in gaps of their own, and M edits
+        // J, K, L, N and P to X edits stand in gaps of their own, and M edits
         // everywhere.
-        const edits = all.filter(({ cluster }) => !"JKLMNPQRSTUV".includes(cluster));
+        const edits = all.filter(({ cluster }) => !"JKLMNPQRSTUVWX".includes(cluster));
         if (edits.length === 0) continue;
         // An O definition holds an empty line, so it spans two paragraphs.
         const reach = zoneReach + edits.filter(({ cluster }) => cluster === "O").length;
@@ -547,22 +594,38 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   assert.deepEqual(
     { exact: true, passed: project.tasks.length, damaged: [], extra: [] },
     (({ exact, passed, damaged, extra }) => ({ exact, passed, damaged, extra }))(
-      gradeSharedChecksum(project, project.expected),
+      gradeSharedChecksum(project, project.expected, project.expectedFiles),
     ),
   );
-  assert.equal(gradeSharedChecksum(project, project.start).passed, 0);
+  assert.equal(gradeSharedChecksum(project, project.start, project.startFiles).passed, 0);
   let partial = project.start;
+  let partialFiles = project.startFiles;
   const done = project.tasks.slice(0, 8);
-  for (const task of done) partial = followInstruction(partial, task);
-  const grade = gradeSharedChecksum(project, partial);
+  for (const task of done) {
+    partial = followInstruction(partial, task);
+    partialFiles = followFiles(partialFiles, task);
+  }
+  const grade = gradeSharedChecksum(project, partial, partialFiles);
   assert.deepEqual(
     grade.tasks.filter(({ passed }) => passed).map(({ id }) => id),
     done.map(({ id }) => id),
   );
   const find = (cluster, variant) =>
     project.tasks.find((task) => task.cluster === cluster && task.variant === variant);
-  const failed = (candidate, task) =>
-    !gradeSharedChecksum(project, candidate).tasks.find(({ id }) => id === task.id).passed;
+  const failed = (candidate, task, files = project.expectedFiles) =>
+    !gradeSharedChecksum(project, candidate, files).tasks.find(({ id }) => id === task.id).passed;
+  // A W edit written back in text mode loses the file's CRLF line endings, and an X
+  // edit that drops the byte order mark changes the file too: both fail their traps.
+  // The same writers pass the controls.
+  for (const variant of ["trap", "control"]) {
+    const lines = find("W", variant);
+    const text = followFiles(project.startFiles, lines, true);
+    assert.equal(failed(project.start, lines, text), variant === "trap");
+    const mark = find("X", variant);
+    const stripped = followFiles(project.startFiles, mark);
+    stripped[mark.file] = stripped[mark.file].replace(/^\ufeff/, "");
+    assert.equal(failed(project.start, mark, stripped), variant === "trap");
+  }
 
   // A writer that drops a whole definition loses it without touching its neighbours.
   const lost = find("E", "control");

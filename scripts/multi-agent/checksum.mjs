@@ -60,6 +60,10 @@ if (command === "show") {
   await mkdir(target, { mode: 0o700 });
   await writeFile(path.join(target, "main.cpp"), project.start);
   await writeFile(path.join(target, "expected-main.cpp"), project.expected);
+  for (const [name, text] of Object.entries(project.startFiles))
+    await writeFile(path.join(target, name), text);
+  for (const [name, text] of Object.entries(project.expectedFiles))
+    await writeFile(path.join(target, `expected-${name}`), text);
   const tasks = project.tasks.map(
     (task, index) =>
       `## ${index + 1}. ${task.id}${task.zone ? ` (zone ${task.zone})` : ""}\n\n${task.prompt}\n`,
@@ -76,16 +80,18 @@ if (command === "show") {
   );
 } else if (command === "shared-rescore") {
   // Grade a saved shared run again with the current grader, without model calls.
-  const { gradeSharedChecksum } =
+  const { gradeSharedChecksum, readProjectFiles } =
     await import("../../src/suites/explicit-edit-multi-agent/checksum-run.mjs");
   const { generateChecksumProject } =
     await import("../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs");
   const saved = JSON.parse(await readFile(path.join(target, "summary.json"), "utf8"));
   assert.equal(saved.identity.seed, seed, "The run belongs to another seed");
   const project = generateChecksumProject(seed, saved.identity.counts);
+  const workspace = path.join(target, "workspace");
   const grade = gradeSharedChecksum(
     project,
-    await readFile(path.join(target, "workspace", "main.cpp"), "utf8"),
+    await readFile(path.join(workspace, "main.cpp"), "utf8"),
+    await readProjectFiles(workspace, Object.keys(project.startFiles)),
   );
   const { tasks, ...rest } = grade;
   console.log(JSON.stringify(rest));

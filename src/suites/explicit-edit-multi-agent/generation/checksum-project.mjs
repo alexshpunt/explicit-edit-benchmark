@@ -36,6 +36,8 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   T: "rename in code only",
   U: "unused functions",
   V: "unqualified call",
+  W: "line endings",
+  X: "byte order mark",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -249,6 +251,8 @@ function instruction(edit) {
     return `In main.cpp, rename the function ${q(edit.name)} to ${q(edit.newName)}: change its prototype, its definition and every call of it. Comments and string literals that mention the function stay unchanged.`;
   if (edit.kind === "prune")
     return `In main.cpp, delete the complete definition of every function in the namespace ${q(edit.namespace)} that no code calls, and the empty line that directly followed each deleted definition. Keep the namespace and the functions that are called.`;
+  if (edit.kind === "file-expression")
+    return `In ${edit.file}, replace its one occurrence of ${q(edit.before)} with ${q(edit.after)}.`;
   if (edit.kind === "move")
     return `In main.cpp, move the complete definition of the function ${q(signature(edit.name))} to the placeholder line ${q(edit.marker)}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`;
   if (edit.kind === "insert")
@@ -314,6 +318,9 @@ const KIND = {
   T: "function-rename",
   U: "prune",
   V: "prune",
+  // W and X replace an expression in a file of its own that main.cpp includes.
+  W: "file-expression",
+  X: "file-expression",
 };
 // Namespace names of U and V edits.
 const PRUNED_NAMESPACES = [
@@ -584,7 +591,10 @@ export function generateChecksumProject(seed, options = {}) {
     // T stands in two gaps, U and V with their callers in one.
     2 * ofCluster("T").length +
     ofCluster("U").length +
-    ofCluster("V").length;
+    ofCluster("V").length +
+    // A W or X file's include line stands in a gap of its own.
+    ofCluster("W").length +
+    ofCluster("X").length;
   const lengths = [];
   while (
     lengths.length <
@@ -999,6 +1009,21 @@ export function generateChecksumProject(seed, options = {}) {
     ]);
   }
 
+  // W and X: an expression to replace in a function that stands in a file of its
+  // own, which main.cpp includes in the function's place. A W trap's file ends its
+  // lines with CRLF and an X trap's file starts with a byte order mark; a control's
+  // file has neither. A script that reads and writes the file in text mode turns
+  // CRLF into LF without a word.
+  for (const edit of [...ofCluster("W"), ...ofCluster("X")]) {
+    const entry = build(take(functionNames), ["plain", { scoped: edit }, "plain"], {
+      prototyped: false,
+    });
+    entry.file = `${entry.name}.inc`;
+    entry.encoding = edit.variant === "control" ? "plain" : edit.cluster === "W" ? "crlf" : "bom";
+    edit.file = entry.file;
+    pairs.push([{ include: entry.name }]);
+  }
+
   // H: functions to delete; a trap has a prototype. Nothing calls them, so the
   // file builds without them.
   for (const edit of ofCluster("H")) {
@@ -1208,7 +1233,7 @@ export function generateChecksumProject(seed, options = {}) {
     for (const edit of done.flatMap((task) => task.parts ?? [task])) {
       if (edit.kind === "rename") names.set(edit.name, edit.newName);
       if (edit.kind === "function-rename") calls.set(edit.name, edit.newName);
-      if (edit.kind === "expression" || edit.kind === "scoped-replace")
+      if (["expression", "scoped-replace", "file-expression"].includes(edit.kind))
         factors.set(edit.statement, edit.newFactor);
       if (edit.kind === "local-rename") locals.set(edit.name, edit);
       if (["delete", "namespace-delete", "commented-delete"].includes(edit.kind))
@@ -1253,7 +1278,12 @@ export function generateChecksumProject(seed, options = {}) {
       prototypes.map(({ name }) => `${signature(call(name))};`).join("\n"),
       ...order.map(
         (block) =>
-          block.marker ?? block.text ?? block.raw ?? definition(byName.get(block.function)),
+          block.marker ??
+          block.text ??
+          block.raw ??
+          (block.include
+            ? `#include "${byName.get(block.include).file}"`
+            : definition(byName.get(block.function))),
       ),
       [
         "int main() {",
@@ -1267,11 +1297,27 @@ export function generateChecksumProject(seed, options = {}) {
         "}",
       ].join("\n"),
     ];
-    return sections.join("\n\n") + "\n";
+    // Each included file holds one definition, in the file's own encoding.
+    const files = Object.fromEntries(
+      layout
+        .filter((block) => block.include)
+        .map((block) => {
+          const entry = byName.get(block.include);
+          const text = definition(entry) + "\n";
+          const encoded =
+            entry.encoding === "crlf"
+              ? text.replaceAll("\n", "\r\n")
+              : entry.encoding === "bom"
+                ? `\ufeff${text}`
+                : text;
+          return [entry.file, encoded];
+        }),
+    );
+    return { main: sections.join("\n\n") + "\n", files };
   };
 
-  const start = render([]);
-  const expected = render(edits);
+  const { main: start, files: startFiles } = render([]);
+  const { main: expected, files: expectedFiles } = render(edits);
   const occurrences = (text) => start.split(text).length - 1;
   for (const edit of edits) {
     if (edit.kind === "rename") {
@@ -1378,6 +1424,18 @@ export function generateChecksumProject(seed, options = {}) {
       if (edit.cluster === "U") assert.equal(occurrences(edit.mention), 1, `${edit.id} mention`);
       assert.equal(occurrences(`namespace ${edit.namespace} {`), 1, `${edit.id} namespace`);
     }
+    if (edit.kind === "file-expression") {
+      // The expression stands once in its own file and nowhere else; only a W trap's
+      // file holds a carriage return, and only an X trap's a byte order mark.
+      const own = startFiles[edit.file];
+      assert.equal(own.split(edit.before).length, 2, `${edit.id} expression is not unique`);
+      assert.equal(occurrences(edit.before), 0, `${edit.id} expression in main.cpp`);
+      assert.equal(occurrences(`#include "${edit.file}"`), 1, `${edit.id} include`);
+      assert.equal(own.includes("\r"), trap && edit.cluster === "W", `${edit.id} line endings`);
+      assert.ok(!own.includes("\r") || !/[^\r]\n/.test(own), `${edit.id} mixed line endings`);
+      assert.equal(own.startsWith("\ufeff"), trap && edit.cluster === "X", `${edit.id} mark`);
+      assert.equal(expectedFiles[edit.file], own.replace(edit.before, edit.after), edit.id);
+    }
     if (edit.kind === "commented-delete") {
       assert.equal(occurrences(header(edit.name)), 1, `${edit.id} header is not unique`);
       assert.equal(occurrences(`${signature(edit.name)};`), 0, `${edit.id} prototype`);
@@ -1451,21 +1509,27 @@ export function generateChecksumProject(seed, options = {}) {
     new Map(
       done
         .flatMap((task) => task.parts ?? [task])
-        .filter(({ kind }) => kind === "expression" || kind === "scoped-replace")
+        .filter(({ kind }) => ["expression", "scoped-replace", "file-expression"].includes(kind))
         .map((edit) => [edit.statement, edit.newFactor]),
     );
-  const result = tasks.map((task) => ({
-    ...task,
-    result: render([task]),
-    answer: evaluate(factorsOf([task])),
-  }));
-  for (const task of result) assert.notEqual(task.result, start, `${task.id} changes nothing`);
+  const result = tasks.map((task) => {
+    const { main, files } = render([task]);
+    return { ...task, result: main, resultFiles: files, answer: evaluate(factorsOf([task])) };
+  });
+  for (const task of result)
+    assert.ok(
+      task.result !== start || JSON.stringify(task.resultFiles) !== JSON.stringify(startFiles),
+      `${task.id} changes nothing`,
+    );
   return {
     version: CHECKSUM_PROJECT_VERSION,
     seed,
     counts,
     start,
     expected,
+    // Files beside main.cpp, by name: their start text and their reference.
+    startFiles,
+    expectedFiles,
     answers: { start: startAnswer, expected: evaluate(factorsOf(tasks)) },
     zones: zones.length,
     tasks: result,
