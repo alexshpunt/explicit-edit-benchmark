@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { chunkModelDrivers } from "./execution/chunk-model-drivers.mjs";
 import { runAgentQueue } from "./execution/fresh-agent-queue.mjs";
@@ -218,11 +219,16 @@ export async function runChecksumIsolated(
       tasks: [task],
     };
     const grade = main === null ? null : gradeSharedChecksum(reference, main, own);
+    const status = results.get(task.id)?.status ?? rows.get(task.id)?.status ?? "not-run";
     tasks.push({
       ...rows.get(task.id),
       cluster: task.cluster,
       variant: task.variant,
-      status: results.get(task.id)?.status ?? rows.get(task.id)?.status ?? "not-run",
+      status,
+      // Why a task with a failed edit failed; see isolatedFailure.
+      failure: grade?.tasks[0].passed
+        ? undefined
+        : isolatedFailure(project, task, status, main, own),
       edits:
         grade?.edits ??
         (task.parts ?? [task]).map(({ id, cluster, variant }) => ({
@@ -276,6 +282,51 @@ export function sharedPrompt(task) {
 
 /** The paragraphs of a main.cpp: prototypes, each definition or slot, and main. */
 const blocks = (text) => text.replace(/\n$/, "").split("\n\n");
+
+/** Why an isolated task failed: the provider or the deadline broke its delivery off,
+ * main.cpp is gone, or the kind that failureKind finds in its workspace.
+ */
+export function isolatedFailure(project, task, status, main, files) {
+  if (status === "provider-failure" || status === "timed-out") return status;
+  if (main === null) return "no-main";
+  const reference = {
+    start: project.start,
+    result: task.result,
+    startFiles: project.startFiles,
+    resultFiles: task.resultFiles,
+  };
+  // The edit's own checks failed although the bytes equal the reference: this does
+  // not happen, but the kind must name something.
+  return failureKind(reference, main, files) ?? "wrong-own-text";
+}
+
+/** Why one task's result differs from its reference, judged from the start, the
+ * reference and the result alone, without the agent's trace:
+ * - "not-done": main.cpp and the files beside it are as at the start;
+ * - "touched-other-text": a paragraph that the task must leave as it is, in place,
+ *   is lost, changed, duplicated or moved, as when an agent edits a look-alike of its
+ *   target or cuts a definition at the wrong line;
+ * - "wrong-own-text": everything else is in place, but the task's own text differs
+ *   from the reference, such as an escape, a line ending or a byte order mark.
+ * A result that equals the reference gives undefined.
+ */
+export function failureKind(reference, candidate, files = {}) {
+  const names = Object.keys(reference.startFiles ?? {});
+  const filesAt = (state) => names.every((name) => files[name] === state[name]);
+  if (candidate === reference.result && filesAt(reference.resultFiles)) return undefined;
+  if (candidate === reference.start && filesAt(reference.startFiles)) return "not-done";
+  const start = blocks(reference.start),
+    result = blocks(reference.result);
+  const inStart = new Set(start),
+    inResult = new Set(result);
+  // The paragraphs the task keeps, in their order: before and after the task they are
+  // the same text, and only a move changes where its own paragraph stands.
+  const kept = (list) =>
+    list.filter((block) => inStart.has(block) && inResult.has(block)).join("\0");
+  const own = kept(blocks(candidate));
+  if (own !== kept(result) && own !== kept(start)) return "touched-other-text";
+  return "wrong-own-text";
+}
 
 /** The text of a namespace from its opening line to its closing line, or undefined. */
 function namespaceText(text, name) {
@@ -585,6 +636,7 @@ export async function runChecksumShared(
   const drivers = chunkModelDrivers(path.join(output, "agents"), workspace, config, "", {
     sharedSandbox,
   });
+  const names = Object.keys(project.startFiles);
   const usage = [];
   const counted = new Set();
   const count = (driver) => {
@@ -646,6 +698,14 @@ export async function runChecksumShared(
           if (error?.category === "provider_failure") row.status = "provider-failure";
         }
         row.seconds = Number(((Date.now() - begin) / 1000).toFixed(1));
+        // The task's own checks on the file as its agent left it: an edit that passes
+        // here and fails at the end was lost to a later write of another agent.
+        const state = await settledState(workspace, names);
+        row.passedAtFinish = gradeSharedChecksum(
+          { ...project, tasks: [task] },
+          state.main,
+          state.files,
+        ).tasks[0].passed;
         return { status: row.status };
       },
       async onClosed(driver) {
@@ -665,7 +725,6 @@ export async function runChecksumShared(
   const minutes = (Date.now() - started) / 60000;
   const ordered = project.tasks.flatMap((task) => (rows.has(task.id) ? [rows.get(task.id)] : []));
   const main = await readFile(path.join(workspace, "main.cpp"), "utf8");
-  const names = Object.keys(project.startFiles);
   const own = await readProjectFiles(workspace, names);
   const files = (await readdir(workspace)).sort();
   const grade = gradeSharedChecksum(project, main, own);
@@ -703,6 +762,7 @@ export async function runChecksumShared(
       ...row,
       passed: byId.get(row.id).passed,
       failedEdits: byId.get(row.id).failedEdits,
+      failure: byId.get(row.id).passed ? undefined : sharedFailure(row),
     })),
   };
   await writeFile(path.join(output, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
@@ -710,6 +770,36 @@ export async function runChecksumShared(
     mode: 0o600,
   });
   return summary;
+}
+
+/** Why a shared task failed at the end: the provider or the deadline broke its
+ * delivery off; its edit passed on the file as its agent left it and a later write
+ * of another agent undid it ("lost-later"); or it failed already then
+ * ("failed-at-finish").
+ */
+export function sharedFailure(row) {
+  if (row.status === "provider-failure" || row.status === "timed-out") return row.status;
+  // Runs before version 2 of the pool did not grade the file at a task's finish.
+  if (row.passedAtFinish === undefined) return "unknown";
+  return row.passedAtFinish ? "lost-later" : "failed-at-finish";
+}
+
+/** main.cpp and the files beside it, read until two reads a moment apart agree, so a
+ * read does not land in the middle of an agent's write.
+ */
+async function settledState(workspace, names) {
+  const read = async () => ({
+    main: await readFile(path.join(workspace, "main.cpp"), "utf8").catch(() => ""),
+    files: await readProjectFiles(workspace, names),
+  });
+  let last = await read();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await sleep(50);
+    const next = await read();
+    if (JSON.stringify(next) === JSON.stringify(last)) return next;
+    last = next;
+  }
+  return last;
 }
 
 /** The two scores of one observation: the isolated run of a seed's tasks, which
@@ -723,22 +813,39 @@ export function compareChecksumRuns(isolated, shared) {
   for (const key of ["project", "seed", "harness", "model", "thinking"])
     assert.deepEqual(isolated.identity[key], shared.identity[key], `The runs differ in ${key}`);
   assert.deepEqual(isolated.identity.counts, shared.identity.counts, "The runs differ in tasks");
-  const alone = isolated.tasks.flatMap((row) => row.edits);
-  const crowd = new Map(shared.tasks.map((row) => [row.id, row]));
-  const together = isolated.tasks.flatMap((row) =>
+  // Each failed edit carries why its task failed; see isolatedFailure and
+  // sharedFailure.
+  const alone = isolated.tasks.flatMap((row) =>
     row.edits.map((edit) => ({
       ...edit,
-      passed: crowd.has(row.id) && !crowd.get(row.id).failedEdits.includes(edit.id),
+      kind: edit.passed ? undefined : (row.failure ?? "unknown"),
     })),
   );
+  const crowd = new Map(shared.tasks.map((row) => [row.id, row]));
+  const together = isolated.tasks.flatMap((row) =>
+    row.edits.map((edit) => {
+      const own = crowd.get(row.id);
+      const passed = own !== undefined && !own.failedEdits.includes(edit.id);
+      return {
+        ...edit,
+        passed,
+        kind: passed ? undefined : own === undefined ? "not-run" : sharedFailure(own),
+      };
+    }),
+  );
+  const tally = (edits) => {
+    const counts = {};
+    for (const { kind } of edits) if (kind) counts[kind] = (counts[kind] ?? 0) + 1;
+    return counts;
+  };
   const score = (edits) => ({
     passed: edits.filter(({ passed }) => passed).length,
     total: edits.length,
     traps: variantTotals(edits, "trap"),
     controls: variantTotals(edits, "control"),
   });
-  const passedAlone = new Map(alone.map((edit) => [edit.id, edit.passed]));
-  const label = ({ id, cluster, variant }) => ({ id, cluster, variant });
+  const aloneById = new Map(alone.map((edit) => [edit.id, edit]));
+  const label = ({ id, cluster, variant, kind }) => ({ id, cluster, variant, kind });
   const crowdClusters = clusterSummary(together);
   return {
     project: isolated.identity.project,
@@ -765,8 +872,17 @@ export function compareChecksumRuns(isolated, shared) {
         { isolated: summary, shared: crowdClusters[cluster] },
       ]),
     ),
-    lostInCrowd: together.filter((edit) => !edit.passed && passedAlone.get(edit.id)).map(label),
-    gainedInCrowd: together.filter((edit) => edit.passed && !passedAlone.get(edit.id)).map(label),
+    // Failed edits by why they failed, in each run.
+    failures: { isolated: tally(alone), shared: tally(together) },
+    failedAlone: alone.filter((edit) => !edit.passed).map(label),
+    // An edit lost in the crowd carries its shared kind, one passed only in the crowd
+    // its isolated kind.
+    lostInCrowd: together
+      .filter((edit) => !edit.passed && aloneById.get(edit.id).passed)
+      .map(label),
+    gainedInCrowd: together
+      .filter((edit) => edit.passed && !aloneById.get(edit.id).passed)
+      .map((edit) => label(aloneById.get(edit.id))),
   };
 }
 

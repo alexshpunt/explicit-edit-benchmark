@@ -15,6 +15,7 @@ import {
 import {
   clusterSummary,
   compareChecksumRuns,
+  failureKind,
   gradeSharedChecksum,
   sharedPrompt,
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
@@ -871,6 +872,31 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   const raw = find("O", "trap");
   const halfway = blind(project.start, raw);
   assert.ok(halfway.includes(`}\n\n)";`) && failed(halfway, raw));
+  // Why a result failed follows from the start, the reference and the result: the
+  // blind script touched text that its task keeps; a file written in text mode and
+  // supplied text with a lost escape got only their own text wrong; and an agent that
+  // did nothing left everything as at the start.
+  const reference = (task) => ({
+    start: project.start,
+    result: task.result,
+    startFiles: project.startFiles,
+    resultFiles: task.resultFiles,
+  });
+  const kind = (task, candidate, files = project.startFiles) =>
+    failureKind(reference(task), candidate, files);
+  for (const task of [copied, raw, find("B", "trap"), find("H", "trap")])
+    assert.equal(kind(task, blind(project.start, task)), "touched-other-text", task.id);
+  const crlf = find("W", "trap");
+  assert.equal(
+    kind(crlf, project.start, followFiles(project.startFiles, crlf, true)),
+    "wrong-own-text",
+  );
+  const escaped = find("D", "trap");
+  const unescaped = escaped.result.replace(String.raw`\\`, "\\");
+  assert.notEqual(unescaped, escaped.result);
+  assert.equal(kind(escaped, unescaped), "wrong-own-text");
+  assert.equal(kind(escaped, project.start), "not-done");
+  assert.equal(kind(escaped, escaped.result, escaped.resultFiles), undefined);
   // The same scripts handle the controls.
   for (const control of [find("N", "control"), find("O", "control")])
     assert.equal(blind(project.start, control), control.result);
@@ -922,16 +948,17 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     counts: {},
     agents: 25,
   };
-  const row = (id, cluster, variant, passed) => ({
+  const row = (id, cluster, variant, passed, failure) => ({
     id,
     edits: [{ id, cluster, variant, passed }],
+    failure,
   });
   const isolated = {
     identity,
     tasks: [
-      row("edit-01", "B", "trap", false),
+      row("edit-01", "B", "trap", false, "touched-other-text"),
       row("edit-02", "T", "control", true),
-      row("edit-03", "I", "trap", false),
+      row("edit-03", "I", "trap", false, "touched-other-text"),
     ],
   };
   // The B trap fails in both runs, the T control only in the crowd and the I trap
@@ -943,10 +970,11 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     expectedAnswer: "2",
     damaged: ["x"],
     collateral: ["x"],
+    // The T control passed when its agent finished and was lost to a later write.
     tasks: [
-      { id: "edit-01", failedEdits: ["edit-01"] },
-      { id: "edit-02", failedEdits: ["edit-02"] },
-      { id: "edit-03", failedEdits: [] },
+      { id: "edit-01", failedEdits: ["edit-01"], passedAtFinish: false },
+      { id: "edit-02", failedEdits: ["edit-02"], passedAtFinish: true },
+      { id: "edit-03", failedEdits: [], passedAtFinish: true },
     ],
   };
   const score = compareChecksumRuns(isolated, shared);
@@ -973,8 +1001,16 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     isolated: { trap: { passed: 0, total: 0 }, control: { passed: 1, total: 1 } },
     shared: { trap: { passed: 0, total: 0 }, control: { passed: 0, total: 1 } },
   });
-  assert.deepEqual(score.lostInCrowd, [{ id: "edit-02", cluster: "T", variant: "control" }]);
-  assert.deepEqual(score.gainedInCrowd, [{ id: "edit-03", cluster: "I", variant: "trap" }]);
+  assert.deepEqual(score.failures, {
+    isolated: { "touched-other-text": 2 },
+    shared: { "failed-at-finish": 1, "lost-later": 1 },
+  });
+  assert.deepEqual(score.lostInCrowd, [
+    { id: "edit-02", cluster: "T", variant: "control", kind: "lost-later" },
+  ]);
+  assert.deepEqual(score.gainedInCrowd, [
+    { id: "edit-03", cluster: "I", variant: "trap", kind: "touched-other-text" },
+  ]);
   // Runs of another model are not one observation.
   const other = { ...shared, identity: { ...identity, model: "other" } };
   assert.throws(() => compareChecksumRuns(isolated, other), /model/);

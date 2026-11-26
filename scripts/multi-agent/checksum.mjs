@@ -106,7 +106,7 @@ if (command === "show") {
   console.log(JSON.stringify(rest));
   for (const task of tasks.filter(({ passed }) => !passed)) console.log(`FAIL ${task.id}`);
 } else if (command === "compare") {
-  const { compareChecksumRuns, gradeSharedChecksum, readProjectFiles } =
+  const { compareChecksumRuns, gradeSharedChecksum, isolatedFailure, readProjectFiles } =
     await import("../../src/suites/explicit-edit-multi-agent/checksum-run.mjs");
   const { generateChecksumProject } =
     await import("../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs");
@@ -129,6 +129,21 @@ if (command === "show") {
     collateral: grade.collateral,
     tasks: shared.tasks.map((row) => ({ ...row, failedEdits: failed.get(row.id) })),
   };
+  // An isolated run from before failure kinds gets them from its saved workspaces.
+  const names = Object.keys(project.startFiles);
+  for (const row of isolated.tasks)
+    if (row.failure === undefined && row.edits.some(({ passed }) => !passed)) {
+      const own = path.join(target, "tasks", row.id, "workspace");
+      const main = await readFile(path.join(own, "main.cpp"), "utf8").catch(() => null);
+      const task = project.tasks.find(({ id }) => id === row.id);
+      row.failure = isolatedFailure(
+        project,
+        task,
+        row.status,
+        main,
+        await readProjectFiles(own, names),
+      );
+    }
   const score = compareChecksumRuns(isolated, regraded);
   const part = ({ passed, total }) => `${passed} of ${total}`;
   const line = (name, own) =>
@@ -153,9 +168,18 @@ if (command === "show") {
   for (const [cluster, { isolated: alone, shared: crowd }] of Object.entries(score.byCluster))
     console.log(`${cluster.padEnd(8)} ${cell(alone).padEnd(22)} ${cell(crowd)}`);
   const list = (edits) =>
-    edits.map(({ id, cluster, variant }) => `${id} (${cluster} ${variant})`).join(", ") || "none";
+    edits
+      .map(({ id, cluster, variant, kind }) => `${id} (${cluster} ${variant}, ${kind})`)
+      .join(", ") || "none";
+  const kinds = (counts) =>
+    Object.entries(counts)
+      .map(([kind, count]) => `${kind} ${count}`)
+      .join(", ") || "none";
+  console.log(`Why edits failed alone: ${kinds(score.failures.isolated)}`);
+  console.log(`Why edits failed in the crowd: ${kinds(score.failures.shared)}`);
+  console.log(`Failed alone: ${list(score.failedAlone)}`);
   console.log(`Lost in the crowd: ${list(score.lostInCrowd)}`);
-  console.log(`Passed only in the crowd: ${list(score.gainedInCrowd)}`);
+  console.log(`Passed only in the crowd, with why they failed alone: ${list(score.gainedInCrowd)}`);
 } else if (command === "isolated-run" || command === "shared-run") {
   assert.equal(
     values["allow-model-calls"],
