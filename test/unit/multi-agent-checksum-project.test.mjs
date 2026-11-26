@@ -19,7 +19,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJKLM";
+const ALL = "ABCDEFGHIJKLMNO";
 const CONFIGS = [
   {},
   { clusters: ALL },
@@ -99,12 +99,28 @@ for (const { seed, options } of [
 }
 
 /** The lines of the definition that starts at `first`, found by counting braces
- * outside character and string literals, or inside them too when `naive`.
+ * outside character, string and raw string literals, or inside them too when `naive`.
  */
 function definitionLength(lines, first, naive = false) {
   let depth = 0;
+  let raw = false;
   for (let index = first; index < lines.length; index++) {
-    const code = naive ? lines[index] : lines[index].replace(/'(?:\\.|[^'])'|"(?:\\.|[^"])*"/g, "");
+    let code = lines[index];
+    if (!naive) {
+      // A raw string literal that opens on one line and closes on a later one.
+      if (raw) {
+        const close = code.indexOf(')"');
+        if (close < 0) continue;
+        code = code.slice(close + 2);
+        raw = false;
+      }
+      const open = code.indexOf('R"(');
+      if (open >= 0 && !code.includes(')"', open)) {
+        code = code.slice(0, open);
+        raw = true;
+      }
+      code = code.replace(/'(?:\\.|[^'])'|"(?:\\.|[^"])*"/g, "");
+    }
     for (const character of code) depth += character === "{" ? 1 : character === "}" ? -1 : 0;
     if (depth === 0) return index - first + 1;
   }
@@ -236,6 +252,11 @@ test("each trap differs from its control in its one factor", () => {
         assert.ok(trap ? [own - 1, own - 2].includes(slot) : [own + 1, own + 2].includes(slot));
       }
       if (edit.cluster === "M") assert.equal(edit.occurrences, trap ? 32 : 3, edit.id);
+      // An N trap's commented-out copy has its signature; an O trap's literal holds a
+      // lone closing brace.
+      if (edit.cluster === "N")
+        assert.equal(edit.copy.includes(`// long long ${edit.name}(`), trap, edit.id);
+      if (edit.cluster === "O") assert.equal(edit.full.includes('R"(\n}\n\n)"'), trap, edit.id);
       // A C trap scans for a brace character.
       if (edit.cluster === "C")
         assert.equal(/'[{}]'/.test(definitionText(start, edit.name)), trap, edit.id);
@@ -305,7 +326,7 @@ test("density puts the edits of one zone next to each other", () => {
   ]) {
     const { density, edits: perTask = 1 } = options;
     // Paragraphs a zone can span: its host and one per moved or inserted function.
-    const reach = density * perTask;
+    const zoneReach = density * perTask;
     for (let seed = 0; seed < 10; seed++) {
       const project = generateChecksumProject(seed, options);
       const paragraphs = project.start.split("\n\n");
@@ -330,9 +351,11 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J, K and L edits stand in gaps of their own, and M edits everywhere.
-        const edits = all.filter(({ cluster }) => !"JKLM".includes(cluster));
+        // J, K, L and N edits stand in gaps of their own, and M edits everywhere.
+        const edits = all.filter(({ cluster }) => !"JKLMN".includes(cluster));
         if (edits.length === 0) continue;
+        // An O definition holds an empty line, so it spans two paragraphs.
+        const reach = zoneReach + edits.filter(({ cluster }) => cluster === "O").length;
         // The host: the one function that holds every A use and E site of the zone.
         let hosts = null;
         const near = [];
@@ -497,6 +520,33 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   // An L deletion that leaves the comment lines fails.
   const commented = project.tasks.find((task) => task.kind === "commented-delete");
   assert.ok(failed(followInstruction(project.start, { ...commented, kind: "delete" }), commented));
+  // A blind script that takes the first match of the signature and counts braces
+  // from there, as Terra's Bash agents do, deletes an N trap's commented-out copy and
+  // cuts an O trap's definition inside its literal; both fail.
+  const blind = (text, task) => {
+    const at = text.indexOf(`long long ${task.name}(long long value)`);
+    const start = text.lastIndexOf("\n", at) + 1;
+    let depth = 0;
+    let end = text.indexOf("{", at);
+    for (; ; end++) {
+      depth += text[end] === "{" ? 1 : text[end] === "}" ? -1 : 0;
+      if (depth === 0) break;
+    }
+    assert.equal(text.slice(end + 1, end + 3), "\n\n");
+    const cut = text.slice(start, end + 1);
+    const rest = text.slice(0, start) + text.slice(end + 3);
+    return task.kind === "move" ? rest.replace(task.marker, cut) : rest;
+  };
+  const copied = find("N", "trap");
+  const uncommented = blind(project.start, copied);
+  assert.ok(!uncommented.includes(copied.copy.split("\n")[1]));
+  assert.ok(failed(uncommented, copied));
+  const raw = find("O", "trap");
+  const halfway = blind(project.start, raw);
+  assert.ok(halfway.includes(`}\n\n)";`) && failed(halfway, raw));
+  // The same scripts handle the controls.
+  for (const control of [find("N", "control"), find("O", "control")])
+    assert.equal(blind(project.start, control), control.result);
   // An M edit that deletes the definition too fails.
   const bulk = find("M", "trap");
   assert.ok(failed(project.expected.replace(`${bulk.definition}\n`, ""), bulk));

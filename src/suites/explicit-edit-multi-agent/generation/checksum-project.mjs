@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
  * agents of a wave edit neighbouring lines of one function at the same moment.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v6";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v7";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
@@ -27,6 +27,8 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   K: "namespace target",
   L: "shifted lines",
   M: "bulk deletion",
+  N: "commented copy",
+  O: "raw string",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -274,6 +276,8 @@ const KIND = {
   // L gives two neighbours an insert each; see generateChecksumProject.
   L: "commented-delete",
   M: "bulk-delete",
+  N: "delete",
+  O: "move",
 };
 // Namespace names of K edits: the first namespace of a pair in the file holds the
 // decoy, the second the target.
@@ -313,6 +317,8 @@ const LOCAL_NAMES = ["carry", "pivot", "tally", "stage", "inner", "accum", "blen
 const UNIQUE_LOCALS = ["bq", "bx", "bk", "bj", "bv", "bw", "bz", "by"];
 // Words in the C functions' strings.
 const LAYOUT_KINDS = ["grid", "panel", "table", "chart", "frame", "board"];
+// The note above an N function's commented-out earlier version.
+const OLD_VERSION_NOTE = "// Previous version, kept until the new one is verified:";
 
 /** Generate one project with its tasks and references. */
 export function generateChecksumProject(seed, options = {}) {
@@ -480,8 +486,13 @@ export function generateChecksumProject(seed, options = {}) {
   // and one more for each host that a higher density saves, so the file keeps its
   // size across densities.
   const moves = edits.filter(({ kind }) => kind === "move");
-  // J pairs, K namespace pairs and L groups stand in gaps of their own.
-  const ownGaps = ofCluster("J").length / 2 + ofCluster("K").length + ofCluster("L").length / 3;
+  // J pairs, K namespace pairs, L groups and N functions with their commented-out
+  // copies stand in gaps of their own.
+  const ownGaps =
+    ofCluster("J").length / 2 +
+    ofCluster("K").length +
+    ofCluster("L").length / 3 +
+    ofCluster("N").length;
   const lengths = [];
   while (
     lengths.length <
@@ -667,6 +678,61 @@ export function generateChecksumProject(seed, options = {}) {
     Object.assign(edit, { name }, supplied(name, literals));
   }
 
+  // N: functions to delete, each with a commented-out earlier version in the
+  // paragraph above it. A trap's earlier version has the same signature, so the first
+  // match of the signature is inside the comment, whose braces balance and which ends
+  // before an empty line: deleting it still builds. A control's earlier version had
+  // another name. Nothing calls these functions.
+  for (const edit of ofCluster("N")) {
+    const entry = build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false });
+    entry.uncalled = true;
+    edit.name = entry.name;
+    const old = edit.variant === "trap" ? entry.name : take(functionNames);
+    const lines = [header(old)];
+    const steps = ["a", "c", "d"].slice(0, random.integer(2, 3));
+    steps.forEach((variable, step) => {
+      const left = step === 0 ? "value" : steps[step - 1];
+      lines.push(`  long long ${variable} = (${left} * ${number()} + ${number()}) % kModulus;`);
+    });
+    lines.push(`  return ${steps.at(-1)};`, "}");
+    edit.copy = [OLD_VERSION_NOTE, ...lines.map((line) => `// ${line}`)].join("\n");
+    pairs.push([{ raw: edit.copy }, { function: entry.name }]);
+  }
+
+  // O: moved functions with a raw string literal that holds a line of its own and an
+  // empty line after it. In a trap that line is a lone closing brace, so both
+  // counting braces and taking the first lone "}" end the definition inside the
+  // literal, right before an empty line, as if it were the definition's end; a
+  // control's line is a lone "]". Nothing calls them, so the literal does not enter
+  // the checksum.
+  for (const edit of ofCluster("O")) {
+    const name = take(functionNames);
+    const closing = edit.variant === "trap" ? "}" : "]";
+    functions.push({
+      name,
+      uncalled: true,
+      body: [
+        { type: "raw", lines: ['  const char* closing = R"(', closing, "", ')";'] },
+        {
+          type: "let",
+          id: `${name}:a`,
+          variable: "a",
+          kind: "linear",
+          left: "value",
+          factor: number(),
+          offset: number(),
+        },
+        {
+          type: "raw",
+          lines: ["  for (const char* p = closing; *p != 0; ++p) a = (a * 31 + *p) % kModulus;"],
+        },
+      ],
+      result: ["a", "value"],
+      prototyped: false,
+    });
+    edit.name = name;
+  }
+
   // H: functions to delete; a trap has a prototype. Nothing calls them, so the
   // file builds without them.
   for (const edit of ofCluster("H")) {
@@ -727,7 +793,7 @@ export function generateChecksumProject(seed, options = {}) {
       random.shuffle([
         { function: hosts[index].name },
         ...zone
-          .filter(({ cluster }) => "BCGHI".includes(cluster))
+          .filter(({ cluster }) => "BCGHIO".includes(cluster))
           .map((edit) => ({ function: edit.name ?? edit.host })),
         ...zone.filter(({ cluster }) => cluster === "D").map(({ marker }) => ({ marker })),
       ]),
@@ -930,6 +996,23 @@ export function generateChecksumProject(seed, options = {}) {
       const declared = "BHI".includes(edit.cluster) && edit.variant === "trap" ? 1 : 0;
       assert.equal(occurrences(header(target)), 1, `${edit.id} header is not unique`);
       assert.equal(occurrences(`${signature(target)};`), declared, `${edit.id} prototype`);
+    }
+    if (edit.cluster === "N") {
+      // Only a trap's signature stands in the commented-out copy too.
+      assert.equal(occurrences(header(edit.name)), edit.variant === "trap" ? 2 : 1, edit.id);
+      assert.equal(occurrences(`${signature(edit.name)};`), 0, `${edit.id} prototype`);
+      assert.equal(occurrences(edit.copy), 1, `${edit.id} copy`);
+    }
+    if (edit.cluster === "O") {
+      assert.equal(occurrences(header(edit.name)), 1, `${edit.id} header is not unique`);
+      assert.equal(occurrences(`${signature(edit.name)};`), 0, `${edit.id} prototype`);
+      // The whole definition, through the line that closes it after the literal.
+      const first = expected.indexOf(`\n${header(edit.name)}`) + 1;
+      edit.full = expected.slice(
+        first,
+        expected.indexOf("\n}\n", expected.indexOf(')";', first)) + 2,
+      );
+      assert.equal(occurrences(edit.full), 1, `${edit.id} definition`);
     }
     if (edit.cluster === "K") {
       // Only a trap's signature stands in the other namespace too.

@@ -226,7 +226,15 @@ export function gradeSharedChecksum(project, candidate) {
     project.tasks
       .flatMap((task) => task.parts ?? [task])
       .filter(({ kind }) => kind === "move")
-      .map(({ name }) => `long long ${name}(long long value) {`),
+      .flatMap(({ name, full }) => [
+        `long long ${name}(long long value) {`,
+        // The later paragraphs of an O definition move with it.
+        ...(full
+          ? blocks(full)
+              .slice(1)
+              .map((block) => block.split("\n")[0])
+          : []),
+      ]),
   );
   const original = new Set(blocks(project.start ?? ""));
   const untouched = new Set(
@@ -295,10 +303,12 @@ export function gradeSharedChecksum(project, candidate) {
         own.includes(edit.after) &&
         !own.includes(edit.before);
     } else if (edit.kind === "delete")
+      // An N function's commented-out copy stays.
       passed =
         definitionText(candidate, edit.name) === undefined &&
         count(candidate, `long long ${edit.name}(long long value);`) ===
-          count(project.expected, `long long ${edit.name}(long long value);`);
+          count(project.expected, `long long ${edit.name}(long long value);`) &&
+        (edit.copy === undefined || count(candidate, edit.copy) === 1);
     // Both namespaces of a K edit stand as in the reference: the target lost its
     // definition and the other namespace kept its own.
     else if (edit.kind === "namespace-delete")
@@ -331,8 +341,11 @@ export function gradeSharedChecksum(project, candidate) {
       const variants = [(block) => block];
       if (inner && edit.variant === "trap")
         variants.push((block) => block.replace(inner.after, inner.before));
+      // An O definition holds an empty line, so its first paragraph alone does not
+      // show that the whole definition moved.
       passed =
         placed((block) => block.startsWith(`${signature} {`), edit.marker, variants) &&
+        (edit.full === undefined || count(candidate, edit.full) === 1) &&
         count(candidate, `${signature};`) === count(project.expected, `${signature};`);
     }
     checks.set(edit.id, {
