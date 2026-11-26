@@ -14,7 +14,8 @@ isolated-run gives every task to a new agent in its own copy of the start projec
 and grades each result byte for byte against that task's reference.
 shared-run starts N agents (all tasks by default) on one main.cpp, then gives them
 the tasks in waves of N at once, and grades the final file against the reference.
---clusters LETTERS picks the clusters, such as BCFG; --per-variant N sets the trap
+--clusters LETTERS picks the clusters, such as BCFG or XYZab: letters are case
+sensitive, and the clusters after Z are lowercase; --per-variant N sets the trap
 and control edits per cluster; --density N puts N edits
 in each zone of neighbouring lines; --edits N groups N edits into one composite task;
 --lines N adds functions until main.cpp has at least N lines.
@@ -60,10 +61,11 @@ if (command === "show") {
   await mkdir(target, { mode: 0o700 });
   await writeFile(path.join(target, "main.cpp"), project.start);
   await writeFile(path.join(target, "expected-main.cpp"), project.expected);
+  // Files beside main.cpp are byte strings.
   for (const [name, text] of Object.entries(project.startFiles))
-    await writeFile(path.join(target, name), text);
+    await writeFile(path.join(target, name), text, "latin1");
   for (const [name, text] of Object.entries(project.expectedFiles))
-    await writeFile(path.join(target, `expected-${name}`), text);
+    await writeFile(path.join(target, `expected-${name}`), text, "latin1");
   const tasks = project.tasks.map(
     (task, index) =>
       `## ${index + 1}. ${task.id}${task.zone ? ` (zone ${task.zone})` : ""}\n\n${task.prompt}\n`,

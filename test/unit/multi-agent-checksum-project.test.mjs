@@ -19,7 +19,9 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJKLMNOPQRSTUVWX";
+const ALL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
+// Files beside main.cpp are byte strings; an X trap's starts with this mark.
+const BOM = "\xef\xbb\xbf";
 const CONFIGS = [
   {},
   { clusters: ALL },
@@ -41,7 +43,7 @@ async function output(root, name, source, signal, files = {}) {
     binary = path.join(directory, "program");
   await writeFile(file, source);
   for (const [included, text] of Object.entries(files))
-    await writeFile(path.join(directory, included), text);
+    await writeFile(path.join(directory, included), text, "latin1");
   await exec("clang++", ["-std=c++17", "-Wall", "-Wextra", "-Werror", file, "-o", binary], {
     signal,
   });
@@ -113,7 +115,9 @@ for (const { seed, options } of [
     states.forEach((state, index) => assert.equal(printed[index], `${state.answer}\n`, state.id));
     for (const task of project.tasks) {
       // Only a changed factor alters the answer, and one always does.
-      const changes = (task.parts ?? [task]).some(({ statement }) => statement !== undefined);
+      const changes = (task.parts ?? [task]).some(
+        ({ statement, shifts }) => statement !== undefined || shifts !== undefined,
+      );
       assert.equal(task.answer !== project.answers.start, changes, task.id);
     }
   });
@@ -215,8 +219,15 @@ function followInstruction(start, task) {
   }
   if (task.kind === "expression") return start.replace(task.before, task.after);
   if (task.kind === "insert") return start.replace(task.marker, task.text);
-  // A W or X edit changes its own file only; see followFiles.
-  if (task.kind === "file-delete") return start;
+  // An edit of a file beside main.cpp changes that file only; see followFiles.
+  if (task.kind === "file-delete" || task.kind === "file-insert") return start;
+  if (task.kind === "literal-replace") {
+    // A naive follower types the text in composed form and takes its one match.
+    const typed = task.before.normalize("NFC");
+    if (task.naive && start.split(typed).length === 2) return start.replace(typed, task.after);
+    assert.equal(start.split(task.before).length, 2, task.id);
+    return start.replace(task.before, task.after);
+  }
   // Code without comment lines and string literals; a naive follower reads them as
   // code too.
   const code = (line) =>
@@ -235,6 +246,45 @@ function followInstruction(start, task) {
       .join("\n");
   }
   const lines = start.split("\n");
+  if (task.kind === "factor-shift") {
+    // Each number that multiplies a variable, on either side; a naive follower only
+    // looks for a variable times a number.
+    const first = lines.indexOf(`long long ${task.host}(long long value) {`);
+    const shift = (number) => Number(number) + 1000;
+    for (let at = first; at < first + definitionLength(lines, first); at++) {
+      lines[at] = lines[at].replace(
+        /\b([a-z]\w*) \* (\d+)\b/g,
+        (_, name, number) => `${name} * ${shift(number)}`,
+      );
+      if (!task.naive)
+        lines[at] = lines[at].replace(
+          /\b(\d+) \* ([a-z]\w*)\b/g,
+          (_, number, name) => `${shift(number)} * ${name}`,
+        );
+    }
+    return lines.join("\n");
+  }
+  if (task.kind === "reorder") {
+    // The namespace's definitions sorted by name, one empty line apart.
+    const open = lines.indexOf(`namespace ${task.namespace} {`);
+    const close = lines.indexOf(`}  // namespace ${task.namespace}`, open);
+    const definitions = [];
+    for (let first = open + 1; first < close; first++) {
+      const name = /^long long (\w+)\(long long value\) \{$/.exec(lines[first])?.[1];
+      if (!name) continue;
+      const length = definitionLength(lines, first);
+      definitions.push({ name, text: lines.slice(first, first + length).join("\n") });
+      first += length - 1;
+    }
+    assert.equal(lines[open + 1], "", task.id);
+    assert.equal(lines[close - 1], "", task.id);
+    definitions.sort((one, other) => (one.name < other.name ? -1 : 1));
+    return [
+      ...lines.slice(0, open + 2),
+      definitions.map(({ text }) => text).join("\n\n"),
+      ...lines.slice(close - 1),
+    ].join("\n");
+  }
   if (task.kind === "prune") {
     // Every definition of the namespace that no code outside it calls.
     const open = lines.indexOf(`namespace ${task.namespace} {`);
@@ -301,23 +351,42 @@ function followInstruction(start, task) {
 }
 
 /** Follow one task's instructions for the files beside main.cpp, byte for byte, or
- * in text mode, which writes every line ending as LF.
+ * in text mode, which writes every line ending as LF. A naive follower writes a
+ * recipe's tab as spaces, and reads a file as UTF-8, replacing what it cannot
+ * decode, and ends every line it writes with a newline.
  */
 function followFiles(files, task, textMode = false) {
   const result = { ...files };
-  for (const edit of task.parts ?? [task])
+  for (const edit of task.parts ?? [task]) {
+    const text = result[edit.file];
+    if (edit.kind === "file-insert") {
+      assert.equal(text.split(edit.marker).length, 2, edit.id);
+      const supplied = edit.naive ? edit.text.replaceAll("\t", "        ") : edit.text;
+      result[edit.file] = text.replace(edit.marker, supplied);
+    }
     if (edit.kind === "file-delete") {
-      const text = result[edit.file];
       const eol = text.includes("\r\n") ? "\r\n" : "\n";
       // A byte order mark belongs to the file, not to its first line.
-      const mark = text.startsWith("\ufeff") ? "\ufeff" : "";
+      const mark = text.startsWith(BOM) ? BOM : "";
       const lines = text.slice(mark.length).split(eol);
       const first = lines.indexOf(`long long ${edit.name}(long long value) {`);
       const length = definitionLength(lines, first);
-      assert.equal(lines[first + length], "", edit.id);
-      lines.splice(first, length + 1);
-      result[edit.file] = mark + lines.join(textMode ? "\n" : eol);
+      // A Y function is the last one: the empty line before it goes.
+      if (edit.cluster === "Y") {
+        assert.equal(lines[first - 1], "", edit.id);
+        lines.splice(first - 1, length + 1);
+      } else {
+        assert.equal(lines[first + length], "", edit.id);
+        lines.splice(first, length + 1);
+      }
+      let written = mark + lines.join(textMode ? "\n" : eol);
+      if (edit.naive) {
+        written = Buffer.from(Buffer.from(written, "latin1").toString("utf8")).toString("latin1");
+        if (!written.endsWith("\n")) written += "\n";
+      }
+      result[edit.file] = written;
     }
+  }
   return result;
 }
 
@@ -339,6 +408,33 @@ test("each instruction, followed literally, gives exactly its task's result", ()
   }
 });
 
+test("a d rule runs under make, and spaces for a trap's tabs break the makefile", async (t) => {
+  const project = generateChecksumProject(9, { clusters: "d", perVariant: 2 });
+  const root = await mkdtemp(path.join(os.tmpdir(), "checksum-make-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const task of project.tasks) {
+    const spaced = followFiles(project.startFiles, { ...task, naive: true });
+    for (const [label, files, works] of [
+      ["reference", task.resultFiles, true],
+      ["spaces", spaced, task.variant === "control"],
+    ]) {
+      const directory = path.join(root, `${task.id}-${label}`);
+      await mkdir(directory);
+      await writeFile(path.join(directory, task.file), files[task.file], "latin1");
+      // The rule's prerequisite, so make only prints the recipe.
+      await writeFile(path.join(directory, task.target), "");
+      const run = exec("make", ["-n", "-f", task.file, "check"], { cwd: directory });
+      if (works)
+        assert.equal(
+          (await run).stdout,
+          `./${task.target} --self-test\ntouch ${task.target}.checked\n`,
+          `${task.id} ${label}`,
+        );
+      else await assert.rejects(run, /missing separator/, `${task.id} ${label}`);
+    }
+  }
+});
+
 test("a project of every cluster with many edits takes three-word names", () => {
   const project = generateChecksumProject(3, { clusters: ALL, perVariant: 4 });
   assert.match(project.start, /^long long [a-z]+_[a-z]+_[a-z]+\(long long value\) \{$/m);
@@ -357,7 +453,7 @@ test("a trap and its control share their wording", () => {
       .replace(/"(?:[^"\\]|\\.)*"/g, "Q")
       .replace(/\d+ (occurrences|lines)/, "N $1")
       .replace(/argument \d+/, "argument N")
-      .replace(/In \w+\.inc,/, "In F,");
+      .replace(/In \w+\.(inc|mk),/, "In F,");
   for (const cluster of Object.keys(CHECKSUM_CLUSTERS)) {
     const prompts = new Set(
       atoms(project)
@@ -454,7 +550,19 @@ test("each trap differs from its control in its one factor", () => {
       // order mark.
       const own = project.startFiles[edit.file];
       if (edit.cluster === "W") assert.equal(own.includes("\r\n"), trap, edit.id);
-      if (edit.cluster === "X") assert.equal(own.startsWith("\ufeff"), trap, edit.id);
+      if (edit.cluster === "X") assert.equal(own.startsWith(BOM), trap, edit.id);
+      // A Y trap's file has no final newline, an a trap's holds a Latin-1 byte and a
+      // d trap's recipes start with a tab.
+      if (edit.cluster === "Y") assert.equal(own.endsWith("\n"), !trap, edit.id);
+      if (edit.cluster === "a") assert.equal(own.includes("\xb0"), trap, edit.id);
+      if (edit.cluster === "d") assert.equal(own.includes("\t"), trap, edit.id);
+      // A Z trap writes one factor before its variable; a b trap's decoy holds the
+      // composed form of the target's text; a c trap reorders twelve functions.
+      if (edit.cluster === "Z")
+        assert.equal(/= \(\d+ \* /.test(definitionText(start, edit.host)), trap, edit.id);
+      if (edit.cluster === "b")
+        assert.equal(edit.decoyText === edit.before.normalize("NFC"), trap, edit.id);
+      if (edit.cluster === "c") assert.equal(edit.members.length, trap ? 12 : 3, edit.id);
       // A C trap scans for a brace character.
       if (edit.cluster === "C")
         assert.equal(/'[{}]'/.test(definitionText(start, edit.name)), trap, edit.id);
@@ -551,9 +659,9 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J, K, L, N and P to X edits stand in gaps of their own, and M edits
-        // everywhere.
-        const edits = all.filter(({ cluster }) => !"JKLMNPQRSTUVWX".includes(cluster));
+        // J, K, L, N and P to c edits stand in gaps of their own, M edits everywhere,
+        // and d edits in files of their own.
+        const edits = all.filter(({ cluster }) => !"JKLMNPQRSTUVWXYZabcd".includes(cluster));
         if (edits.length === 0) continue;
         // An O definition holds an empty line, so it spans two paragraphs.
         const reach = zoneReach + edits.filter(({ cluster }) => cluster === "O").length;
@@ -631,8 +739,15 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
     assert.equal(failed(project.start, lines, text), variant === "trap");
     const mark = find("X", variant);
     const stripped = followFiles(project.startFiles, mark);
-    stripped[mark.file] = stripped[mark.file].replace(/^\ufeff/, "");
+    stripped[mark.file] = stripped[mark.file].replace(BOM, "");
     assert.equal(failed(project.start, mark, stripped), variant === "trap");
+    // A naive writer adds a final newline to a Y file, replaces an a file's Latin-1
+    // byte and writes a d recipe's tab as spaces: each fails its trap only.
+    for (const cluster of "Yad") {
+      const task = find(cluster, variant);
+      const naive = followFiles(project.startFiles, { ...task, naive: true });
+      assert.equal(failed(project.start, task, naive), variant === "trap", task.id);
+    }
   }
 
   // A writer that drops a whole definition loses it without touching its neighbours.
@@ -771,10 +886,10 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
       const task = find(cluster, variant);
       assert.ok(failed(project.start.replace(task.before, task.after), task), task.id);
     }
-  // A rename of every occurrence of a T name, and a deletion of the U and V
-  // functions whose qualified name nothing mentions, fail their traps and pass their
-  // controls.
-  for (const cluster of "TUV")
+  // A rename of every occurrence of a T name, a deletion of the U and V functions
+  // whose qualified name nothing mentions, a Z pattern for a variable times a number
+  // and a b text typed in composed form fail their traps and pass their controls.
+  for (const cluster of "TUVZb")
     for (const variant of ["trap", "control"]) {
       const task = find(cluster, variant);
       const naive = followInstruction(project.start, { ...task, naive: true });

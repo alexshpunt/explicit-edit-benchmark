@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
  * agents of a wave edit neighbouring lines of one function at the same moment.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v8";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v9";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
@@ -38,6 +38,12 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   V: "unqualified call",
   W: "line endings",
   X: "byte order mark",
+  Y: "end of file",
+  Z: "computed replacement",
+  a: "not UTF-8",
+  b: "Unicode look-alike",
+  c: "large reordering",
+  d: "recipe tabs",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -211,7 +217,11 @@ export const identifierCount = (text, name) =>
 function expressionText(statement, context) {
   const factor = context.factors.get(statement.id) ?? statement.factor;
   const { left, right, offset } = statement;
-  if (statement.kind === "linear") return `${left} * ${factor} + ${offset}`;
+  // A Z trap writes one declaration with its factor first.
+  if (statement.kind === "linear")
+    return statement.swapped
+      ? `${factor} * ${left} + ${offset}`
+      : `${left} * ${factor} + ${offset}`;
   if (statement.kind === "product") return `${left} * ${right} + ${offset}`;
   if (statement.kind === "mix") return `(${left} ^ ${factor}) + ${right}`;
   // A call passes the previous variable; a P decoy's call passes a number and adds
@@ -251,8 +261,15 @@ function instruction(edit) {
     return `In main.cpp, rename the function ${q(edit.name)} to ${q(edit.newName)}: change its prototype, its definition and every call of it. Comments and string literals that mention the function stay unchanged.`;
   if (edit.kind === "prune")
     return `In main.cpp, delete the complete definition of every function in the namespace ${q(edit.namespace)} that no code calls, and the empty line that directly followed each deleted definition. Keep the namespace and the functions that are called.`;
+  // A Y function is the last one of its file, so no empty line follows it.
   if (edit.kind === "file-delete")
-    return `In ${edit.file}, delete the complete definition of the function ${q(signature(edit.name))}. Also delete the empty line that directly followed the definition.`;
+    return `In ${edit.file}, delete the complete definition of the function ${q(signature(edit.name))}. Also delete the empty line that directly ${edit.cluster === "Y" ? "preceded" : "followed"} the definition.`;
+  if (edit.kind === "file-insert")
+    return `In ${edit.file}, replace the placeholder line ${q(edit.marker)} with the following ${edit.lines} lines: ${q(edit.text)}.`;
+  if (edit.kind === "factor-shift")
+    return `In main.cpp, in the definition of the function ${q(signature(edit.host))}, add ${FACTOR_STEP} to every integer literal that multiplies a variable. The other numbers stay unchanged.`;
+  if (edit.kind === "reorder")
+    return `In main.cpp, reorder the function definitions in the namespace ${q(edit.namespace)} so that they stand in alphabetical order of their names. Keep each definition unchanged, with one empty line between definitions.`;
   if (edit.kind === "move")
     return `In main.cpp, move the complete definition of the function ${q(signature(edit.name))} to the placeholder line ${q(edit.marker)}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`;
   if (edit.kind === "insert")
@@ -321,8 +338,44 @@ const KIND = {
   // W and X delete a function from a file of its own that main.cpp includes.
   W: "file-delete",
   X: "file-delete",
+  Y: "file-delete",
+  a: "file-delete",
+  // Z adds a step to every factor of one function.
+  Z: "factor-shift",
+  // b replaces a string literal's text that a decoy above it seems to repeat.
+  b: "literal-replace",
+  c: "reorder",
+  // d inserts a rule into a makefile beside main.cpp.
+  d: "file-insert",
 };
-// Namespace names of U and V edits.
+// The step a Z edit adds to each factor.
+const FACTOR_STEP = 1000;
+// The UTF-8 byte order mark of an X trap's file. Files beside main.cpp are byte
+// strings: one character per byte.
+const BOM = "\xef\xbb\xbf";
+// The comment of a kept function in an a file; a trap's holds a Latin-1 degree sign.
+const MEASURED = { trap: "  // Measured at 20\xb0C.", control: "  // Measured at 20 degrees C." };
+// Functions in a c namespace.
+const REORDERED = { trap: 12, control: 3 };
+// String literals of b functions, in composed form. Each holds a letter with a
+// diacritic, so its decomposed form differs.
+const PHRASES = [
+  "caf\u00e9 menu",
+  "r\u00e9sum\u00e9 draft",
+  "cr\u00e8me br\u00fbl\u00e9e",
+  "pi\u00f1ata stock",
+  "\u00fcber mode",
+  "na\u00efve guess",
+  "d\u00e9j\u00e0 vu",
+  "jalape\u00f1o mix",
+  "fa\u00e7ade plan",
+  "se\u00f1or table",
+  "fianc\u00e9e note",
+  "p\u00e2t\u00e9 board",
+  "co\u00f6perate flag",
+  "ma\u00f1ana queue",
+];
+// Namespace names of U, V and c edits.
 const PRUNED_NAMESPACES = [
   "diag",
   "debug",
@@ -340,6 +393,14 @@ const PRUNED_NAMESPACES = [
   "verify",
   "health",
   "status",
+  "archive",
+  "ledger",
+  "catalog",
+  "digest",
+  "roster",
+  "journal",
+  "atlas",
+  "registry",
 ];
 // Namespace names of K edits: the first namespace of a pair in the file holds the
 // decoy, the second the target.
@@ -532,6 +593,15 @@ export function generateChecksumProject(seed, options = {}) {
           factor: statement.factor,
           before: expressionText(statement, { factors: new Map() }),
         });
+      } else if (entry.shift) {
+        // A Z declaration, whose factor the edit changes; a trap writes one of them
+        // with its factor first.
+        statement = { ...base, kind: "linear", factor: number(), offset: number() };
+        if (entry.swapped) statement.swapped = true;
+        entry.shift.shifts.push({
+          statement: statement.id,
+          newFactor: statement.factor + FACTOR_STEP,
+        });
       } else {
         statement = {
           ...base,
@@ -592,9 +662,15 @@ export function generateChecksumProject(seed, options = {}) {
     2 * ofCluster("T").length +
     ofCluster("U").length +
     ofCluster("V").length +
-    // A W or X file's include line stands in a gap of its own.
+    // A W, X, Y or a file's include line stands in a gap of its own, and so do a Z
+    // function, a b pair and a c namespace. A d makefile is not in main.cpp.
     ofCluster("W").length +
-    ofCluster("X").length;
+    ofCluster("X").length +
+    ofCluster("Y").length +
+    ofCluster("a").length +
+    ofCluster("Z").length +
+    ofCluster("b").length +
+    ofCluster("c").length;
   const lengths = [];
   while (
     lengths.length <
@@ -1009,28 +1085,152 @@ export function generateChecksumProject(seed, options = {}) {
     ]);
   }
 
-  // W and X: a function to delete from a file of three definitions, which main.cpp
-  // includes in their place. A W trap's file ends its lines with CRLF, and the
-  // function is the second one; a script that reads and writes the file in text mode
-  // turns every CRLF into LF without a word. An X trap's file starts with a byte
-  // order mark, and the function is the first one, so the mark stands right before
-  // its first line. A control's file has neither. Nothing calls the function; main
+  // W, X, Y and a: a function to delete from a file of three definitions, which
+  // main.cpp includes in their place. A W trap's file ends its lines with CRLF, and
+  // the function is the second one; a script that reads and writes the file in text
+  // mode turns every CRLF into LF without a word. An X trap's file starts with a
+  // byte order mark, and the function is the first one, so the mark stands right
+  // before its first line. A Y function is the last one, and a trap's file does not
+  // end with a newline, which a script that writes the file line by line adds. In
+  // an a file the function is the second one, and the third one has a comment: a
+  // trap's holds a Latin-1 byte, which is not UTF-8, so a script that reads the file
+  // as UTF-8 fails, and one that ignores or replaces what it cannot decode changes
+  // the byte. A control's file has none of these. Nothing calls the function; main
   // calls the other two.
   const included = new Map();
-  for (const edit of [...ofCluster("W"), ...ofCluster("X")]) {
+  const deletedAt = { W: 1, X: 0, Y: 2, a: 1 };
+  const encodings = { W: "crlf", X: "bom", Y: "open", a: "plain" };
+  for (const edit of "WXYa".split("").flatMap((cluster) => ofCluster(cluster))) {
     const members = [0, 1, 2].map(() =>
       build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false }),
     );
-    const target = members[edit.cluster === "W" ? 1 : 0];
+    const target = members[deletedAt[edit.cluster]];
     target.uncalled = true;
     edit.name = target.name;
     edit.file = `${take(functionNames)}.inc`;
+    if (edit.cluster === "a")
+      members[2].body.unshift({ type: "raw", lines: [MEASURED[edit.variant]] });
     included.set(edit.file, {
       members: members.map(({ name }) => name),
-      encoding: edit.variant === "control" ? "plain" : edit.cluster === "W" ? "crlf" : "bom",
+      encoding: edit.variant === "control" ? "plain" : encodings[edit.cluster],
     });
     pairs.push([{ include: edit.file }]);
   }
+
+  // Z: a step to add to the factor of each declaration of a function. A trap writes
+  // one declaration with its factor before the variable, so a pattern for a
+  // variable times a number misses it; a control writes every one the same way.
+  for (const edit of ofCluster("Z")) {
+    edit.shifts = [];
+    const swapped = random.integer(0, 3);
+    const plan = [0, 1, 2, 3].map((index) => ({
+      shift: edit,
+      swapped: edit.variant === "trap" && index === swapped,
+    }));
+    edit.host = build(take(functionNames), plan, { prototyped: false }).name;
+    pairs.push([{ function: edit.host }]);
+  }
+
+  // b: a string literal to replace whose text has a letter with a diacritic, in
+  // decomposed form: a letter and a combining mark. A decoy function above it holds
+  // the composed form of the same text in a trap, so text typed in the usual composed
+  // form matches the decoy once, as if it were the target; a control's decoy holds
+  // other text. The replacement is the text without its marks. Nothing calls them.
+  const phrases = random.shuffle(PHRASES);
+  const labelled = (text) => {
+    const name = take(functionNames);
+    const label = `  const char* label = "${text}";`;
+    functions.push({
+      name,
+      uncalled: true,
+      body: [
+        { type: "raw", lines: [label] },
+        {
+          type: "let",
+          id: `${name}:a`,
+          variable: "a",
+          kind: "linear",
+          left: "value",
+          factor: number(),
+          offset: number(),
+        },
+        {
+          type: "raw",
+          lines: ["  for (const char* p = label; *p != 0; ++p) a = (a * 31 + *p) % kModulus;"],
+        },
+      ],
+      result: ["a", "value"],
+      prototyped: false,
+    });
+    return name;
+  };
+  for (const edit of ofCluster("b")) {
+    const phrase = take(phrases);
+    edit.before = phrase.normalize("NFD");
+    edit.after = edit.before.replace(/[\u0300-\u036f]/g, "");
+    edit.decoyText = edit.variant === "trap" ? phrase : take(phrases);
+    edit.decoy = labelled(edit.decoyText);
+    edit.host = labelled(edit.before);
+    pairs.push([{ function: edit.decoy }, { function: edit.host }]);
+  }
+
+  // c: the definitions of a namespace to put in alphabetical order, twelve in a
+  // trap and three in a control. Nothing calls them, and they start in another
+  // order.
+  for (const edit of ofCluster("c")) {
+    edit.namespace = take(pruned);
+    const members = Array.from(
+      { length: REORDERED[edit.variant] },
+      () => namespaced(edit.namespace, take(functionNames)).function,
+    );
+    const sorted = [...members].sort();
+    // Code point order is the alphabetical one: names are lowercase words joined by
+    // underscores, and no word starts another.
+    assert.deepEqual(
+      sorted,
+      [...members].sort((one, other) => one.localeCompare(other)),
+    );
+    let order;
+    do order = random.shuffle(members);
+    while (order.every((key, index) => key === sorted[index]));
+    edit.members = order;
+    pairs.push([
+      { raw: `namespace ${edit.namespace} {` },
+      ...order.map((key) => ({ function: key })),
+      { raw: `}  // namespace ${edit.namespace}` },
+    ]);
+  }
+
+  // d: a rule to insert into a makefile beside main.cpp. A trap's recipe lines start
+  // with a tab, which make requires and an editor or a heredoc can turn into spaces; a
+  // control's file sets another recipe prefix, so its lines hold no tab.
+  for (const edit of ofCluster("d")) {
+    const target = take(functionNames);
+    edit.file = `${target}.mk`;
+    edit.prefix = edit.variant === "trap" ? "\t" : ">";
+    const lines = [
+      `check: ${target}`,
+      `${edit.prefix}./${target} --self-test`,
+      `${edit.prefix}touch ${target}.checked`,
+    ];
+    edit.target = target;
+    edit.text = lines.join("\n");
+    edit.lines = lines.length;
+  }
+  const makefile = (edit, filled) =>
+    [
+      `# Build rules for ${edit.target}.`,
+      ...(edit.prefix === "\t" ? [] : [`.RECIPEPREFIX = ${edit.prefix}`]),
+      ".PHONY: all check clean",
+      "",
+      `all: ${edit.target}`,
+      `${edit.prefix}c++ -std=c++17 -O2 -o ${edit.target} main.cpp`,
+      "",
+      filled ? edit.text : edit.marker,
+      "",
+      "clean:",
+      `${edit.prefix}rm -f ${edit.target} ${edit.target}.checked`,
+    ].join("\n") + "\n";
 
   // H: functions to delete; a trap has a prototype. Nothing calls them, so the
   // file builds without them.
@@ -1096,6 +1296,7 @@ export function generateChecksumProject(seed, options = {}) {
   for (const edit of ordered)
     if (edit.kind === "move" || edit.kind === "insert")
       edit.marker = `// __EXPLICIT_EDIT_SLOT_${++slot}_1__`;
+    else if (edit.kind === "file-insert") edit.marker = `# __EXPLICIT_EDIT_SLOT_${++slot}_1__`;
 
   // Layout: fillers in random order; each zone and each move's destination in its own
   // gap between fillers, so a filler separates them.
@@ -1236,13 +1437,26 @@ export function generateChecksumProject(seed, options = {}) {
       factors = new Map(),
       locals = new Map(),
       silenced = new Set(),
-      calls = new Map();
+      calls = new Map(),
+      labels = new Map(),
+      filled = new Set();
     let order = layout;
     for (const edit of done.flatMap((task) => task.parts ?? [task])) {
       if (edit.kind === "rename") names.set(edit.name, edit.newName);
       if (edit.kind === "function-rename") calls.set(edit.name, edit.newName);
       if (edit.kind === "expression" || edit.kind === "scoped-replace")
         factors.set(edit.statement, edit.newFactor);
+      if (edit.kind === "factor-shift")
+        for (const { statement, newFactor } of edit.shifts) factors.set(statement, newFactor);
+      if (edit.kind === "literal-replace") labels.set(edit.host, edit);
+      if (edit.kind === "file-insert") filled.add(edit.file);
+      if (edit.kind === "reorder") {
+        const sorted = [...edit.members].sort();
+        let next = 0;
+        order = order.map((block) =>
+          edit.members.includes(block.function) ? { function: sorted[next++] } : block,
+        );
+      }
       if (edit.kind === "local-rename") locals.set(edit.name, edit);
       if (["delete", "namespace-delete", "commented-delete"].includes(edit.kind))
         order = order.filter((block) => block.function !== (edit.key ?? edit.name));
@@ -1269,6 +1483,8 @@ export function generateChecksumProject(seed, options = {}) {
         "}",
       ].join("\n");
       const local = locals.get(entry.name);
+      const label = labels.get(entry.name);
+      if (label) return text.replace(label.before, label.after);
       return local ? text.replace(new RegExp(`\\b${local.local}\\b`, "g"), local.newName) : text;
     };
     const sections = [
@@ -1310,22 +1526,24 @@ export function generateChecksumProject(seed, options = {}) {
         .filter(({ kind }) => kind === "file-delete")
         .map(({ name }) => name),
     );
-    const files = Object.fromEntries(
-      [...included].map(([file, { members, encoding }]) => {
+    // A Y trap's file has no final newline.
+    const files = Object.fromEntries([
+      ...[...included].map(([file, { members, encoding }]) => {
         const text =
           members
             .filter((name) => !deleted.has(name))
             .map((name) => definition(byName.get(name)))
-            .join("\n\n") + "\n";
+            .join("\n\n") + (encoding === "open" ? "" : "\n");
         const encoded =
           encoding === "crlf"
             ? text.replaceAll("\n", "\r\n")
             : encoding === "bom"
-              ? `\ufeff${text}`
+              ? `${BOM}${text}`
               : text;
         return [file, encoded];
       }),
-    );
+      ...ofCluster("d").map((edit) => [edit.file, makefile(edit, filled.has(edit.file))]),
+    ]);
     return { main: sections.join("\n\n") + "\n", files };
   };
 
@@ -1439,20 +1657,74 @@ export function generateChecksumProject(seed, options = {}) {
     }
     if (edit.kind === "file-delete") {
       // The function stands once, in its own file, which loses only its definition
-      // and the empty line after it. Only a W trap's file holds a carriage return, and
-      // only an X trap's a byte order mark, right before the function's first line.
+      // and the empty line next to it. Only a W trap's file holds a carriage return,
+      // only an X trap's a byte order mark, right before the function's first line,
+      // only a Y trap's lacks a final newline, and only an a trap's holds a byte that
+      // is not ASCII, apart from the mark.
       const own = startFiles[edit.file];
-      const lf = own.replaceAll("\r\n", "\n").replace(/^\ufeff/, "");
+      const lf = own.replaceAll("\r\n", "\n").replace(BOM, "");
       assert.equal(lf.split(header(edit.name)).length, 2, `${edit.id} header is not unique`);
       assert.equal(identifierCount(start, edit.name), 0, `${edit.id} name in main.cpp`);
       assert.equal(occurrences(`#include "${edit.file}"`), 1, `${edit.id} include`);
       assert.equal(own.includes("\r"), trap && edit.cluster === "W", `${edit.id} line endings`);
       assert.ok(!own.includes("\r") || !/[^\r]\n/.test(own), `${edit.id} mixed line endings`);
-      assert.equal(own.startsWith("\ufeff"), trap && edit.cluster === "X", `${edit.id} mark`);
+      assert.equal(own.startsWith(BOM), trap && edit.cluster === "X", `${edit.id} mark`);
+      assert.equal(own.endsWith("\n"), !trap || edit.cluster !== "Y", `${edit.id} end`);
+      assert.equal(/[^\0-\x7f]/.test(lf), trap && edit.cluster === "a", `${edit.id} bytes`);
       assert.equal(lf.startsWith(header(edit.name)), edit.cluster === "X", `${edit.id} first`);
-      const cut = `${definitionText(lf, edit.name)}\n\n`;
+      const definition = definitionText(lf, edit.name);
+      assert.equal(lf.trimEnd().endsWith(definition), edit.cluster === "Y", `${edit.id} last`);
+      const cut = edit.cluster === "Y" ? `\n\n${definition}` : `${definition}\n\n`;
       const eol = own.includes("\r") ? "\r\n" : "\n";
       assert.equal(expectedFiles[edit.file], own.replace(cut.replaceAll("\n", eol), ""), edit.id);
+    }
+    if (edit.kind === "file-insert") {
+      // The placeholder stands once; only a trap's file holds tabs.
+      const own = startFiles[edit.file];
+      assert.equal(own.split(edit.marker).length, 2, `${edit.id} marker is not unique`);
+      assert.equal(own.includes("\t"), trap, `${edit.id} tabs`);
+      assert.equal(expectedFiles[edit.file], own.replace(edit.marker, edit.text), edit.id);
+      assert.equal(identifierCount(start, edit.target), 0, `${edit.id} name in main.cpp`);
+    }
+    if (edit.kind === "factor-shift") {
+      // Every declaration of the function multiplies a variable by a number, and
+      // only a trap writes one number first.
+      const own = definitionText(start, edit.host);
+      const declarations = own.split("\n").filter((line) => line.startsWith("  long long "));
+      assert.equal(declarations.length, edit.shifts.length, `${edit.id} declarations`);
+      const first = declarations.filter((line) => /= \(\d+ \* [a-z]+ \+ \d+\)/.test(line));
+      const second = declarations.filter((line) => /= \([a-z]+ \* \d+ \+ \d+\)/.test(line));
+      assert.equal(first.length, trap ? 1 : 0, `${edit.id} swapped`);
+      assert.equal(first.length + second.length, edit.shifts.length, `${edit.id} shape`);
+      assert.equal(occurrences(header(edit.host)), 1, `${edit.id} header is not unique`);
+    }
+    if (edit.kind === "literal-replace") {
+      // The decomposed text stands once, in the target, and its replacement nowhere.
+      // Only a trap's decoy, above the target, holds the composed form of the text.
+      assert.notEqual(edit.before, edit.before.normalize("NFC"), `${edit.id} composed`);
+      assert.equal(occurrences(edit.before), 1, `${edit.id} text is not unique`);
+      assert.equal(occurrences(edit.after), 0, `${edit.id} replacement exists`);
+      assert.equal(expected.split(edit.after).length, 2, `${edit.id} result is not unique`);
+      assert.equal(occurrences(edit.decoyText), 1, `${edit.id} decoy`);
+      assert.equal(occurrences(edit.before.normalize("NFC")), trap ? 1 : 0, `${edit.id} look`);
+      assert.ok(
+        start.indexOf(definitionText(start, edit.decoy)) <
+          start.indexOf(definitionText(start, edit.host)),
+        `${edit.id} decoy order`,
+      );
+    }
+    if (edit.kind === "reorder") {
+      // The namespace holds its functions, out of order, and nothing else.
+      const open = start.indexOf(`namespace ${edit.namespace} {\n`);
+      const space = start.slice(open, start.indexOf(`}  // namespace ${edit.namespace}`, open));
+      const names = space.match(/^long long \w+/gm).map((line) => line.slice(10));
+      assert.deepEqual(
+        names,
+        edit.members.map((key) => key.split("::")[1]),
+        `${edit.id} members`,
+      );
+      assert.notDeepEqual(names, [...names].sort(), `${edit.id} sorted`);
+      assert.equal(occurrences(`namespace ${edit.namespace} {`), 1, `${edit.id} namespace`);
     }
     if (edit.kind === "commented-delete") {
       assert.equal(occurrences(header(edit.name)), 1, `${edit.id} header is not unique`);
@@ -1527,9 +1799,17 @@ export function generateChecksumProject(seed, options = {}) {
     new Map(
       done
         .flatMap((task) => task.parts ?? [task])
-        .filter(({ kind }) => kind === "expression" || kind === "scoped-replace")
-        .map((edit) => [edit.statement, edit.newFactor]),
+        .flatMap((edit) =>
+          edit.kind === "expression" || edit.kind === "scoped-replace"
+            ? [[edit.statement, edit.newFactor]]
+            : edit.kind === "factor-shift"
+              ? edit.shifts.map(({ statement, newFactor }) => [statement, newFactor])
+              : [],
+        ),
     );
+  // A Z edit changes the answer.
+  for (const edit of ofCluster("Z"))
+    assert.notEqual(evaluate(factorsOf([edit])), startAnswer, `${edit.id} keeps the answer`);
   const result = tasks.map((task) => {
     const { main, files } = render([task]);
     return { ...task, result: main, resultFiles: files, answer: evaluate(factorsOf([task])) };

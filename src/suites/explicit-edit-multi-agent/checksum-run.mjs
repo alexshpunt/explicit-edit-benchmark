@@ -47,10 +47,15 @@ export const CHECKSUM_SHARED_VERSION = "multi-agent-checksum-shared-v1";
 export const CHECKSUM_DELIVERY_DEADLINE_MS = 300_000;
 const execFileAsync = promisify(execFile);
 
+/** Files beside main.cpp are byte strings: one character per byte, so a byte that is
+ * not UTF-8 survives the round trip and the grade compares bytes.
+ */
+export const PROJECT_FILE_ENCODING = "latin1";
+
 /** Write files beside main.cpp, by name, byte for byte. */
 export async function writeProjectFiles(directory, files = {}) {
   for (const [name, text] of Object.entries(files))
-    await writeFile(path.join(directory, name), text);
+    await writeFile(path.join(directory, name), text, PROJECT_FILE_ENCODING);
 }
 
 /** Read the named files beside main.cpp; a missing file reads as null. */
@@ -59,7 +64,7 @@ export async function readProjectFiles(directory, names) {
     await Promise.all(
       names.map(async (name) => [
         name,
-        await readFile(path.join(directory, name), "utf8").catch(() => null),
+        await readFile(path.join(directory, name), PROJECT_FILE_ENCODING).catch(() => null),
       ]),
     ),
   );
@@ -330,9 +335,25 @@ export function gradeSharedChecksum(project, candidate, files = {}) {
         [edit.name, edit.newName].every(
           (name) => identifierCount(candidate, name) === identifierCount(project.expected, name),
         ) && edit.mentions.every((line) => count(candidate, line) === 1);
-    // A W or X file equals its reference byte for byte; nobody else edits it.
-    else if (edit.kind === "file-delete")
+    // A file beside main.cpp equals its reference byte for byte; nobody else edits it.
+    else if (edit.kind === "file-delete" || edit.kind === "file-insert")
       passed = files[edit.file] === project.expectedFiles[edit.file];
+    // A Z function and a c namespace stand as in the reference.
+    else if (edit.kind === "factor-shift")
+      passed =
+        definitionText(candidate, edit.host) !== undefined &&
+        definitionText(candidate, edit.host) === definitionText(project.expected, edit.host);
+    else if (edit.kind === "reorder")
+      passed =
+        namespaceText(candidate, edit.namespace) !== undefined &&
+        namespaceText(candidate, edit.namespace) ===
+          namespaceText(project.expected, edit.namespace);
+    // A b text is replaced once, and the decoy's look-alike stays.
+    else if (edit.kind === "literal-replace")
+      passed =
+        count(candidate, edit.before) === 0 &&
+        count(candidate, edit.after) === 1 &&
+        count(candidate, edit.decoyText) === 1;
     // A U namespace and its caller stand as in the reference.
     else if (edit.kind === "prune")
       passed =
