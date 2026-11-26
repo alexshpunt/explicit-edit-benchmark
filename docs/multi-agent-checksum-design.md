@@ -506,3 +506,41 @@ one script even as `"u\u0308ber mode"`, and asserted that it occurs once. For Z
 they printed the function first and replaced each product by its exact text,
 including the one written number first. For c they cut the namespace's body into
 definitions and sorted them in one script.
+
+Thirteenth round, Bash only: the first shared runs as a pool
+(`multi-agent-checksum-shared-v2`). Every cluster, three traps and three controls
+each, 198 tasks, seeds 42 and 7; isolated runs with six agents at a time, shared
+runs with 25 agents on one queue. Each pool agent did 7 to 10 tasks in one session;
+none of them reached a context compaction. Passed tasks, with the grade described
+below:
+
+| Seed | Isolated | Shared pool | Shared file                              |
+| ---- | -------- | ----------- | ---------------------------------------- |
+| 42   | 178      | 184         | does not build; 11 damaged, 5 collateral |
+| 7    | 182      | 184         | does not build; 11 damaged, 3 collateral |
+
+Isolated runs failed only the B, H, I, K, N and O traps and two X traps, as in
+earlier rounds. The pool passes more tasks, because some blind scripts in it found
+their wrong target already removed by another agent and recovered: every I trap
+passed in both pool runs. It also adds failures that no isolated run and no
+single-wave run had:
+
+- Lost updates. A T control's agent renamed the function with a script that read
+  the whole file, replaced every occurrence and wrote it back; another agent's
+  script, which had read the file earlier, wrote its copy over it, and only one
+  renamed call survived. An L control's inserted function vanished from the file
+  the same way.
+- Supplied text late in a session. Two D traps failed in the fifth and the eighth
+  task of their agent: one script wrote a real tab where the literal holds `\t`,
+  the other dropped a backslash. No D trap failed in a fresh session.
+- One W trap in the agent's first task, written back in text mode, and one T trap
+  that renamed the function inside its string literal.
+
+In the first grade of these runs, T renames, A renames and inserts also failed for
+text that another agent's blind cut had destroyed: a B or H trap's script cut from
+its prototype through the end of the lead and took the prototypes of T functions
+with it. The grade now leaves such damage to the collateral count: a T rename
+checks each line of code that names the function and skips a line that is gone, an
+A rename checks that no old name stays and no look-alike is renamed, and an insert
+glued to the paragraph above it passes when the paragraph below it is the reference
+one. The table shows this grade; the first one gave 179 and 180 shared passes.
