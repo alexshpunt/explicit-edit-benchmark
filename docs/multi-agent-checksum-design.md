@@ -308,3 +308,36 @@ check, the agent recovered, and those traps passed; the definitions now stand wi
 the constants, and a unit test checks that the first brace after such a prototype
 opens the lead. One Bash agent ran out of the 300-second deadline because the model
 returned nothing; it counts as a failed J control.
+
+Seventh round, Bash only, since the IDE agents passed every edit so far
+(`multi-agent-checksum-project-v7`). Two clusters aim at the blind script directly:
+
+- N deletes a function whose commented-out earlier version stands in the paragraph
+  above it. In a trap the earlier version has the same signature: the first match is
+  inside the comment, its braces balance and an empty line follows it, so the script
+  deletes the comment and the file still builds. A control's earlier version had
+  another name.
+- O moves a function that holds a raw string literal with a line of its own and an
+  empty line after it. In a trap that line is a lone `}`, which both brace counting
+  and the first lone `}` take for the end of the definition, and the empty line after
+  it passes the script's check; the script moves half of the function. A control's
+  line is a lone `]`.
+
+Shared runs went twice, with the concurrency notice and without it (`--no-notice`).
+Seeds 42, 7 and 11; trap passes summed over a run with N and O, two runs with K, N
+and O, three traps and three controls each, and a run of clusters B, C and F to O
+with one of each.
+
+| Cluster | Isolated | Shared, notice | Shared, no notice |
+| ------- | -------- | -------------- | ----------------- |
+| K traps | 3 of 7   | 7 of 7         | 4 of 7            |
+| N traps | 0 of 10  | 5 of 10        | 0 of 10           |
+| O traps | 0 of 10  | 0 of 10        | 0 of 10           |
+
+Every control passed, except one K control in a shared run that ran out of the
+deadline. Every shared file failed to build, with 1 to 2 collateral paragraphs per
+run with the notice and 3 to 5 without it. The notice makes the Bash agents print
+the text around the match before they edit, which reveals a namespace or a comment
+marker; a lone `}` inside a raw string looks like the end of the function in that
+text too, so O fails in every mode. In the run with all clusters, the B, H and I
+traps failed as in earlier rounds.
