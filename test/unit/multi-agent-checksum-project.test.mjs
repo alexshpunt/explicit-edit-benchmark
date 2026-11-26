@@ -290,6 +290,17 @@ test("each instruction, followed literally, gives exactly its task's result", ()
   }
 });
 
+test("a project of every cluster with many edits takes three-word names", () => {
+  const project = generateChecksumProject(3, { clusters: ALL, perVariant: 4 });
+  assert.match(project.start, /^long long [a-z]+_[a-z]+_[a-z]+\(long long value\) \{$/m);
+  let all = project.start;
+  for (const task of project.tasks) {
+    assert.equal(followInstruction(project.start, task), task.result, task.id);
+    all = followInstruction(all, task);
+  }
+  assert.equal(all, project.expected);
+});
+
 test("a trap and its control share their wording", () => {
   const project = generateChecksumProject(11, { clusters: ALL });
   const shape = (edit) =>

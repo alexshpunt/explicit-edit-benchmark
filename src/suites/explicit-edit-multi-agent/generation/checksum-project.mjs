@@ -413,12 +413,19 @@ export function generateChecksumProject(seed, options = {}) {
   };
   const vocabulary = (first, second) =>
     random.shuffle(first.flatMap((word) => second.map((other) => `${word}_${other}`)));
-  const functionNames = vocabulary(ADJECTIVES, NOUNS);
+  const twoWords = vocabulary(ADJECTIVES, NOUNS);
+  const functionNames = [...twoWords];
   // A large file needs more names: three-word names come after the two-word ones run
-  // out, so a project without the size option keeps its names.
-  if (counts.lines > 0) functionNames.unshift(...vocabulary(functionNames, NAME_SUFFIXES));
+  // out, so a project without the size option keeps its names. A project with many
+  // edits adds them once the two-word names run out.
+  let extended = counts.lines > 0;
+  if (extended) functionNames.unshift(...vocabulary(twoWords, NAME_SUFFIXES));
   const constantNames = vocabulary(CONSTANT_WORDS, CONSTANT_SUFFIXES);
   const take = (names) => {
+    if (names === functionNames && names.length === 0 && !extended) {
+      extended = true;
+      names.push(...vocabulary(twoWords, NAME_SUFFIXES));
+    }
     const name = names.pop();
     assert.ok(name, "Name vocabulary exhausted");
     return name;
@@ -1385,7 +1392,8 @@ export function generateChecksumProject(seed, options = {}) {
     }
     if (edit.kind === "move" || edit.kind === "insert")
       assert.equal(occurrences(edit.marker), 1, `${edit.id} marker is not unique`);
-    if (edit.kind === "insert") assert.equal(occurrences(edit.name), 0, `${edit.id} name exists`);
+    if (edit.kind === "insert")
+      assert.equal(identifierCount(start, edit.name), 0, `${edit.id} name exists`);
     if (edit.kind === "scoped-replace") {
       // An F trap's text also stands in two fillers; an I or R text also in the lead,
       // and a P, Q or S text in a decoy.
