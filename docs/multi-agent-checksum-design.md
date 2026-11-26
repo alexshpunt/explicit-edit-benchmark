@@ -31,6 +31,14 @@ Two execution modes run the same tasks:
   with whole-file integrity, the build and the printed checksum. Robustness is the
   shared result minus the isolated result, per cluster.
 
+Both modes give the agent the same prompt. The shared mode does not tell the agent
+that other agents edit the file: avoiding collisions is the harness's job, and a
+harness may warn its agent through its own prompt or tools. A sentence in the task
+prompt would make every agent more careful in general, and the seventh round below
+shows that it also repairs edits that have nothing to do with concurrency, so it
+would mix a prompt effect into robustness. `--notice` adds that sentence for
+comparison runs.
+
 ## Clusters
 
 | Cluster             | Failure it catches                                                   | Trap                                                                                                                                                  | Control                                                                                                | Likely easier for                                                                           |

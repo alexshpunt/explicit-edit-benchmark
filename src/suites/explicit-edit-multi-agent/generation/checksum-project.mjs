@@ -317,6 +317,8 @@ const LOCAL_NAMES = ["carry", "pivot", "tally", "stage", "inner", "accum", "blen
 const UNIQUE_LOCALS = ["bq", "bx", "bk", "bj", "bv", "bw", "bz", "by"];
 // Words in the C functions' strings.
 const LAYOUT_KINDS = ["grid", "panel", "table", "chart", "frame", "board"];
+// Third words of function names in a large file.
+const NAME_SUFFIXES = ["core", "aux", "edge", "path", "node", "link", "hub", "tip", "arc", "rim"];
 // The note above an N function's commented-out earlier version.
 const OLD_VERSION_NOTE = "// Previous version, kept until the new one is verified:";
 
@@ -351,6 +353,9 @@ export function generateChecksumProject(seed, options = {}) {
   const vocabulary = (first, second) =>
     random.shuffle(first.flatMap((word) => second.map((other) => `${word}_${other}`)));
   const functionNames = vocabulary(ADJECTIVES, NOUNS);
+  // A large file needs more names: three-word names come after the two-word ones run
+  // out, so a project without the size option keeps its names.
+  if (counts.lines > 0) functionNames.unshift(...vocabulary(functionNames, NAME_SUFFIXES));
   const constantNames = vocabulary(CONSTANT_WORDS, CONSTANT_SUFFIXES);
   const take = (names) => {
     const name = names.pop();

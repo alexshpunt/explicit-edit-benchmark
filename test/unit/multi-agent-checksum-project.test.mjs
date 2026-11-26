@@ -98,6 +98,17 @@ for (const { seed, options } of [
   });
 }
 
+test("the size option reaches a file of 50,000 lines that builds", async (t) => {
+  const project = generateChecksumProject(8, { clusters: "BNO", lines: 50000 });
+  const lines = project.start.split("\n").length;
+  assert.ok(lines >= 50000 && lines < 60000, `${lines} lines`);
+  const headers = project.start.split("\n").filter((line) => line.startsWith("long long "));
+  assert.equal(new Set(headers).size, headers.length);
+  const root = await mkdtemp(path.join(os.tmpdir(), "checksum-project-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  assert.equal(await output(root, "start", project.start, t.signal), `${project.answers.start}\n`);
+});
+
 /** The lines of the definition that starts at `first`, found by counting braces
  * outside character, string and raw string literals, or inside them too when `naive`.
  */

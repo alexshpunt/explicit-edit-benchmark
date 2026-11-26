@@ -18,7 +18,8 @@ the tasks in waves of N at once, and grades the final file against the reference
 and control edits per cluster; --density N puts N edits
 in each zone of neighbouring lines; --edits N groups N edits into one composite task;
 --lines N adds functions until main.cpp has at least N lines.
---no-notice leaves out the sentence that other agents edit main.cpp at the same time.
+--notice adds to shared-run prompts the sentence that other agents edit main.cpp at
+the same time; by default shared-run prompts equal the isolated ones.
 shared-rescore SEED SAVED_RUN grades a saved shared run again with the current grader.`;
 
 const { values, positionals } = parseArgs({
@@ -27,7 +28,7 @@ const { values, positionals } = parseArgs({
     config: { type: "string" },
     agents: { type: "string" },
     sandbox: { type: "string" },
-    "no-notice": { type: "boolean" },
+    notice: { type: "boolean" },
     "allow-model-calls": { type: "boolean" },
     clusters: { type: "string" },
     "per-variant": { type: "string" },
@@ -106,7 +107,7 @@ if (command === "show") {
     agents: values.agents === undefined ? undefined : Number(values.agents),
     options,
     ...(values.sandbox === undefined ? {} : { sandbox: values.sandbox }),
-    ...(values["no-notice"] ? { notice: false } : {}),
+    ...(values.notice ? { notice: true } : {}),
     signal: controller.signal,
   });
   const { identity: _identity, tasks, ...rest } = summary;

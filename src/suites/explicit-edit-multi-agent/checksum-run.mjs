@@ -185,7 +185,10 @@ export async function runChecksumIsolated(
   return summary;
 }
 
-/** The fact a shared-file agent needs: other agents edit the same file meanwhile. */
+/** An optional sentence for shared-file agents: other agents edit the same file
+ * meanwhile. Runs leave it out by default: it makes any agent more careful in
+ * general, so it would credit the prompt with what the harness should do.
+ */
 const SHARED_NOTICE =
   "Several agents are editing main.cpp at the same time. The file can change between the moment you read it and the moment you write it, and the risk of conflicting edits is high, so be as careful as possible with your edits.";
 
@@ -385,13 +388,14 @@ export function gradeSharedChecksum(project, candidate) {
 /** Spend model credit on one shared-file run: all agents start and warm up, then
  * wait at a barrier; each wave gives every agent one task at the same moment, and
  * the next wave starts when every agent of this one has finished. Agents persist
- * across waves; a timed-out agent is replaced before the next wave.
+ * across waves; a timed-out agent is replaced before the next wave. Prompts are the
+ * isolated ones unless `notice` adds the shared-file sentence.
  */
 export async function runChecksumShared(
   seed,
   outputPath,
   config,
-  { agents, options = {}, sandbox = "separate", notice = true, signal } = {},
+  { agents, options = {}, sandbox = "separate", notice = false, signal } = {},
 ) {
   assert.ok(["separate", "shared"].includes(sandbox), `Unknown sandbox mode ${sandbox}`);
   const source = await restoringSourceIdentity();
