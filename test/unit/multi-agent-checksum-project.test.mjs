@@ -966,7 +966,9 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     damaged: 1,
     collateral: 1,
     agents: 25,
+    providerFailures: 0,
   });
+  assert.equal(score.isolatedProviderFailures, 0);
   assert.deepEqual(score.byCluster.T, {
     isolated: { trap: { passed: 0, total: 0 }, control: { passed: 1, total: 1 } },
     shared: { trap: { passed: 0, total: 0 }, control: { passed: 0, total: 1 } },

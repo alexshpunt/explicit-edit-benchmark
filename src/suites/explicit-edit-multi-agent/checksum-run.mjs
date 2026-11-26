@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { chunkModelDrivers } from "./execution/chunk-model-drivers.mjs";
@@ -50,6 +50,8 @@ export const CHECKSUM_DELIVERY_DEADLINE_MS = 300_000;
  * shared run is a pool of 25.
  */
 export const CHECKSUM_AGENTS = 25;
+/** New attempts of an isolated task whose delivery the provider broke off. */
+export const CHECKSUM_PROVIDER_RETRIES = 2;
 const execFileAsync = promisify(execFile);
 
 /** Files beside main.cpp are byte strings: one character per byte, so a byte that is
@@ -130,43 +132,77 @@ export async function runChecksumIsolated(
 
   const pools = new Map();
   const rows = new Map();
+  const results = new Map();
+  const directoryOf = (task) => path.join(output, "tasks", task.id);
   const started = Date.now();
-  const { results } = await runAgentQueue(project.tasks, {
-    lifecycle: "per-delivery",
-    maxAgents: agents,
-    signal,
-    async createDriver(task, session, context) {
-      const directory = path.join(output, "tasks", task.id);
-      const workspace = path.join(directory, "workspace");
-      await mkdir(workspace, { recursive: true, mode: 0o700 });
-      await writeFile(path.join(workspace, "main.cpp"), project.start);
-      await writeProjectFiles(workspace, project.startFiles);
-      const drivers = chunkModelDrivers(directory, workspace, config, "");
-      pools.set(task.id, { drivers, workspace, directory });
-      return drivers.createDriver(null, session, context);
-    },
-    async execute(driver, task, { signal: abort, session }) {
-      const { drivers } = pools.get(task.id);
-      const row = { id: task.id, kind: task.kind, session, started: new Date().toISOString() };
-      rows.set(task.id, row);
-      const outcome = await drivers.execute(driver, task.prompt, {
-        signal: abort,
-        session,
-        timeoutMs: CHECKSUM_DELIVERY_DEADLINE_MS,
-      });
-      row.status = outcome.status;
-      row.ended = new Date().toISOString();
-      return outcome;
-    },
-    async onClosed(driver, task) {
-      rows.get(task.id).usage = pools.get(task.id).drivers.usage(driver);
-    },
-  });
+  // A task whose delivery the provider broke off, such as with a usage limit, starts
+  // again from the start project with a new agent; the broken attempt stays beside
+  // it. Other failures stop the run.
+  let pending = project.tasks;
+  for (let attempt = 1; pending.length > 0; attempt++) {
+    const queued = await runAgentQueue(pending, {
+      lifecycle: "per-delivery",
+      maxAgents: agents,
+      signal,
+      async createDriver(task, session, context) {
+        const directory = directoryOf(task);
+        const workspace = path.join(directory, "workspace");
+        await mkdir(workspace, { recursive: true, mode: 0o700 });
+        await writeFile(path.join(workspace, "main.cpp"), project.start);
+        await writeProjectFiles(workspace, project.startFiles);
+        const drivers = chunkModelDrivers(directory, workspace, config, "");
+        pools.set(task.id, { drivers, workspace, directory });
+        return drivers.createDriver(null, session, context);
+      },
+      async execute(driver, task, { signal: abort, session }) {
+        const { drivers } = pools.get(task.id);
+        const earlier = rows.get(task.id);
+        const row = {
+          id: task.id,
+          kind: task.kind,
+          session,
+          attempt,
+          ...(earlier
+            ? { providerFailures: [...(earlier.providerFailures ?? []), earlier.error] }
+            : {}),
+          started: new Date().toISOString(),
+        };
+        rows.set(task.id, row);
+        try {
+          const outcome = await drivers.execute(driver, task.prompt, {
+            signal: abort,
+            session,
+            timeoutMs: CHECKSUM_DELIVERY_DEADLINE_MS,
+          });
+          row.status = outcome.status;
+          return outcome;
+        } catch (error) {
+          if (error?.category !== "provider_failure") throw error;
+          row.status = "provider-failure";
+          row.error = String(error.message);
+          return { status: row.status };
+        } finally {
+          row.ended = new Date().toISOString();
+        }
+      },
+      async onClosed(driver, task) {
+        rows.get(task.id).usage = pools.get(task.id).drivers.usage(driver);
+      },
+    });
+    pending.forEach((task, index) => results.set(task.id, queued.results[index]));
+    pending = pending.filter((task) => rows.get(task.id).status === "provider-failure");
+    if (attempt > CHECKSUM_PROVIDER_RETRIES) break;
+    for (const task of pending) {
+      await pools.get(task.id).drivers.cleanup();
+      pools.delete(task.id);
+      await rename(directoryOf(task), `${directoryOf(task)}.attempt-${attempt}`);
+    }
+  }
   for (const { drivers } of pools.values()) await drivers.cleanup();
   const minutes = (Date.now() - started) / 60000;
 
   const tasks = [];
-  for (const [index, task] of project.tasks.entries()) {
+  for (const task of project.tasks) {
     const { workspace, directory } = pools.get(task.id);
     const main = await readFile(path.join(workspace, "main.cpp"), "utf8").catch(() => null);
     const names = Object.keys(project.startFiles);
@@ -186,7 +222,7 @@ export async function runChecksumIsolated(
       ...rows.get(task.id),
       cluster: task.cluster,
       variant: task.variant,
-      status: results[index]?.status ?? rows.get(task.id)?.status ?? "not-run",
+      status: results.get(task.id)?.status ?? rows.get(task.id)?.status ?? "not-run",
       edits:
         grade?.edits ??
         (task.parts ?? [task]).map(({ id, cluster, variant }) => ({
@@ -605,6 +641,9 @@ export async function runChecksumShared(
         } catch (error) {
           row.status = "error";
           row.error = String(error?.message ?? error);
+          // A delivery that the provider broke off, such as with a usage limit, is not
+          // the agent's failure; the summary counts such deliveries.
+          if (error?.category === "provider_failure") row.status = "provider-failure";
         }
         row.seconds = Number(((Date.now() - begin) / 1000).toFixed(1));
         return { status: row.status };
@@ -658,6 +697,7 @@ export async function runChecksumShared(
       mostTasksPerAgent: Math.max(0, ...deliveries.values()),
     },
     timedOut: ordered.filter((row) => row.status === "timed-out").length,
+    providerFailures: ordered.filter((row) => row.status === "provider-failure").length,
     usage: total,
     tasks: ordered.map((row) => ({
       ...row,
@@ -713,7 +753,12 @@ export function compareChecksumRuns(isolated, shared) {
       damaged: shared.damaged.length,
       collateral: shared.collateral.length,
       agents: shared.identity.agents,
+      // Deliveries the provider broke off; their tasks count as failed.
+      providerFailures: shared.providerFailures ?? 0,
     },
+    // Isolated tasks that the provider broke off on every attempt.
+    isolatedProviderFailures: isolated.tasks.filter((row) => row.status === "provider-failure")
+      .length,
     byCluster: Object.fromEntries(
       Object.entries(clusterSummary(alone)).map(([cluster, summary]) => [
         cluster,

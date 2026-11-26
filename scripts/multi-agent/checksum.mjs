@@ -141,6 +141,12 @@ if (command === "show") {
       `${score.shared.answer ? "prints" : "does not print"} the reference answer, ` +
       `${score.shared.collateral} collateral paragraphs`,
   );
+  const broken = score.shared.providerFailures + score.isolatedProviderFailures;
+  if (broken > 0)
+    console.log(
+      `Provider failures: ${score.isolatedProviderFailures} isolated tasks after every ` +
+        `attempt and ${score.shared.providerFailures} shared deliveries; their tasks count as failed`,
+    );
   const cell = ({ trap, control }) =>
     `${trap.passed}/${trap.total} ${control.passed}/${control.total}`;
   console.log("Cluster  alone: traps controls  crowd: traps controls");
