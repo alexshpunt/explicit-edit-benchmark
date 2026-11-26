@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { watch } from "node:fs";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -639,20 +640,46 @@ export async function runChecksumShared(
       ? () => (teamSandbox ??= startSharedSandbox(path.join(output, "sandbox")))
       : undefined;
   const names = Object.keys(project.startFiles);
-  // The task each agent works on, by session, and the checks of its edits after its
-  // tool calls: an edit that passed after one of them was written correctly, so a
-  // later failure was another agent's doing.
+  // The task each agent works on, by session. Only a task's own agent can make its
+  // edit pass, so a version of the file on which the edit passes, read right after
+  // one of the agent's tool calls or whenever the file changes, shows that the agent
+  // wrote it correctly, and a later failure was another agent's doing.
   const current = new Map();
   const observations = new Set();
+  const check = (owners) => {
+    const pending = owners.filter(({ row }) => row.passedAfterOwnWrite === false);
+    if (pending.length === 0) return;
+    const reading = (async () => {
+      const state = {
+        main: await readFile(path.join(workspace, "main.cpp"), "utf8"),
+        files: await readProjectFiles(workspace, names),
+      };
+      for (const { task, row } of pending)
+        if (passedAtFinish(project, task, state)) row.passedAfterOwnWrite = true;
+    })().catch(() => {});
+    observations.add(reading);
+    void reading.finally(() => observations.delete(reading));
+  };
   const observe = (session, event) => {
     const own = current.get(session);
-    if (!own || event.type !== "tool_execution_end") return;
-    const check = settledState(workspace, names).then((state) => {
-      if (passedAtFinish(project, own.task, state)) own.row.passedAfterOwnWrite = true;
-    });
-    observations.add(check);
-    void check.finally(() => observations.delete(check)).catch(() => {});
+    if (own && event.type === "tool_execution_end") check([own]);
   };
+  // Changes come faster than the checks; one check at a time follows the latest one.
+  let watching = false,
+    changed = false;
+  const watcher = watch(workspace, () => {
+    changed = true;
+    if (watching) return;
+    watching = true;
+    void (async () => {
+      while (changed) {
+        changed = false;
+        check([...current.values()]);
+        await Promise.allSettled([...observations]);
+      }
+      watching = false;
+    })();
+  });
   const drivers = chunkModelDrivers(path.join(output, "agents"), workspace, config, "", {
     sharedSandbox,
     onEvent: observe,
@@ -703,8 +730,9 @@ export async function runChecksumShared(
           // 1 for the agent's first task, 2 for its second, and so on.
           delivery: deliveries.get(session),
           started: new Date().toISOString(),
-          // Known only for agents that report their tool calls as they happen.
-          ...(drivers.observesEvents ? { passedAfterOwnWrite: false } : {}),
+          // Whether a version of the file has passed the task's own checks while its
+          // agent worked on it.
+          passedAfterOwnWrite: false,
         };
         rows.set(task.id, row);
         current.set(session, { task, row });
@@ -747,6 +775,7 @@ export async function runChecksumShared(
     await drivers.cleanup();
     if (teamSandbox) await (await teamSandbox).stop();
   }
+  watcher.close();
   await Promise.allSettled([...observations]);
   const minutes = (Date.now() - started) / 60000;
   const ordered = project.tasks.flatMap((task) => (rows.has(task.id) ? [rows.get(task.id)] : []));
@@ -802,11 +831,15 @@ export async function runChecksumShared(
  * - "provider-failure" or "timed-out": its delivery was broken off;
  * - "lost-later": its edit passed on the file as its agent left it, and a later write
  *   of another agent undid it;
- * - "lost-before-finish": its edit passed right after one of its agent's tool calls
- *   and was undone before the agent finished;
- * - "own-mistake": its edit never passed after any of its agent's tool calls;
- * - "failed-at-finish": it failed when its agent finished, for an agent that does
- *   not report its tool calls.
+ * - "lost-before-finish": its edit passed on a version of the file while its agent
+ *   worked, and was undone before the agent finished. An edit that another agent's
+ *   mistake made pass for a while, such as a function deleted by a neighbour's wrong
+ *   cut, counts here too;
+ * - "own-mistake": its edit passed on no version of the file that the run read
+ *   while its agent worked: after each of the agent's tool calls and on each change
+ *   of the file. A correct write undone before the next read looks the same;
+ * - "failed-at-finish": it failed when its agent finished, in a run that did not
+ *   read the file while agents worked.
  */
 export function sharedFailure(row) {
   if (row.status === "provider-failure" || row.status === "timed-out") return row.status;
