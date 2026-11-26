@@ -19,7 +19,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJKLMNO";
+const ALL = "ABCDEFGHIJKLMNOPQRS";
 const CONFIGS = [
   {},
   { clusters: ALL },
@@ -138,6 +138,52 @@ function definitionLength(lines, first, naive = false) {
   throw new Error("Unbalanced definition");
 }
 
+/** The name of the function that a P, Q, R or S instruction describes, found from
+ * the instruction's facts alone, or undefined for other instructions.
+ */
+function locate(lines, task) {
+  // Every definition with its name and its lines.
+  const definitions = () =>
+    lines.flatMap((line, first) => {
+      const name = /^long long (\w+)\(long long value\) \{$/.exec(line)?.[1];
+      return name
+        ? [{ name, body: lines.slice(first, first + definitionLength(lines, first)) }]
+        : [];
+    });
+  // Code without comments and string literals.
+  const code = (line) =>
+    line.trimStart().startsWith("//") ? "" : line.replace(/"(?:\\.|[^"])*"/g, '""');
+  const only = (found) => {
+    assert.equal(found.length, 1, task.id);
+    return found[0].name;
+  };
+  if (task.cluster === "P") {
+    const main = lines.slice(lines.indexOf("int main() {"));
+    const calls = main.filter((line) => line.includes(`(${task.argument}))`));
+    assert.equal(calls.length, 1, task.id);
+    return /\* (\w+)\(/.exec(calls[0])[1];
+  }
+  if (task.cluster === "Q")
+    return only(
+      definitions().filter(({ body }) =>
+        body.slice(1).some((line) => code(line).includes(`${task.callee}(`)),
+      ),
+    );
+  if (task.cluster === "S")
+    return only(
+      definitions().filter(({ body }) =>
+        body.some((line) => new RegExp(`\\b${task.constant}\\b`).test(code(line))),
+      ),
+    );
+  if (task.cluster === "R") {
+    const first = lines.indexOf(`long long ${task.anchor}(long long value) {`);
+    const end = first + definitionLength(lines, first);
+    assert.equal(lines[end], "", task.id);
+    return /^long long (\w+)\(/.exec(lines[end + 1])[1];
+  }
+  return undefined;
+}
+
 /** Follow one task's instruction literally, as plain text operations. */
 function followInstruction(start, task) {
   if (task.kind === "composite") return task.parts.reduce(followInstruction, start);
@@ -154,7 +200,7 @@ function followInstruction(start, task) {
     assert.equal(lines.length - kept.length, task.occurrences, task.id);
     return kept.join("\n");
   }
-  const header = `long long ${task.name ?? task.host}(long long value) {`;
+  const header = `long long ${locate(lines, task) ?? task.name ?? task.host}(long long value) {`;
   // A K definition is the first one after the opening line of its namespace.
   const from =
     task.kind === "namespace-delete" ? lines.indexOf(`namespace ${task.namespace} {`) : 0;
@@ -198,7 +244,10 @@ test("each instruction, followed literally, gives exactly its task's result", ()
 test("a trap and its control share their wording", () => {
   const project = generateChecksumProject(11, { clusters: ALL });
   const shape = (edit) =>
-    edit.prompt.replace(/"(?:[^"\\]|\\.)*"/g, "Q").replace(/\d+ (occurrences|lines)/, "N $1");
+    edit.prompt
+      .replace(/"(?:[^"\\]|\\.)*"/g, "Q")
+      .replace(/\d+ (occurrences|lines)/, "N $1")
+      .replace(/argument \d+/, "argument N");
   for (const cluster of Object.keys(CHECKSUM_CLUSTERS)) {
     const prompts = new Set(
       atoms(project)
@@ -268,6 +317,21 @@ test("each trap differs from its control in its one factor", () => {
       if (edit.cluster === "N")
         assert.equal(edit.copy.includes(`// long long ${edit.name}(`), trap, edit.id);
       if (edit.cluster === "O") assert.equal(edit.full.includes('R"(\n}\n\n)"'), trap, edit.id);
+      // A P, Q or S trap's decoy, above the target, holds the property's text where it
+      // is not the property; an R trap's anchor has a prototype.
+      if ("PQS".includes(edit.cluster)) {
+        const decoy = definitionText(start, edit.decoy);
+        assert.ok(start.indexOf(decoy) < start.indexOf(definitionText(start, edit.host)));
+        const text =
+          edit.cluster === "P"
+            ? `(${edit.argument})`
+            : edit.cluster === "Q"
+              ? `// long long c = (${edit.callee}(`
+              : `"${edit.constant} is tuned"`;
+        assert.equal(decoy.includes(text), trap, edit.id);
+      }
+      if (edit.cluster === "R")
+        assert.equal(start.includes(`long long ${edit.anchor}(long long value);`), trap, edit.id);
       // A C trap scans for a brace character.
       if (edit.cluster === "C")
         assert.equal(/'[{}]'/.test(definitionText(start, edit.name)), trap, edit.id);
@@ -362,8 +426,9 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J, K, L and N edits stand in gaps of their own, and M edits everywhere.
-        const edits = all.filter(({ cluster }) => !"JKLMN".includes(cluster));
+        // J, K, L, N, P, Q, R and S edits stand in gaps of their own, and M edits
+        // everywhere.
+        const edits = all.filter(({ cluster }) => !"JKLMNPQRS".includes(cluster));
         if (edits.length === 0) continue;
         // An O definition holds an empty line, so it spans two paragraphs.
         const reach = zoneReach + edits.filter(({ cluster }) => cluster === "O").length;
@@ -558,6 +623,13 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   // The same scripts handle the controls.
   for (const control of [find("N", "control"), find("O", "control")])
     assert.equal(blind(project.start, control), control.result);
+  // A replacement of the first copy of a P, Q, R or S text edits the decoy or the
+  // lead, in traps and controls alike: only the property tells the functions apart.
+  for (const cluster of "PQRS")
+    for (const variant of ["trap", "control"]) {
+      const task = find(cluster, variant);
+      assert.ok(failed(project.start.replace(task.before, task.after), task), task.id);
+    }
   // An M edit that deletes the definition too fails.
   const bulk = find("M", "trap");
   assert.ok(failed(project.expected.replace(`${bulk.definition}\n`, ""), bulk));

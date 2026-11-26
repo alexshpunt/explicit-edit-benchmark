@@ -29,6 +29,10 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   M: "bulk deletion",
   N: "commented copy",
   O: "raw string",
+  P: "located by a call in main",
+  Q: "located by its callee",
+  R: "located by its neighbour",
+  S: "located by a constant",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -205,7 +209,12 @@ function expressionText(statement, context) {
   if (statement.kind === "linear") return `${left} * ${factor} + ${offset}`;
   if (statement.kind === "product") return `${left} * ${right} + ${offset}`;
   if (statement.kind === "mix") return `(${left} ^ ${factor}) + ${right}`;
-  if (statement.kind === "call") return `${statement.callee}(${left}) + ${offset}`;
+  // A call passes the previous variable; a P decoy's call passes a number and adds
+  // the previous variable.
+  if (statement.kind === "call")
+    return statement.literal === undefined
+      ? `${statement.callee}(${left}) + ${offset}`
+      : `${statement.callee}(${statement.literal}) + ${left}`;
   if (statement.kind === "constant")
     return `${left} * ${context.name(statement.constant)} + ${offset}`;
   throw new Error(`Unknown statement kind ${statement.kind}`);
@@ -234,8 +243,17 @@ function instruction(edit) {
     return `In main.cpp, move the complete definition of the function ${q(signature(edit.name))} to the placeholder line ${q(edit.marker)}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`;
   if (edit.kind === "insert")
     return `In main.cpp, replace the placeholder line ${q(edit.marker)} with the following ${edit.lines} lines: ${q(edit.text)}.`;
+  const replacement = `replace ${q(edit.before)} with ${q(edit.after)}. The definition holds it once.`;
+  if (edit.cluster === "P")
+    return `In main.cpp, main passes the argument ${edit.argument} to exactly one function. In the definition of that function, ${replacement}`;
+  if (edit.cluster === "Q")
+    return `In main.cpp, exactly one function calls the function ${q(edit.callee)}. In the definition of that calling function, ${replacement}`;
+  if (edit.cluster === "R")
+    return `In main.cpp, in the function definition that directly follows the definition of the function ${q(signature(edit.anchor))}, ${replacement}`;
+  if (edit.cluster === "S")
+    return `In main.cpp, exactly one function uses the constant ${q(edit.constant)}. In the definition of that function, ${replacement}`;
   if (edit.kind === "scoped-replace")
-    return `In main.cpp, in the definition of the function ${q(signature(edit.host))}, replace ${q(edit.before)} with ${q(edit.after)}. The definition holds it once.`;
+    return `In main.cpp, in the definition of the function ${q(signature(edit.host))}, ${replacement}`;
   if (edit.kind === "delete")
     return `In main.cpp, delete the complete definition of the function ${q(signature(edit.name))}. Also delete the empty line that directly followed the definition.`;
   if (edit.kind === "local-rename")
@@ -278,6 +296,11 @@ const KIND = {
   M: "bulk-delete",
   N: "delete",
   O: "move",
+  // P, Q, R and S replace an expression in a function the prompt names by a property.
+  P: "scoped-replace",
+  Q: "scoped-replace",
+  R: "scoped-replace",
+  S: "scoped-replace",
 };
 // Namespace names of K edits: the first namespace of a pair in the file holds the
 // decoy, the second the target.
@@ -337,11 +360,17 @@ export function generateChecksumProject(seed, options = {}) {
   );
   const random = generator(seed);
 
-  // Distinct numbers keep every changed expression unique in the file; a larger
-  // file draws them from a wider range.
+  // Distinct numbers keep every changed expression unique in the file; more edits
+  // and a larger file draw them from a wider range. A J pair counts two edits and an
+  // L group three.
   const taken = new Set();
-  const highest = 1999 + 4 * counts.lines;
+  const editCount =
+    2 *
+    counts.perVariant *
+    clusters.reduce((sum, cluster) => sum + ({ J: 2, L: 3 }[cluster] ?? 1), 0);
+  const highest = Math.max(1999, 60 * editCount) + 4 * counts.lines;
   const number = () => {
+    assert.ok(taken.size < (highest - 11) / 2, "Too few distinct numbers");
     for (;;) {
       const value = random.integer(11, highest);
       if (!taken.has(value)) {
@@ -437,6 +466,15 @@ export function generateChecksumProject(seed, options = {}) {
         if (kind === "call") statement.callee = random.pick(callees);
       } else if (entry.constant)
         statement = { ...base, kind: "constant", constant: entry.constant, offset: number() };
+      // A call of one named function, or of a library function with a number.
+      else if (entry.callee || entry.literal !== undefined)
+        statement = {
+          ...base,
+          kind: "call",
+          callee: entry.callee ?? random.pick(callees),
+          literal: entry.literal,
+          offset: number(),
+        };
       else if (entry.scoped) {
         // An F site: a plain line whose text other functions may repeat.
         statement = { ...base, kind: "linear", factor: number(), offset: number() };
@@ -497,7 +535,12 @@ export function generateChecksumProject(seed, options = {}) {
     ofCluster("J").length / 2 +
     ofCluster("K").length +
     ofCluster("L").length / 3 +
-    ofCluster("N").length;
+    ofCluster("N").length +
+    // P, R and S stand with a decoy or an anchor; Q also has a helper of its own.
+    ofCluster("P").length +
+    2 * ofCluster("Q").length +
+    ofCluster("R").length +
+    ofCluster("S").length;
   const lengths = [];
   while (
     lengths.length <
@@ -738,6 +781,77 @@ export function generateChecksumProject(seed, options = {}) {
     edit.name = name;
   }
 
+  // P, Q and S: one expression to replace inside a function that the prompt names
+  // only by a property: main passes it a given number (P), it is the only function
+  // that calls a given function (Q), or it is the only function that uses a given
+  // constant (S). A decoy function above it holds the same expression. In a trap
+  // the decoy also holds the property's text where it is not the property: the
+  // number as another call's argument, a call in a comment, or the constant's name
+  // in a string literal. A control's decoy holds another number, name or word there.
+  const located = (edit, plan, decoy) => {
+    const target = build(take(functionNames), plan, { prototyped: false });
+    const copy = build(take(functionNames), decoy, { prototyped: false });
+    const statement = copy.body[edit.position];
+    Object.assign(statement, {
+      kind: "linear",
+      factor: edit.factor,
+      offset: Number(edit.before.split(" + ")[1]),
+    });
+    edit.decoy = copy.name;
+    pairs.push([{ function: copy.name }, { function: target.name }]);
+    return { target, copy };
+  };
+  for (const edit of ofCluster("P")) {
+    // The decoy's number is set once main has its arguments.
+    const { copy } = located(
+      edit,
+      ["plain", { scoped: edit }, "plain"],
+      ["plain", "plain", { literal: 0 }],
+    );
+    edit.literalCall = copy.body[2];
+  }
+  for (const edit of ofCluster("Q")) {
+    // A helper with a prototype that only the target calls: library calls never
+    // pick it, and main does not call it.
+    const helper = build(take(functionNames), plain(random.integer(2, 3)), {
+      callees: [],
+      prototyped: true,
+    });
+    helper.uncalled = true;
+    edit.callee = helper.name;
+    pairs.push([{ function: edit.callee }]);
+    const { copy } = located(
+      edit,
+      ["plain", { scoped: edit }, { callee: edit.callee }],
+      ["plain", "plain", "plain"],
+    );
+    const commented = edit.variant === "trap" ? edit.callee : take(functionNames);
+    copy.body.splice(2, 0, {
+      type: "raw",
+      lines: [`  // long long c = (${commented}(b) + ${number()}) % kModulus;  // disabled`],
+    });
+  }
+  for (const edit of ofCluster("S")) {
+    edit.constant = take(constantNames);
+    const value = random.integer(2, 97);
+    constants.push({ name: edit.constant, value });
+    values.set(edit.constant, value);
+    const { copy } = located(
+      edit,
+      ["plain", { scoped: edit }, { constant: edit.constant }],
+      ["plain", "plain", "plain"],
+    );
+    // The decoy reads its label, so nothing calls it and the label stays out of
+    // the checksum.
+    const word = edit.variant === "trap" ? edit.constant : take(constantNames);
+    copy.uncalled = true;
+    copy.body.unshift({ type: "raw", lines: [`  const char* label = "${word} is tuned";`] });
+    copy.body.push({
+      type: "raw",
+      lines: ["  for (const char* p = label; *p != 0; ++p) a = (a * 31 + *p) % kModulus;"],
+    });
+  }
+
   // H: functions to delete; a trap has a prototype. Nothing calls them, so the
   // file builds without them.
   for (const edit of ofCluster("H")) {
@@ -749,17 +863,29 @@ export function generateChecksumProject(seed, options = {}) {
   }
 
   // I: one expression to replace inside a function; a trap's function has a
-  // prototype. Each I site has its own position, and the lead function, the first
-  // definition after the prototypes, repeats every I expression at that position.
-  for (const [index, edit] of ofCluster("I").entries()) {
+  // prototype. R: one expression to replace inside the definition that directly
+  // follows an anchor function's; a trap's anchor has a prototype, and the first
+  // definition after the prototypes is the lead. Each I and R site has its own
+  // position, and the lead function repeats every I and R expression at that
+  // position, so a search that starts from the prototype edits the lead.
+  const leadSites = [...ofCluster("I"), ...ofCluster("R")];
+  for (const [index, edit] of leadSites.entries()) {
     const plan = plain(index + 3);
     plan[index + 1] = { scoped: edit };
-    build(take(functionNames), plan, { prototyped: edit.variant === "trap" });
+    if (edit.cluster === "I")
+      build(take(functionNames), plan, { prototyped: edit.variant === "trap" });
+    else {
+      edit.anchor = build(take(functionNames), plain(random.integer(2, 4)), {
+        prototyped: edit.variant === "trap",
+      }).name;
+      build(take(functionNames), plan, { prototyped: false });
+      pairs.push([{ function: edit.anchor }, { function: edit.host }]);
+    }
   }
-  const lead = build(take(functionNames), plain(Math.max(4, ofCluster("I").length + 3)), {
+  const lead = build(take(functionNames), plain(Math.max(4, leadSites.length + 3)), {
     prototyped: false,
   });
-  for (const edit of ofCluster("I")) {
+  for (const edit of leadSites) {
     const statement = lead.body[edit.position];
     statement.kind = "linear";
     statement.factor = edit.factor;
@@ -830,6 +956,13 @@ export function generateChecksumProject(seed, options = {}) {
   const main = random
     .shuffle(functions.filter(({ uncalled }) => !uncalled))
     .map(({ name }) => ({ name, weight: random.integer(2, 9), input: number() }));
+  // P: the argument main passes to the target; a trap's decoy passes it to a library
+  // function too, a control's decoy passes another number.
+  for (const edit of ofCluster("P")) {
+    edit.argument = main.find(({ name }) => name === edit.host).input;
+    edit.literalCall.literal = edit.variant === "trap" ? edit.argument : number();
+    delete edit.literalCall;
+  }
 
   const byName = new Map(functions.map((entry) => [entry.name, entry]));
   const evaluate = (factors) => {
@@ -849,7 +982,9 @@ export function generateChecksumProject(seed, options = {}) {
                 ? (left ^ factor) + right
                 : item.kind === "constant"
                   ? left * values.get(item.constant) + item.offset
-                  : run(item.callee, left) + item.offset;
+                  : item.literal === undefined
+                    ? run(item.callee, left) + item.offset
+                    : run(item.callee, item.literal) + left;
         assert.ok(Number.isSafeInteger(raw) && raw >= 0, "Checksum arithmetic left the safe range");
         scope.set(variable, raw % MODULUS);
       }
@@ -1002,6 +1137,37 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(occurrences(header(target)), 1, `${edit.id} header is not unique`);
       assert.equal(occurrences(`${signature(target)};`), declared, `${edit.id} prototype`);
     }
+    // Each property names one function, and only a trap's decoy holds its text.
+    const trap = edit.variant === "trap";
+    if (edit.cluster === "P") {
+      const main = start.slice(start.indexOf("\nint main() {"));
+      assert.equal(main.split(`(${edit.argument}))`).length, 2, `${edit.id} main calls`);
+      assert.ok(main.includes(`${edit.host}(${edit.argument}))`), `${edit.id} main call`);
+      assert.equal(occurrences(`(${edit.argument})`), trap ? 2 : 1, `${edit.id} decoy`);
+    }
+    if (edit.cluster === "Q") {
+      const calls = start
+        .split("\n")
+        .filter(
+          (line) =>
+            line.includes(`${edit.callee}(`) &&
+            !line.trimStart().startsWith("//") &&
+            !line.startsWith("long long "),
+        );
+      assert.equal(calls.length, 1, `${edit.id} calls`);
+      assert.ok(definitionText(start, edit.host).includes(calls[0]), `${edit.id} caller`);
+      assert.equal(occurrences(`// long long c = (${edit.callee}(`), trap ? 1 : 0, edit.id);
+    }
+    if (edit.cluster === "R") {
+      const anchor = definitionText(start, edit.anchor);
+      const after = start.slice(start.indexOf(anchor) + anchor.length);
+      assert.ok(after.startsWith(`\n\n${header(edit.host)}`), `${edit.id} neighbour`);
+      assert.equal(occurrences(`${signature(edit.anchor)};`), trap ? 1 : 0, `${edit.id} prototype`);
+    }
+    if (edit.cluster === "S") {
+      assert.equal(identifierCount(start, edit.constant), trap ? 3 : 2, `${edit.id} uses`);
+      assert.equal(occurrences(`"${edit.constant} is tuned"`), trap ? 1 : 0, edit.id);
+    }
     if (edit.cluster === "N") {
       // Only a trap's signature stands in the commented-out copy too.
       assert.equal(occurrences(header(edit.name)), edit.variant === "trap" ? 2 : 1, edit.id);
@@ -1042,8 +1208,9 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(occurrences(edit.marker), 1, `${edit.id} marker is not unique`);
     if (edit.kind === "insert") assert.equal(occurrences(edit.name), 0, `${edit.id} name exists`);
     if (edit.kind === "scoped-replace") {
-      // An F trap's text also stands in two fillers; an I text also in the lead.
-      const copies = edit.cluster === "I" ? 2 : edit.variant === "trap" ? 3 : 1;
+      // An F trap's text also stands in two fillers; an I or R text also in the lead,
+      // and a P, Q or S text in a decoy.
+      const copies = "IPQRS".includes(edit.cluster) ? 2 : edit.variant === "trap" ? 3 : 1;
       assert.equal(occurrences(edit.before), copies, `${edit.id} copies`);
       assert.equal(expected.split(edit.after).length, 2, `${edit.id} result is not unique`);
     }
