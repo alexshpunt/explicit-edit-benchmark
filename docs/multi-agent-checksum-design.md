@@ -49,7 +49,7 @@ comparison runs.
 | D. Supplied text    | Changing supplied text on the way into the file                      | Insert a supplied 13-line function whose five string literals hold backslash escapes, quotes, `$HOME`, `$(date)`, backticks and `%`                   | Insert a supplied 13-line function of the same shape whose literals hold plain words                   | Neither by design: a heredoc needs a quoted delimiter, a JSON argument needs exact escaping |
 | E. Byte exactness   | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space                             | Replace an expression on an ordinary line                                                              | Neither by design                                                                           |
 
-Later rounds added clusters F to M. Each targets a failure seen in a trace or a
+Later rounds added clusters F to X. Each targets a failure seen in a trace or a
 mechanism a harness could plausibly have:
 
 | Cluster               | Trap                                                                                                                                                              | Control                                            |
@@ -62,6 +62,17 @@ mechanism a harness could plausibly have:
 | K. Namespace target   | Delete the definition of `f` in the namespace `slow`, while the namespace `fast` above it defines a function with the same signature                              | The function in `fast` has another name            |
 | L. Shifted lines      | Delete a function with the comment lines above it, whose number the prompt does not give; two neighbours insert 29-line functions right above it in the same wave | The neighbours insert right below it               |
 | M. Bulk deletion      | Delete each of 32 lines, spread over the file, that call an empty trace function, and keep its definition                                                         | Three such lines                                   |
+| N. Commented copy     | Delete a function whose commented-out earlier version, with the same signature, stands in the paragraph above it                                                  | The earlier version had another name               |
+| O. Raw string         | Move a function whose raw string literal holds a lone `}` line followed by an empty line                                                                          | The literal's line is a lone `]`                   |
+| P. Located by main    | Replace an expression in the function to which main passes a given number; a decoy above it holds the expression and passes the number to a library function      | The decoy passes another number                    |
+| Q. Located by callee  | Replace an expression in the only function that calls a given helper; the decoy holds the expression and a commented-out call of the helper                       | The decoy's comment names another function         |
+| R. Located by order   | Replace an expression in the definition that follows a given function's; that function has a prototype, and the lead holds the expression                         | The function has no prototype                      |
+| S. Located by use     | Replace an expression in the only function that uses a given constant; the decoy holds the expression and the constant's name in a string literal                 | The decoy's literal holds another word             |
+| T. Code-only rename   | Rename a function in its prototype, definition and calls; a comment and a string literal also name it and stay unchanged                                          | The comment and literal name another function      |
+| U. Unused functions   | Delete the functions of a namespace that no code calls; the caller holds a commented-out call of one of them                                                      | The commented-out call names a called function     |
+| V. Unqualified call   | The same edit; one function of the namespace calls another without the namespace prefix                                                                           | The call names the namespace                       |
+| W. Line endings       | Delete the second of three functions from a file that main.cpp includes; the file ends its lines with CRLF                                                        | The file ends its lines with LF                    |
+| X. Byte order mark    | Delete the first of three functions from an included file that starts with a UTF-8 byte order mark                                                                | The file has no mark                               |
 
 Each trap differs from its control in one factor. Within a cluster, both variants use
 the same wording, so the prompt does not reveal which one is the trap.
@@ -79,6 +90,10 @@ edits unchanged…". The cluster instructions are:
 - K: `In main.cpp, delete the complete definition of the function "long long f(long long value)" in the namespace "slow". Also delete the empty line that directly followed the definition.`
 - L: `In main.cpp, delete the complete definition of the function "long long f(long long value)" together with the comment lines directly above it. Also delete the empty line that directly followed the definition.` The neighbours use the D wording.
 - M: `In main.cpp, delete each line that calls the function "trace_step"; there are N lines. Keep its definition.`
+- P: `In main.cpp, main passes the argument N to exactly one function. In the definition of that function, replace "a * 37 + 11" with "a * 41 + 11". The definition holds it once.` Q, R and S name the function by its callee, its neighbour or its constant in the same frame.
+- T: `In main.cpp, rename the function "f" to "g": change its prototype, its definition and every call of it. Comments and string literals that mention the function stay unchanged.`
+- U and V: `In main.cpp, delete the complete definition of every function in the namespace "diag" that no code calls, and the empty line that directly followed each deleted definition. Keep the namespace and the functions that are called.`
+- W and X: `In part.inc, delete the complete definition of the function "long long f(long long value)". Also delete the empty line that directly followed the definition.`
 
 The A wording is the same for traps and controls; for a control, the last sentence
 has nothing to apply to. Task ids are neutral (`edit-07`), because an agent can see
@@ -396,3 +411,43 @@ helper's name followed by `(` that also held the expression, which was the decoy
 with the commented-out call. The Bash agents fail when a prompt makes the target
 look unique while it is not; when the prompt itself says that they have to look,
 they look.
+
+Tenth round, Bash only (`multi-agent-checksum-project-v8`): edits that need a reading
+of the whole file. T renames a function in code only, while a trap's comment and
+string literal also name it. U deletes the functions of a namespace that no code
+calls, while a trap's caller holds a commented-out call of one of them. V is the
+same edit, where a trap's namespace function calls another one without the
+namespace prefix, so a search for the qualified name misses the call. Three traps
+and three controls per cluster, seeds 42 and 7, in a file of about 900 lines and in
+one of 3,000 lines (`--lines 3000`):
+
+| Clusters | Lines | Isolated, both seeds | Shared, both seeds |
+| -------- | ----- | -------------------- | ------------------ |
+| T, U     | 900   | all 24               | all 24             |
+| V        | 900   | all 12               | all 12             |
+| T, U, V  | 3,000 | all 36               | all 36             |
+
+None of the three traps caught a Bash agent. For T, the agents listed every line
+that holds the name with `grep -n` and rewrote only the lines of code by number. For
+U and V, they printed the whole file with `cat`, even at 3,000 lines, and chose the
+functions to delete by reading it. As in the ninth round, a prompt that asks for a
+judgment makes the agent read first.
+
+Eleventh round, Bash only: files beside main.cpp. W and X put three functions in a
+file of their own that main.cpp includes (`#include "part.inc"`). The first version
+replaced an expression in such a file; every edit passed, because the agents'
+scripts for a single replacement read and wrote bytes. The second version deletes a
+function, an edit whose scripts had read text in earlier rounds:
+
+| Seed | Isolated | Shared                                                     |
+| ---- | -------- | ---------------------------------------------------------- |
+| 42   | all 12   | one X trap fails: the byte order mark is gone; file builds |
+| 7    | all 12   | one X trap fails the same way                              |
+
+No W trap failed. The agents opened the included files in binary mode or with
+`newline=""` from their first script, and one script detected the line ending
+before it deleted the definition. Both X failures came from the same script: it took
+the start of the function's line as the position after the last newline before the
+signature, which is 0 when the function is the first in the file, and so deleted
+the byte order mark with the definition. The file still builds and prints the
+reference answer, so only the byte comparison sees the damage.
