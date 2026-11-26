@@ -53,8 +53,12 @@ export const CHECKSUM_DELIVERY_DEADLINE_MS = 300_000;
  * shared run is a pool of 25.
  */
 export const CHECKSUM_AGENTS = 25;
-/** New attempts of an isolated task whose delivery the provider broke off. */
+/** New attempts of an isolated task whose delivery the provider broke off, and the
+ * wait before each: such failures come in bursts of a few seconds, so an attempt
+ * right away fails the same way.
+ */
 export const CHECKSUM_PROVIDER_RETRIES = 2;
+export const CHECKSUM_PROVIDER_RETRY_WAIT_MS = 60_000;
 const execFileAsync = promisify(execFile);
 
 /** Files beside main.cpp are byte strings: one character per byte, so a byte that is
@@ -195,6 +199,8 @@ export async function runChecksumIsolated(
     pending.forEach((task, index) => results.set(task.id, queued.results[index]));
     pending = pending.filter((task) => rows.get(task.id).status === "provider-failure");
     if (attempt > CHECKSUM_PROVIDER_RETRIES) break;
+    if (pending.length > 0)
+      await sleep(attempt * CHECKSUM_PROVIDER_RETRY_WAIT_MS, undefined, { signal });
     for (const task of pending) {
       await pools.get(task.id).drivers.cleanup();
       pools.delete(task.id);
