@@ -135,8 +135,21 @@ Constants use snake case, so a trap `gain_rate` has the look-alikes
 
 ## Concurrency
 
-Concurrency applies to every cluster: each run measures the same edits isolated and
-shared. A shared run (`multi-agent-checksum-shared-v2`) is a pool of 25 agents, as in
+Concurrency applies to every cluster. An observation of a harness and a model is two
+runs of the same seed's tasks, one after the other, each with 25 agents at once:
+
+1. The isolated run gives every task to a new agent in its own copy of the start
+   project. It measures what the harness and the model get right alone.
+2. The shared run gives the same tasks to a pool of 25 agents on one copy. It adds
+   the crowd.
+
+`compare` turns the two runs into the observation's two scores, per cluster with
+traps and controls side by side, and lists the edits that passed alone and failed
+in the crowd, and the edits that passed only in the crowd. The shared run also
+reports whether the file builds and prints the reference answer, and how many
+paragraphs that no edit was meant to touch were damaged.
+
+A shared run (`multi-agent-checksum-shared-v2`) is a pool of 25 agents, as in
 the original Multi-Agent suite. Every agent starts and warms up before the first
 task; then each takes the next task from one queue as soon as it has finished its
 last one. There is no barrier, so the file keeps changing under every agent for the

@@ -45,6 +45,11 @@ export function clusterSummary(edits) {
 export const CHECKSUM_RUN_VERSION = "multi-agent-checksum-isolated-v1";
 export const CHECKSUM_SHARED_VERSION = "multi-agent-checksum-shared-v2";
 export const CHECKSUM_DELIVERY_DEADLINE_MS = 300_000;
+/** Agents working at once in both modes unless the caller sets their number, as in
+ * the original Multi-Agent suite: an isolated run keeps 25 fresh agents busy, a
+ * shared run is a pool of 25.
+ */
+export const CHECKSUM_AGENTS = 25;
 const execFileAsync = promisify(execFile);
 
 /** Files beside main.cpp are byte strings: one character per byte, so a byte that is
@@ -100,7 +105,7 @@ export async function runChecksumIsolated(
   seed,
   outputPath,
   config,
-  { agents = 5, options = {}, signal } = {},
+  { agents = CHECKSUM_AGENTS, options = {}, signal } = {},
 ) {
   assert.ok(Number.isSafeInteger(agents) && agents >= 1);
   const source = await restoringSourceIdentity();
@@ -489,11 +494,6 @@ export function gradeSharedChecksum(project, candidate, files = {}) {
   };
 }
 
-/** The agents of a shared run unless the caller sets their number, as in the
- * original Multi-Agent suite.
- */
-export const CHECKSUM_SHARED_AGENTS = 25;
-
 /** Spend model credit on one shared-file run: a pool of agents works through one
  * queue of tasks. Every agent starts and warms up first; then each takes the next
  * task as soon as it has finished its last one, with no barrier, so the file keeps
@@ -512,7 +512,7 @@ export async function runChecksumShared(
   const source = await restoringSourceIdentity();
   assert.equal(source.sourceClean, true, "Checksum runs require clean committed source");
   const project = generateChecksumProject(seed, options);
-  const team = agents ?? Math.min(CHECKSUM_SHARED_AGENTS, project.tasks.length);
+  const team = agents ?? Math.min(CHECKSUM_AGENTS, project.tasks.length);
   assert.ok(Number.isSafeInteger(team) && team >= 1 && team <= project.tasks.length);
   const output = path.resolve(outputPath);
   await mkdir(output, { mode: 0o700 });
@@ -670,4 +670,63 @@ export async function runChecksumShared(
     mode: 0o600,
   });
   return summary;
+}
+
+/** The two scores of one observation: the isolated run of a seed's tasks, which
+ * measures what the harness and the model get right alone, and the shared run of
+ * the same tasks, which adds the crowd. Both count edits by their own checks. The
+ * comparison lists the edits that passed alone and failed in the crowd, and the
+ * ones that passed only in the crowd, such as a blind script whose wrong target
+ * another agent had already removed.
+ */
+export function compareChecksumRuns(isolated, shared) {
+  for (const key of ["project", "seed", "harness", "model", "thinking"])
+    assert.deepEqual(isolated.identity[key], shared.identity[key], `The runs differ in ${key}`);
+  assert.deepEqual(isolated.identity.counts, shared.identity.counts, "The runs differ in tasks");
+  const alone = isolated.tasks.flatMap((row) => row.edits);
+  const crowd = new Map(shared.tasks.map((row) => [row.id, row]));
+  const together = isolated.tasks.flatMap((row) =>
+    row.edits.map((edit) => ({
+      ...edit,
+      passed: crowd.has(row.id) && !crowd.get(row.id).failedEdits.includes(edit.id),
+    })),
+  );
+  const score = (edits) => ({
+    passed: edits.filter(({ passed }) => passed).length,
+    total: edits.length,
+    traps: variantTotals(edits, "trap"),
+    controls: variantTotals(edits, "control"),
+  });
+  const passedAlone = new Map(alone.map((edit) => [edit.id, edit.passed]));
+  const label = ({ id, cluster, variant }) => ({ id, cluster, variant });
+  const crowdClusters = clusterSummary(together);
+  return {
+    project: isolated.identity.project,
+    seed: isolated.identity.seed,
+    harness: isolated.identity.harness,
+    model: isolated.identity.model,
+    isolated: score(alone),
+    shared: {
+      ...score(together),
+      built: shared.built,
+      answer: shared.answer === shared.expectedAnswer,
+      damaged: shared.damaged.length,
+      collateral: shared.collateral.length,
+      agents: shared.identity.agents,
+    },
+    byCluster: Object.fromEntries(
+      Object.entries(clusterSummary(alone)).map(([cluster, summary]) => [
+        cluster,
+        { isolated: summary, shared: crowdClusters[cluster] },
+      ]),
+    ),
+    lostInCrowd: together.filter((edit) => !edit.passed && passedAlone.get(edit.id)).map(label),
+    gainedInCrowd: together.filter((edit) => edit.passed && !passedAlone.get(edit.id)).map(label),
+  };
+}
+
+/** Passed and total edits of one variant. */
+function variantTotals(edits, variant) {
+  const own = edits.filter((edit) => edit.variant === variant);
+  return { passed: own.filter(({ passed }) => passed).length, total: own.length };
 }

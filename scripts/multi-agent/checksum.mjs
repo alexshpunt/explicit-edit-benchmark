@@ -22,7 +22,10 @@ in each zone of neighbouring lines; --edits N groups N edits into one composite 
 --lines N adds functions until main.cpp has at least N lines.
 --notice adds to shared-run prompts the sentence that other agents edit main.cpp at
 the same time; by default shared-run prompts equal the isolated ones.
-shared-rescore SEED SAVED_RUN grades a saved shared run again with the current grader.`;
+shared-rescore SEED SAVED_RUN grades a saved shared run again with the current grader.
+compare SEED ISOLATED_RUN SHARED_RUN gives the two scores of one observation: the
+isolated run of the seed's tasks, then the shared run of the same tasks graded
+again with the current grader, and the edits that only one of them passed.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -40,7 +43,10 @@ const { values, positionals } = parseArgs({
   },
 });
 const [command, seedText, target] = positionals;
-assert.ok(positionals.length === 3 && /^\d+$/.test(seedText ?? ""), help);
+assert.ok(
+  positionals.length === (command === "compare" ? 4 : 3) && /^\d+$/.test(seedText ?? ""),
+  help,
+);
 const seed = Number(seedText);
 /** Project size options; omitted ones keep the generator's defaults. */
 const options = Object.fromEntries(
@@ -99,6 +105,51 @@ if (command === "show") {
   const { tasks, ...rest } = grade;
   console.log(JSON.stringify(rest));
   for (const task of tasks.filter(({ passed }) => !passed)) console.log(`FAIL ${task.id}`);
+} else if (command === "compare") {
+  const { compareChecksumRuns, gradeSharedChecksum, readProjectFiles } =
+    await import("../../src/suites/explicit-edit-multi-agent/checksum-run.mjs");
+  const { generateChecksumProject } =
+    await import("../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs");
+  const summary = async (run) => JSON.parse(await readFile(path.join(run, "summary.json"), "utf8"));
+  const isolated = await summary(target);
+  const shared = await summary(positionals[3]);
+  assert.equal(isolated.identity.seed, seed, "The runs belong to another seed");
+  // The shared file graded again, so both runs use the current grader.
+  const project = generateChecksumProject(seed, shared.identity.counts);
+  const workspace = path.join(positionals[3], "workspace");
+  const grade = gradeSharedChecksum(
+    project,
+    await readFile(path.join(workspace, "main.cpp"), "utf8"),
+    await readProjectFiles(workspace, Object.keys(project.startFiles)),
+  );
+  const failed = new Map(grade.tasks.map((task) => [task.id, task.failedEdits]));
+  const regraded = {
+    ...shared,
+    damaged: grade.damaged,
+    collateral: grade.collateral,
+    tasks: shared.tasks.map((row) => ({ ...row, failedEdits: failed.get(row.id) })),
+  };
+  const score = compareChecksumRuns(isolated, regraded);
+  const part = ({ passed, total }) => `${passed} of ${total}`;
+  const line = (name, own) =>
+    `${name}: ${part(own)} edits; traps ${part(own.traps)}, controls ${part(own.controls)}`;
+  console.log(`${score.harness}, ${score.model}, seed ${score.seed}, ${score.project}`);
+  console.log(line("Alone (isolated)", score.isolated));
+  console.log(
+    `${line(`Crowd (pool of ${score.shared.agents})`, score.shared)}; the file ` +
+      `${score.shared.built ? "builds" : "does not build"}, ` +
+      `${score.shared.answer ? "prints" : "does not print"} the reference answer, ` +
+      `${score.shared.collateral} collateral paragraphs`,
+  );
+  const cell = ({ trap, control }) =>
+    `${trap.passed}/${trap.total} ${control.passed}/${control.total}`;
+  console.log("Cluster  alone: traps controls  crowd: traps controls");
+  for (const [cluster, { isolated: alone, shared: crowd }] of Object.entries(score.byCluster))
+    console.log(`${cluster.padEnd(8)} ${cell(alone).padEnd(22)} ${cell(crowd)}`);
+  const list = (edits) =>
+    edits.map(({ id, cluster, variant }) => `${id} (${cluster} ${variant})`).join(", ") || "none";
+  console.log(`Lost in the crowd: ${list(score.lostInCrowd)}`);
+  console.log(`Passed only in the crowd: ${list(score.gainedInCrowd)}`);
 } else if (command === "isolated-run" || command === "shared-run") {
   assert.equal(
     values["allow-model-calls"],
@@ -126,6 +177,6 @@ if (command === "show") {
       `${task.exact || task.passed ? "pass" : "FAIL"} ${task.id} status=${task.status}` +
         (command === "isolated-run"
           ? ` built=${task.built} answer=${task.answer}/${task.expectedAnswer}`
-          : ` wave=${task.wave} seconds=${task.seconds}`),
+          : ` session=${task.session} delivery=${task.delivery} seconds=${task.seconds}`),
     );
 } else throw new Error(help);

@@ -14,6 +14,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs";
 import {
   clusterSummary,
+  compareChecksumRuns,
   gradeSharedChecksum,
   sharedPrompt,
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
@@ -909,6 +910,72 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   // An M edit that deletes the definition too fails.
   const bulk = find("M", "trap");
   assert.ok(failed(project.expected.replace(`${bulk.definition}\n`, ""), bulk));
+});
+
+test("an observation's two scores grade the same edits alone and in the crowd", () => {
+  const identity = {
+    project: "p",
+    seed: 1,
+    harness: "h",
+    model: "m",
+    thinking: null,
+    counts: {},
+    agents: 25,
+  };
+  const row = (id, cluster, variant, passed) => ({
+    id,
+    edits: [{ id, cluster, variant, passed }],
+  });
+  const isolated = {
+    identity,
+    tasks: [
+      row("edit-01", "B", "trap", false),
+      row("edit-02", "T", "control", true),
+      row("edit-03", "I", "trap", false),
+    ],
+  };
+  // The B trap fails in both runs, the T control only in the crowd and the I trap
+  // only alone.
+  const shared = {
+    identity,
+    built: false,
+    answer: "1",
+    expectedAnswer: "2",
+    damaged: ["x"],
+    collateral: ["x"],
+    tasks: [
+      { id: "edit-01", failedEdits: ["edit-01"] },
+      { id: "edit-02", failedEdits: ["edit-02"] },
+      { id: "edit-03", failedEdits: [] },
+    ],
+  };
+  const score = compareChecksumRuns(isolated, shared);
+  assert.deepEqual(score.isolated, {
+    passed: 1,
+    total: 3,
+    traps: { passed: 0, total: 2 },
+    controls: { passed: 1, total: 1 },
+  });
+  assert.deepEqual(score.shared, {
+    passed: 1,
+    total: 3,
+    traps: { passed: 1, total: 2 },
+    controls: { passed: 0, total: 1 },
+    built: false,
+    answer: false,
+    damaged: 1,
+    collateral: 1,
+    agents: 25,
+  });
+  assert.deepEqual(score.byCluster.T, {
+    isolated: { trap: { passed: 0, total: 0 }, control: { passed: 1, total: 1 } },
+    shared: { trap: { passed: 0, total: 0 }, control: { passed: 0, total: 1 } },
+  });
+  assert.deepEqual(score.lostInCrowd, [{ id: "edit-02", cluster: "T", variant: "control" }]);
+  assert.deepEqual(score.gainedInCrowd, [{ id: "edit-03", cluster: "I", variant: "trap" }]);
+  // Runs of another model are not one observation.
+  const other = { ...shared, identity: { ...identity, model: "other" } };
+  assert.throws(() => compareChecksumRuns(isolated, other), /model/);
 });
 
 test("a composite task passes only when every one of its edits is done", () => {
