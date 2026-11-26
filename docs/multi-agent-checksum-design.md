@@ -609,3 +609,26 @@ function behind, a reordering that lost an empty line, and a makefile rule whose
 recipes got tabs although the file sets `>` as the recipe prefix. In the crowd the
 two models lost about as much: 10 edits for Terra and 12 for Luna, most of them
 `own-mistake`.
+
+Fifteenth round: the same observations in a compact file (`--compact`), where the
+units of all clusters stand side by side and only the fillers that the library,
+the constant uses and the F decoys need remain: 4,487 lines instead of 7,254.
+
+| Model, thinking | Layout  | Precision | Resilience | Overall | Collateral paragraphs |
+| --------------- | ------- | --------- | ---------- | ------- | --------------------- |
+| Terra 6.1, low  | spread  | 90.9%     | 94.4%      | 85.9%   | 4                     |
+| Terra 6.1, low  | compact | 91.4%     | 98.9%      | 90.4%   | 5                     |
+| Luna 6, high    | spread  | 96.0%     | 93.7%      | 89.9%   | 10                    |
+| Luna 6, high    | compact | 97.5%     | 95.9%      | 93.4%   | 5                     |
+
+Packing the edits side by side cost neither model anything in the crowd; both lost
+fewer edits than in the spread file, which is within the run-to-run spread of the
+pool. Each agent edits with a script that finds its text by content and writes the
+file in one step, so the distance between two agents' edits does not matter; what
+matters is whether two read-modify-write cycles overlap in time, and with one
+command per edit they rarely do.
+
+The first compact isolated run of Terra lost 63 tasks to the provider's false
+usage-limit error, all within five seconds, and every retry started right away and
+failed the same way. Retries now wait a minute, then two; the table shows the run
+after that change.
