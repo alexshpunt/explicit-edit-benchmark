@@ -17,6 +17,7 @@ import {
   compareChecksumRuns,
   failureKind,
   gradeSharedChecksum,
+  passedAtFinish,
   sharedPrompt,
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
@@ -933,6 +934,19 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   const supplied = find("D", "control");
   const glued = project.expected.replace(`\n\n${supplied.text}`, `\n${supplied.text}`);
   assert.ok(glued !== project.expected && !failed(glued, supplied));
+  // On the file as its agent left it, a move or an insert needs only its own text:
+  // the neighbours around it may still be in other agents' hands.
+  const supplier = project.tasks.find((task) => task.kind === "insert" && task.cluster === "D");
+  const inserted = followInstruction(project.start, supplier);
+  const lonely = inserted
+    .split("\n\n")
+    .filter(
+      (block, index, all) => all[index + 1] !== supplier.text && all[index - 1] !== supplier.text,
+    )
+    .join("\n\n");
+  assert.ok(failed(lonely, supplier));
+  assert.ok(passedAtFinish(project, supplier, { main: lonely, files: project.startFiles }));
+  assert.ok(!passedAtFinish(project, supplier, { main: project.start, files: project.startFiles }));
   // An M edit that deletes the definition too fails.
   const bulk = find("M", "trap");
   assert.ok(failed(project.expected.replace(`${bulk.definition}\n`, ""), bulk));

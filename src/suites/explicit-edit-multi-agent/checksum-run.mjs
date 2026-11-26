@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
+import { gzipSync } from "node:zlib";
 import { chunkModelDrivers } from "./execution/chunk-model-drivers.mjs";
 import { runAgentQueue } from "./execution/fresh-agent-queue.mjs";
 import { restoringSourceIdentity } from "./execution/restoring-identity.mjs";
@@ -343,9 +344,11 @@ function namespaceText(text, name) {
  * reference. A move or an insert passes when its paragraph stands once, its slot is
  * gone and a neighbour paragraph matches the reference; a moved function also keeps
  * its prototype, if it has one. `files` holds the files beside main.cpp by name; an
- * edit of one passes when the file equals its reference.
+ * edit of one passes when the file equals its reference. With `ownOnly`, a move or
+ * an insert does not need its neighbours: on the file as a task's agent left it,
+ * other agents may still be at work around it.
  */
-export function gradeSharedChecksum(project, candidate, files = {}) {
+export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = false } = {}) {
   const wanted = blocks(project.expected),
     got = blocks(candidate);
   const count = (text, part) => text.split(part).length - 1;
@@ -406,7 +409,8 @@ export function gradeSharedChecksum(project, candidate, files = {}) {
       paragraphs.get(got[at]) === 1 &&
       variants.some((variant) => got[at] === variant(wanted[reference])) &&
       count(candidate, marker) === 0 &&
-      (neighbour(got, at, -1) === neighbour(wanted, reference, -1) ||
+      (ownOnly ||
+        neighbour(got, at, -1) === neighbour(wanted, reference, -1) ||
         neighbour(got, at, 1) === neighbour(wanted, reference, 1))
     );
   };
@@ -486,8 +490,9 @@ export function gradeSharedChecksum(project, candidate, files = {}) {
         placed((block) => block === edit.text, edit.marker) ||
         (count(candidate, edit.text) === 1 &&
           count(candidate, edit.marker) === 0 &&
-          below !== undefined &&
-          candidate.startsWith(`\n\n${below}\n`, at + edit.text.length));
+          (ownOnly ||
+            (below !== undefined &&
+              candidate.startsWith(`\n\n${below}\n`, at + edit.text.length))));
     }
     // The other copies of an F text stay unchanged, and a G name is new only in its
     // own function. New G names differ per edit, while two G traps share "b".
@@ -637,6 +642,9 @@ export async function runChecksumShared(
     sharedSandbox,
   });
   const names = Object.keys(project.startFiles);
+  // The file as each task's agent left it, by task id.
+  const finished = path.join(output, "finished");
+  await mkdir(finished, { mode: 0o700 });
   const usage = [];
   const counted = new Set();
   const count = (driver) => {
@@ -699,13 +707,11 @@ export async function runChecksumShared(
         }
         row.seconds = Number(((Date.now() - begin) / 1000).toFixed(1));
         // The task's own checks on the file as its agent left it: an edit that passes
-        // here and fails at the end was lost to a later write of another agent.
+        // here and fails at the end was lost to a later write of another agent. The
+        // file is kept, so a later grader can judge it again.
         const state = await settledState(workspace, names);
-        row.passedAtFinish = gradeSharedChecksum(
-          { ...project, tasks: [task] },
-          state.main,
-          state.files,
-        ).tasks[0].passed;
+        await writeFile(path.join(finished, `${task.id}.json.gz`), gzipSync(JSON.stringify(state)));
+        row.passedAtFinish = passedAtFinish(project, task, state);
         return { status: row.status };
       },
       async onClosed(driver) {
@@ -779,9 +785,18 @@ export async function runChecksumShared(
  */
 export function sharedFailure(row) {
   if (row.status === "provider-failure" || row.status === "timed-out") return row.status;
-  // Runs before version 2 of the pool did not grade the file at a task's finish.
+  // Earlier runs did not grade the file at a task's finish.
   if (row.passedAtFinish === undefined) return "unknown";
   return row.passedAtFinish ? "lost-later" : "failed-at-finish";
+}
+
+/** Whether a shared task's own checks pass on `state`, the file as its agent left it
+ * ({ main, files }); its neighbours may still be in other agents' hands.
+ */
+export function passedAtFinish(project, task, state) {
+  return gradeSharedChecksum({ ...project, tasks: [task] }, state.main, state.files, {
+    ownOnly: true,
+  }).tasks[0].passed;
 }
 
 /** main.cpp and the files beside it, read until two reads a moment apart agree, so a

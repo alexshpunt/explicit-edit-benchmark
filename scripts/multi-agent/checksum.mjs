@@ -106,8 +106,14 @@ if (command === "show") {
   console.log(JSON.stringify(rest));
   for (const task of tasks.filter(({ passed }) => !passed)) console.log(`FAIL ${task.id}`);
 } else if (command === "compare") {
-  const { compareChecksumRuns, gradeSharedChecksum, isolatedFailure, readProjectFiles } =
-    await import("../../src/suites/explicit-edit-multi-agent/checksum-run.mjs");
+  const {
+    compareChecksumRuns,
+    gradeSharedChecksum,
+    isolatedFailure,
+    passedAtFinish,
+    readProjectFiles,
+  } = await import("../../src/suites/explicit-edit-multi-agent/checksum-run.mjs");
+  const { gunzipSync } = await import("node:zlib");
   const { generateChecksumProject } =
     await import("../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs");
   const summary = async (run) => JSON.parse(await readFile(path.join(run, "summary.json"), "utf8"));
@@ -123,11 +129,26 @@ if (command === "show") {
     await readProjectFiles(workspace, Object.keys(project.startFiles)),
   );
   const failed = new Map(grade.tasks.map((task) => [task.id, task.failedEdits]));
+  // The file as each task's agent left it, graded again where the run kept it.
+  const atFinish = async (row) => {
+    const saved = await readFile(path.join(positionals[3], "finished", `${row.id}.json.gz`)).catch(
+      () => null,
+    );
+    if (saved === null) return row.passedAtFinish;
+    const task = project.tasks.find(({ id }) => id === row.id);
+    return passedAtFinish(project, task, JSON.parse(gunzipSync(saved).toString("utf8")));
+  };
   const regraded = {
     ...shared,
     damaged: grade.damaged,
     collateral: grade.collateral,
-    tasks: shared.tasks.map((row) => ({ ...row, failedEdits: failed.get(row.id) })),
+    tasks: await Promise.all(
+      shared.tasks.map(async (row) => ({
+        ...row,
+        failedEdits: failed.get(row.id),
+        passedAtFinish: await atFinish(row),
+      })),
+    ),
   };
   // An isolated run from before failure kinds gets them from its saved workspaces.
   const names = Object.keys(project.startFiles);
