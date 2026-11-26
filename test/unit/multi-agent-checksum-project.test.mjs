@@ -1012,6 +1012,15 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     providerFailures: 0,
   });
   assert.equal(score.isolatedProviderFailures, 0);
+  // One edit of three is right alone, and it is lost in the crowd; the I trap that
+  // passes only in the crowd earns nothing.
+  assert.deepEqual(score.score.all, {
+    precision: { passed: 1, total: 3 },
+    resilience: { passed: 0, total: 1 },
+    overall: { passed: 0, total: 3 },
+  });
+  assert.deepEqual(score.score.traps.overall, { passed: 0, total: 2 });
+  assert.deepEqual(score.score.controls.precision, { passed: 1, total: 1 });
   assert.deepEqual(score.byCluster.T, {
     isolated: { trap: { passed: 0, total: 0 }, control: { passed: 1, total: 1 } },
     shared: { trap: { passed: 0, total: 0 }, control: { passed: 0, total: 1 } },

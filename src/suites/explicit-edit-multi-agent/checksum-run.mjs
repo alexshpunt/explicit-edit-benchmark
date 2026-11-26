@@ -922,11 +922,30 @@ export function compareChecksumRuns(isolated, shared) {
   const aloneById = new Map(alone.map((edit) => [edit.id, edit]));
   const label = ({ id, cluster, variant, kind }) => ({ id, cluster, variant, kind });
   const crowdClusters = clusterSummary(together);
+  // The observation's score: precision is the share of edits done right alone;
+  // resilience the share of those that stay right in the crowd, so an edit that
+  // passes only in the crowd earns nothing; the overall score is the share of edits
+  // right in both, precision times resilience.
+  const measures = (keep) => {
+    const own = together.filter(keep);
+    const right = own.filter((edit) => aloneById.get(edit.id).passed);
+    const kept = right.filter((edit) => edit.passed);
+    return {
+      precision: { passed: right.length, total: own.length },
+      resilience: { passed: kept.length, total: right.length },
+      overall: { passed: kept.length, total: own.length },
+    };
+  };
   return {
     project: isolated.identity.project,
     seed: isolated.identity.seed,
     harness: isolated.identity.harness,
     model: isolated.identity.model,
+    score: {
+      all: measures(() => true),
+      traps: measures((edit) => edit.variant === "trap"),
+      controls: measures((edit) => edit.variant === "control"),
+    },
     isolated: score(alone),
     shared: {
       ...score(together),

@@ -143,9 +143,19 @@ runs of the same seed's tasks, one after the other, each with 25 agents at once:
 2. The shared run gives the same tasks to a pool of 25 agents on one copy. It adds
    the crowd.
 
-`compare` turns the two runs into the observation's two scores, per cluster with
-traps and controls side by side, and lists the edits that passed alone and failed
-in the crowd, and the edits that passed only in the crowd. The shared run also
+`compare` turns the two runs into the observation's score, with traps and controls
+apart:
+
+- precision: the share of edits done right alone; it measures the harness and the
+  model;
+- resilience: of the edits done right alone, the share that stay right in the
+  crowd; an edit that passes only in the crowd, because another agent removed its
+  wrong target first, earns nothing;
+- overall: the share of edits right in both runs, precision times resilience.
+
+Below the score, `compare` shows each cluster's traps and controls alone and in
+the crowd, and lists the edits that passed alone and failed in the crowd, and the
+edits that passed only in the crowd. The shared run also
 reports whether the file builds and prints the reference answer, and how many
 paragraphs that no edit was meant to touch were damaged.
 

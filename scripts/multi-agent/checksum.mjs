@@ -170,6 +170,17 @@ if (command === "show") {
   const line = (name, own) =>
     `${name}: ${part(own)} edits; traps ${part(own.traps)}, controls ${part(own.controls)}`;
   console.log(`${score.harness}, ${score.model}, seed ${score.seed}, ${score.project}`);
+  const percent = ({ passed, total }) =>
+    total === 0 ? "n/a" : `${((100 * passed) / total).toFixed(1)}% (${passed}/${total})`;
+  for (const [name, key] of [
+    ["Precision (right alone)", "precision"],
+    ["Resilience (right alone, still right in the crowd)", "resilience"],
+    ["Overall (right in both)", "overall"],
+  ])
+    console.log(
+      `${name}: ${percent(score.score.all[key])}; traps ${percent(score.score.traps[key])}, ` +
+        `controls ${percent(score.score.controls[key])}`,
+    );
   console.log(line("Alone (isolated)", score.isolated));
   console.log(
     `${line(`Crowd (pool of ${score.shared.agents})`, score.shared)}; the file ` +
