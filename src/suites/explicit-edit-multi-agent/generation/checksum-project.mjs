@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
  *
  * Density sets how many edits share one zone: a host function and the paragraphs
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
- * agents of a wave edit neighbouring lines of one function at the same moment.
+ * agents edit neighbouring lines of one function at the same moment.
  */
 export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v9";
 export const CHECKSUM_CLUSTERS = Object.freeze({
@@ -1772,8 +1772,8 @@ export function generateChecksumProject(seed, options = {}) {
     edit.prompt = mechanicalPrompt(instruction(edit));
   }
 
-  // Tasks keep the zone order, so a wave whose size is a multiple of the density
-  // holds whole zones. A composite task lists several edits of one zone, so its
+  // Tasks keep the zone order, so the agents of a shared pool take a zone's tasks at
+  // about the same moment. A composite task lists several edits of one zone, so its
   // agent keeps working next to the zone's other agents for longer.
   const tasks = [];
   if (counts.edits === 1) tasks.push(...ordered);

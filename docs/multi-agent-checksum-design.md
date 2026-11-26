@@ -136,10 +136,22 @@ Constants use snake case, so a trap `gain_rate` has the look-alikes
 ## Concurrency
 
 Concurrency applies to every cluster: each run measures the same edits isolated and
-shared. Its main knob is zone density, the number of agents of one wave whose edits
-fall in the same function on neighbouring lines:
+shared. A shared run (`multi-agent-checksum-shared-v2`) is a pool of 25 agents, as in
+the original Multi-Agent suite. Every agent starts and warms up before the first
+task; then each takes the next task from one queue as soon as it has finished its
+last one. There is no barrier, so the file keeps changing under every agent for the
+whole run, and an agent keeps its session across tasks: it has to manage its own
+context, compaction included, and may remember text that other agents have changed
+since it read it. Only an agent whose task timed out is replaced. The edits never
+touch the same text, so the reference does not depend on which agent takes which
+task or in what order they finish. Version 1 instead gave every task its own agent
+and started them all in one wave, which left the file quiet once the wave's quick
+edits were done.
 
-- Density 1: every edit of a wave is in a different function.
+The main knob is zone density, the number of neighbouring tasks in the queue whose
+edits fall in the same function on neighbouring lines:
+
+- Density 1: every edit of a zone is in a different function.
 - Density 2, 3 and higher: that many agents edit neighbouring lines of one function at
   the same moment, for example an E edit on one line while an A rename changes the
   line below it and a C move takes the function that follows.
@@ -155,14 +167,15 @@ holds the zone's A uses and E sites on neighbouring lines, with the zone's moved
 functions and D placeholders as the paragraphs next to it. Fillers separate zones,
 and each move's destination stands in a gap of its own. The file keeps about the
 same size at every density, because each host a higher density saves becomes a
-filler. Tasks keep the zone order, so a wave whose size is a multiple of the density
-holds whole zones.
+filler. Tasks keep the zone order in the queue, so the agents that take a zone's
+tasks start them at about the same moment.
 
-A second knob is agents per file, which grows with the wave size. Runs sweep density
-at a fixed wave size, so the robustness of a harness is a curve: how its shared result
-falls below its isolated one as density grows.
+A second knob is the pool size, `--agents`. Runs sweep density at a fixed pool size,
+so the robustness of a harness is a curve: how its shared result falls below its
+isolated one as density grows.
 
-So far every run had density 1. The shared mode then cost almost nothing: with exact
+Up to the twelfth round every shared run used version 1 with density 1, and the
+shared mode then cost almost nothing: with exact
 instructions an agent edits in one quick command, and two writes rarely overlap in
 time. Higher densities target the failures that remain: rewriting a whole function
 from a copy read earlier, line numbers that went stale while a neighbour edited, and
@@ -186,8 +199,8 @@ a read that lands in the middle of a neighbour's non-atomic write.
 
 The file grows with the number of edits, about 20 lines per edit: the default set of
 clusters B, C, F, G, H, I and J with two traps and two controls each gives 32 edits
-and about 900 lines. With one edit per task, a shared run gives every task its own
-agent in one wave. Composite tasks, which list several edits in one prompt, remain
+and about 900 lines; every cluster with three traps and three controls gives 198
+edits. Composite tasks, which list several edits in one prompt, remain
 available as an option. The `lines` option adds longer filler functions until the
 fillers alone hold that many lines, so the same edits can stand in a file of several
 thousand lines: `lines` 4000 with clusters B to M gives about 5200.

@@ -12,8 +12,9 @@ const help = `Usage:
 show writes the seed's start main.cpp, its reference and its task prompts.
 isolated-run gives every task to a new agent in its own copy of the start project
 and grades each result byte for byte against that task's reference.
-shared-run starts N agents (all tasks by default) on one main.cpp, then gives them
-the tasks in waves of N at once, and grades the final file against the reference.
+shared-run starts a pool of N agents (25 by default) on one main.cpp; each agent
+takes the next task from one queue as soon as it has finished its last one and
+keeps its session, and the final file is graded against the reference.
 --clusters LETTERS picks the clusters, such as BCFG or XYZab: letters are case
 sensitive, and the clusters after Z are lowercase; --per-variant N sets the trap
 and control edits per cluster; --density N puts N edits

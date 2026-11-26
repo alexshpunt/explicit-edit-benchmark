@@ -638,7 +638,7 @@ test("density puts the edits of one zone next to each other", () => {
           index > 2 && index < paragraphs.length - 1 && find(paragraph) ? [index] : [],
         );
       const zones = Map.groupBy(project.tasks, ({ zone }) => zone);
-      // Tasks keep the zone order, so waves hold whole zones.
+      // Tasks keep the zone order, so a zone's tasks stand together in the queue.
       assert.deepEqual(
         project.tasks.map(({ zone }) => zone),
         [...zones.keys()].flatMap((zone) => zones.get(zone).map(() => zone)),

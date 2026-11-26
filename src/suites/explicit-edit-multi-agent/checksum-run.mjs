@@ -43,7 +43,7 @@ export function clusterSummary(edits) {
  * answer are recorded beside it.
  */
 export const CHECKSUM_RUN_VERSION = "multi-agent-checksum-isolated-v1";
-export const CHECKSUM_SHARED_VERSION = "multi-agent-checksum-shared-v1";
+export const CHECKSUM_SHARED_VERSION = "multi-agent-checksum-shared-v2";
 export const CHECKSUM_DELIVERY_DEADLINE_MS = 300_000;
 const execFileAsync = promisify(execFile);
 
@@ -457,10 +457,17 @@ export function gradeSharedChecksum(project, candidate, files = {}) {
   };
 }
 
-/** Spend model credit on one shared-file run: all agents start and warm up, then
- * wait at a barrier; each wave gives every agent one task at the same moment, and
- * the next wave starts when every agent of this one has finished. Agents persist
- * across waves; a timed-out agent is replaced before the next wave. Prompts are the
+/** The agents of a shared run unless the caller sets their number, as in the
+ * original Multi-Agent suite.
+ */
+export const CHECKSUM_SHARED_AGENTS = 25;
+
+/** Spend model credit on one shared-file run: a pool of agents works through one
+ * queue of tasks. Every agent starts and warms up first; then each takes the next
+ * task as soon as it has finished its last one, with no barrier, so the file keeps
+ * changing under every agent for the whole run. An agent keeps its session across
+ * tasks, so it has to manage its own context and may remember text that other
+ * agents have changed since; only a timed-out agent is replaced. Prompts are the
  * isolated ones unless `notice` adds the shared-file sentence.
  */
 export async function runChecksumShared(
@@ -473,7 +480,7 @@ export async function runChecksumShared(
   const source = await restoringSourceIdentity();
   assert.equal(source.sourceClean, true, "Checksum runs require clean committed source");
   const project = generateChecksumProject(seed, options);
-  const team = agents ?? project.tasks.length;
+  const team = agents ?? Math.min(CHECKSUM_SHARED_AGENTS, project.tasks.length);
   assert.ok(Number.isSafeInteger(team) && team >= 1 && team <= project.tasks.length);
   const output = path.resolve(outputPath);
   await mkdir(output, { mode: 0o700 });
@@ -487,6 +494,8 @@ export async function runChecksumShared(
     model: config.model,
     thinking: config.thinking ?? null,
     agents: team,
+    // Agents take tasks from one queue as they finish, and keep their sessions.
+    schedule: "persistent-pool",
     sandbox,
     // Whether prompts say that other agents edit the same file.
     notice,
@@ -508,86 +517,82 @@ export async function runChecksumShared(
   const drivers = chunkModelDrivers(path.join(output, "agents"), workspace, config, "", {
     sharedSandbox,
   });
-  /** @type {{ driver: any, session: number }[]} */
-  const slots = Array.from({ length: team }, () => ({ driver: null, session: 0 }));
   const usage = [];
-  let sessions = 0;
-  const retire = async (slot) => {
-    if (!slot.driver) return;
-    if (slot.driver.closed !== true)
-      await (slot.driver.terminate ?? slot.driver.close).call(slot.driver);
-    usage.push(drivers.usage(slot.driver));
-    slot.driver = null;
+  const counted = new Set();
+  const count = (driver) => {
+    counted.add(driver);
+    usage.push(drivers.usage(driver));
   };
-  const rows = [];
-  const waves = [];
+  /** @type {Map<string, any>} */
+  const rows = new Map();
+  const deliveries = new Map();
+  /** @type {any[]} */
+  const warm = [];
+  let pool;
+  let warmUpSeconds = 0;
   const started = Date.now();
   try {
-    for (let first = 0; first < project.tasks.length; first += team) {
-      const wave = project.tasks.slice(first, first + team);
-      // Warm-up: every agent of the wave is started before any task is given.
-      const warm = Date.now();
-      await Promise.all(
-        slots.slice(0, wave.length).map(async (slot) => {
-          if (slot.driver && slot.driver.closed !== true) return;
-          await retire(slot);
-          // Take the number before waiting: other slots start their agents meanwhile.
-          const session = ++sessions;
-          slot.driver = await drivers.createDriver(null, session, { signal });
-          slot.session = session;
-        }),
-      );
-      const barrier = Date.now();
-      const results = await Promise.all(
-        wave.map(async (task, index) => {
-          const slot = slots[index];
-          const row = {
-            id: task.id,
-            kind: task.kind,
-            cluster: task.cluster,
-            variant: task.variant,
-            zone: task.zone,
-            wave: waves.length + 1,
-            session: slot.session,
-          };
-          rows.push(row);
-          const begin = Date.now();
-          try {
-            const outcome = await drivers.execute(
-              slot.driver,
-              notice ? sharedPrompt(task) : task.prompt,
-              {
-                signal,
-                session: slot.session,
-                timeoutMs: CHECKSUM_DELIVERY_DEADLINE_MS,
-              },
-            );
-            row.status = outcome.status;
-          } catch (error) {
-            row.status = "error";
-            row.error = String(error?.message ?? error);
-          }
-          row.seconds = Number(((Date.now() - begin) / 1000).toFixed(1));
-          return row;
-        }),
-      );
-      waves.push({
-        tasks: wave.length,
-        warmUpSeconds: Number(((barrier - warm) / 1000).toFixed(1)),
-        seconds: Number(((Date.now() - barrier) / 1000).toFixed(1)),
-        timedOut: results.filter((row) => row.status === "timed-out").length,
-      });
-      await writeFile(
-        path.join(output, `after-wave-${waves.length}.cpp`),
-        await readFile(path.join(workspace, "main.cpp"), "utf8"),
-      );
-    }
+    // Warm-up: every agent of the pool starts before any task is given, so the first
+    // tasks start together.
+    const settled = await Promise.allSettled(
+      Array.from({ length: team }, (_, index) => drivers.createDriver(null, index + 1, { signal })),
+    );
+    warm.push(...settled.map((entry) => (entry.status === "fulfilled" ? entry.value : null)));
+    const failure = settled.find((entry) => entry.status === "rejected");
+    if (failure) throw failure.reason;
+    warmUpSeconds = Number(((Date.now() - started) / 1000).toFixed(1));
+    pool = await runAgentQueue(project.tasks, {
+      lifecycle: "persistent",
+      maxAgents: team,
+      signal,
+      // The first sessions are the warm agents; a replacement starts afresh.
+      createDriver: (_task, session, context) =>
+        session <= team ? warm[session - 1] : drivers.createDriver(null, session, context),
+      async execute(driver, task, { session }) {
+        deliveries.set(session, (deliveries.get(session) ?? 0) + 1);
+        const row = {
+          id: task.id,
+          kind: task.kind,
+          cluster: task.cluster,
+          variant: task.variant,
+          zone: task.zone,
+          session,
+          // 1 for the agent's first task, 2 for its second, and so on.
+          delivery: deliveries.get(session),
+          started: new Date().toISOString(),
+        };
+        rows.set(task.id, row);
+        const begin = Date.now();
+        try {
+          const outcome = await drivers.execute(driver, notice ? sharedPrompt(task) : task.prompt, {
+            signal,
+            session,
+            timeoutMs: CHECKSUM_DELIVERY_DEADLINE_MS,
+          });
+          row.status = outcome.status;
+        } catch (error) {
+          row.status = "error";
+          row.error = String(error?.message ?? error);
+        }
+        row.seconds = Number(((Date.now() - begin) / 1000).toFixed(1));
+        return { status: row.status };
+      },
+      async onClosed(driver) {
+        count(driver);
+      },
+    });
   } finally {
-    for (const slot of slots) await retire(slot);
+    // Warm agents that the pool did not close, after a failed warm-up.
+    for (const driver of warm)
+      if (driver && !counted.has(driver)) {
+        if (driver.closed !== true) await (driver.terminate ?? driver.close).call(driver);
+        count(driver);
+      }
     await drivers.cleanup();
     if (teamSandbox) await (await teamSandbox).stop();
   }
   const minutes = (Date.now() - started) / 60000;
+  const ordered = project.tasks.flatMap((task) => (rows.has(task.id) ? [rows.get(task.id)] : []));
   const main = await readFile(path.join(workspace, "main.cpp"), "utf8");
   const names = Object.keys(project.startFiles);
   const own = await readProjectFiles(workspace, names);
@@ -613,9 +618,16 @@ export async function runChecksumShared(
     answer: run.output,
     expectedAnswer: project.answers.expected,
     extraFiles: files.filter((file) => file !== "main.cpp" && !names.includes(file)),
-    waves,
+    pool: {
+      agents: team,
+      // Agents started, replacements after a timed-out task included.
+      sessions: pool.agents,
+      warmUpSeconds,
+      mostTasksPerAgent: Math.max(0, ...deliveries.values()),
+    },
+    timedOut: ordered.filter((row) => row.status === "timed-out").length,
     usage: total,
-    tasks: rows.map((row) => ({
+    tasks: ordered.map((row) => ({
       ...row,
       passed: byId.get(row.id).passed,
       failedEdits: byId.get(row.id).failedEdits,
