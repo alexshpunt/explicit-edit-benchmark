@@ -149,6 +149,29 @@ in the crowd, and the edits that passed only in the crowd. The shared run also
 reports whether the file builds and prints the reference answer, and how many
 paragraphs that no edit was meant to touch were damaged.
 
+Every failed edit also gets a kind, found without reading the agent's trace. An
+isolated failure is judged from the start, the task's reference and the result:
+
+- `not-done`: the files are as at the start;
+- `touched-other-text`: a paragraph that the task keeps in place is lost, changed,
+  duplicated or moved, as with a wrong target or a wrong cut;
+- `wrong-own-text`: everything else is in place, but the task's own text differs
+  from the reference, such as an escape, a line ending or a byte order mark.
+
+A shared run reads the file after each of an agent's tool calls and on every change
+of the workspace, and keeps the file as each task's agent left it. Only a task's
+own agent can make its edit pass, so a version of the file on which it passes
+shows a correct write:
+
+- `own-mistake`: the edit passed on no version read while its agent worked;
+- `lost-before-finish`: it passed while its agent worked and was undone before the
+  agent finished;
+- `lost-later`: it passed when its agent finished and a later write undid it;
+- `provider-failure` and `timed-out`: the delivery was broken off.
+
+A correct write undone before the next read counts as `own-mistake`, and an edit
+that another agent's mistake made pass for a while counts as lost.
+
 A shared run (`multi-agent-checksum-shared-v2`) is a pool of 25 agents, as in
 the original Multi-Agent suite. Every agent starts and warms up before the first
 task; then each takes the next task from one queue as soon as it has finished its
