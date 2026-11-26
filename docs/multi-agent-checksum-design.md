@@ -365,3 +365,34 @@ Python scripts that find their target by search, and only two printed the whole
 file, so its length only adds a little time to each script. Next to the run of the same clusters
 in a file of 930 lines (seed 42, seventh round), the only change is that K traps
 failed in both modes. A shared run took 0.3 to 1.5 minutes and cost under $0.08.
+
+Ninth round, Bash only: clusters that make the agent find its target. P, Q, R and S
+replace an expression inside a function that the prompt names only by a property:
+
+- P: main passes it a given number. A trap's decoy, a function above it, passes the
+  same number to a library function.
+- Q: it is the only function that calls a given helper. A trap's decoy holds the
+  call in a commented-out line.
+- R: it directly follows a given function's definition. A trap's anchor has a
+  prototype, and the lead after the prototypes holds the same expression.
+- S: it is the only function that uses a given constant. A trap's decoy holds the
+  constant's name in a string literal.
+
+The expression stands in the target and in the decoy (for R, the lead) in traps and
+controls alike, so only the property tells them apart. Three traps and three controls
+per cluster, seeds 42 and 7, 24 edits per run:
+
+| Seed | Isolated | Shared                                                        |
+| ---- | -------- | ------------------------------------------------------------- |
+| 42   | all 24   | all 24, file equals the reference                             |
+| 7    | all 24   | one Q trap fails: the decoy's expression changed; file builds |
+
+A prompt that names the target by a property turns the blind script into a careful
+one. For P the agents searched only inside `main`. For Q and S their first script
+asserted that the expression occurs once, which failed loudly because it occurs
+twice; they then printed the text around each occurrence and chose the right one.
+The one failure was a script that took the first function around a match of the
+helper's name followed by `(` that also held the expression, which was the decoy
+with the commented-out call. The Bash agents fail when a prompt makes the target
+look unique while it is not; when the prompt itself says that they have to look,
+they look.
