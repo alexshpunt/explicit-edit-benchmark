@@ -349,3 +349,18 @@ the text around the match before they edit, which reveals a namespace or a comme
 marker; a lone `}` inside a raw string looks like the end of the function in that
 text too, so O fails in every mode. In the run with all clusters, the B, H and I
 traps failed as in earlier rounds.
+
+Eighth round, Bash only, shared runs without the notice: clusters B, C and F to O
+with one trap and one control each (30 edits) in a file of about 50,000 lines
+(`lines` 50000), seeds 42 and 7.
+
+| Seed | Isolated: failed edits    | Shared: failed edits   | Collateral paragraphs | Shared file    |
+| ---- | ------------------------- | ---------------------- | --------------------- | -------------- |
+| 42   | B, H, I, K, N and O traps | B, I, K, N and O traps | 5                     | does not build |
+| 7    | B, H, I, K, N and O traps | B, H, N and O traps    | 4                     | does not build |
+
+Every control passed in both modes, and so did every trap of C, F, G, J, L and M.
+The size made no new kind of failure: the Bash agents never read the file, so its
+length only adds a little time to each script. Next to the run of the same clusters
+in a file of 930 lines (seed 42, seventh round), the only change is that K traps
+failed in both modes. A shared run took 0.3 to 1.5 minutes and cost under $0.08.
