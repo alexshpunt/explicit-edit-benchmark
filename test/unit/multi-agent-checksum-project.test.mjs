@@ -371,14 +371,8 @@ function followFiles(files, task, textMode = false) {
       const lines = text.slice(mark.length).split(eol);
       const first = lines.indexOf(`long long ${edit.name}(long long value) {`);
       const length = definitionLength(lines, first);
-      // A Y function is the last one: the empty line before it goes.
-      if (edit.cluster === "Y") {
-        assert.equal(lines[first - 1], "", edit.id);
-        lines.splice(first - 1, length + 1);
-      } else {
-        assert.equal(lines[first + length], "", edit.id);
-        lines.splice(first, length + 1);
-      }
+      assert.equal(lines[first + length], "", edit.id);
+      lines.splice(first, length + 1);
       let written = mark + lines.join(textMode ? "\n" : eol);
       if (edit.naive) {
         written = Buffer.from(Buffer.from(written, "latin1").toString("utf8")).toString("latin1");

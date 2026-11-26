@@ -261,9 +261,8 @@ function instruction(edit) {
     return `In main.cpp, rename the function ${q(edit.name)} to ${q(edit.newName)}: change its prototype, its definition and every call of it. Comments and string literals that mention the function stay unchanged.`;
   if (edit.kind === "prune")
     return `In main.cpp, delete the complete definition of every function in the namespace ${q(edit.namespace)} that no code calls, and the empty line that directly followed each deleted definition. Keep the namespace and the functions that are called.`;
-  // A Y function is the last one of its file, so no empty line follows it.
   if (edit.kind === "file-delete")
-    return `In ${edit.file}, delete the complete definition of the function ${q(signature(edit.name))}. Also delete the empty line that directly ${edit.cluster === "Y" ? "preceded" : "followed"} the definition.`;
+    return `In ${edit.file}, delete the complete definition of the function ${q(signature(edit.name))}. Also delete the empty line that directly followed the definition.`;
   if (edit.kind === "file-insert")
     return `In ${edit.file}, replace the placeholder line ${q(edit.marker)} with the following ${edit.lines} lines: ${q(edit.text)}.`;
   if (edit.kind === "factor-shift")
@@ -1090,15 +1089,17 @@ export function generateChecksumProject(seed, options = {}) {
   // the function is the second one; a script that reads and writes the file in text
   // mode turns every CRLF into LF without a word. An X trap's file starts with a
   // byte order mark, and the function is the first one, so the mark stands right
-  // before its first line. A Y function is the last one, and a trap's file does not
-  // end with a newline, which a script that writes the file line by line adds. In
-  // an a file the function is the second one, and the third one has a comment: a
-  // trap's holds a Latin-1 byte, which is not UTF-8, so a script that reads the file
-  // as UTF-8 fails, and one that ignores or replaces what it cannot decode changes
-  // the byte. A control's file has none of these. Nothing calls the function; main
-  // calls the other two.
+  // before its first line. A Y function is the second one, and a trap's file does
+  // not end with a newline, which a script that writes the file line by line adds.
+  // The edit does not touch the last line, so the file's end must stay as it is;
+  // deleting the last function would leave it open whether the line before keeps
+  // its newline. In an a file the function is the second one, and the third one has
+  // a comment: a trap's holds a Latin-1 byte, which is not UTF-8, so a script that
+  // reads the file as UTF-8 fails, and one that ignores or replaces what it cannot
+  // decode changes the byte. A control's file has none of these. Nothing calls the
+  // function; main calls the other two.
   const included = new Map();
-  const deletedAt = { W: 1, X: 0, Y: 2, a: 1 };
+  const deletedAt = { W: 1, X: 0, Y: 1, a: 1 };
   const encodings = { W: "crlf", X: "bom", Y: "open", a: "plain" };
   for (const edit of "WXYa".split("").flatMap((cluster) => ofCluster(cluster))) {
     const members = [0, 1, 2].map(() =>
@@ -1672,9 +1673,7 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(own.endsWith("\n"), !trap || edit.cluster !== "Y", `${edit.id} end`);
       assert.equal(/[^\0-\x7f]/.test(lf), trap && edit.cluster === "a", `${edit.id} bytes`);
       assert.equal(lf.startsWith(header(edit.name)), edit.cluster === "X", `${edit.id} first`);
-      const definition = definitionText(lf, edit.name);
-      assert.equal(lf.trimEnd().endsWith(definition), edit.cluster === "Y", `${edit.id} last`);
-      const cut = edit.cluster === "Y" ? `\n\n${definition}` : `${definition}\n\n`;
+      const cut = `${definitionText(lf, edit.name)}\n\n`;
       const eol = own.includes("\r") ? "\r\n" : "\n";
       assert.equal(expectedFiles[edit.file], own.replace(cut.replaceAll("\n", eol), ""), edit.id);
     }
