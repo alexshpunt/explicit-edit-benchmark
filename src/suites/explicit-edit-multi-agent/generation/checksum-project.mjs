@@ -251,8 +251,8 @@ function instruction(edit) {
     return `In main.cpp, rename the function ${q(edit.name)} to ${q(edit.newName)}: change its prototype, its definition and every call of it. Comments and string literals that mention the function stay unchanged.`;
   if (edit.kind === "prune")
     return `In main.cpp, delete the complete definition of every function in the namespace ${q(edit.namespace)} that no code calls, and the empty line that directly followed each deleted definition. Keep the namespace and the functions that are called.`;
-  if (edit.kind === "file-expression")
-    return `In ${edit.file}, replace its one occurrence of ${q(edit.before)} with ${q(edit.after)}.`;
+  if (edit.kind === "file-delete")
+    return `In ${edit.file}, delete the complete definition of the function ${q(signature(edit.name))}. Also delete the empty line that directly followed the definition.`;
   if (edit.kind === "move")
     return `In main.cpp, move the complete definition of the function ${q(signature(edit.name))} to the placeholder line ${q(edit.marker)}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`;
   if (edit.kind === "insert")
@@ -318,9 +318,9 @@ const KIND = {
   T: "function-rename",
   U: "prune",
   V: "prune",
-  // W and X replace an expression in a file of its own that main.cpp includes.
-  W: "file-expression",
-  X: "file-expression",
+  // W and X delete a function from a file of its own that main.cpp includes.
+  W: "file-delete",
+  X: "file-delete",
 };
 // Namespace names of U and V edits.
 const PRUNED_NAMESPACES = [
@@ -1009,19 +1009,27 @@ export function generateChecksumProject(seed, options = {}) {
     ]);
   }
 
-  // W and X: an expression to replace in a function that stands in a file of its
-  // own, which main.cpp includes in the function's place. A W trap's file ends its
-  // lines with CRLF and an X trap's file starts with a byte order mark; a control's
-  // file has neither. A script that reads and writes the file in text mode turns
-  // CRLF into LF without a word.
+  // W and X: a function to delete from a file of three definitions, which main.cpp
+  // includes in their place. A W trap's file ends its lines with CRLF, and the
+  // function is the second one; a script that reads and writes the file in text mode
+  // turns every CRLF into LF without a word. An X trap's file starts with a byte
+  // order mark, and the function is the first one, so the mark stands right before
+  // its first line. A control's file has neither. Nothing calls the function; main
+  // calls the other two.
+  const included = new Map();
   for (const edit of [...ofCluster("W"), ...ofCluster("X")]) {
-    const entry = build(take(functionNames), ["plain", { scoped: edit }, "plain"], {
-      prototyped: false,
+    const members = [0, 1, 2].map(() =>
+      build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false }),
+    );
+    const target = members[edit.cluster === "W" ? 1 : 0];
+    target.uncalled = true;
+    edit.name = target.name;
+    edit.file = `${take(functionNames)}.inc`;
+    included.set(edit.file, {
+      members: members.map(({ name }) => name),
+      encoding: edit.variant === "control" ? "plain" : edit.cluster === "W" ? "crlf" : "bom",
     });
-    entry.file = `${entry.name}.inc`;
-    entry.encoding = edit.variant === "control" ? "plain" : edit.cluster === "W" ? "crlf" : "bom";
-    edit.file = entry.file;
-    pairs.push([{ include: entry.name }]);
+    pairs.push([{ include: edit.file }]);
   }
 
   // H: functions to delete; a trap has a prototype. Nothing calls them, so the
@@ -1233,7 +1241,7 @@ export function generateChecksumProject(seed, options = {}) {
     for (const edit of done.flatMap((task) => task.parts ?? [task])) {
       if (edit.kind === "rename") names.set(edit.name, edit.newName);
       if (edit.kind === "function-rename") calls.set(edit.name, edit.newName);
-      if (["expression", "scoped-replace", "file-expression"].includes(edit.kind))
+      if (edit.kind === "expression" || edit.kind === "scoped-replace")
         factors.set(edit.statement, edit.newFactor);
       if (edit.kind === "local-rename") locals.set(edit.name, edit);
       if (["delete", "namespace-delete", "commented-delete"].includes(edit.kind))
@@ -1281,9 +1289,7 @@ export function generateChecksumProject(seed, options = {}) {
           block.marker ??
           block.text ??
           block.raw ??
-          (block.include
-            ? `#include "${byName.get(block.include).file}"`
-            : definition(byName.get(block.function))),
+          (block.include ? `#include "${block.include}"` : definition(byName.get(block.function))),
       ),
       [
         "int main() {",
@@ -1297,21 +1303,28 @@ export function generateChecksumProject(seed, options = {}) {
         "}",
       ].join("\n"),
     ];
-    // Each included file holds one definition, in the file's own encoding.
+    // An included file holds the definitions that are left, in its own encoding.
+    const deleted = new Set(
+      done
+        .flatMap((task) => task.parts ?? [task])
+        .filter(({ kind }) => kind === "file-delete")
+        .map(({ name }) => name),
+    );
     const files = Object.fromEntries(
-      layout
-        .filter((block) => block.include)
-        .map((block) => {
-          const entry = byName.get(block.include);
-          const text = definition(entry) + "\n";
-          const encoded =
-            entry.encoding === "crlf"
-              ? text.replaceAll("\n", "\r\n")
-              : entry.encoding === "bom"
-                ? `\ufeff${text}`
-                : text;
-          return [entry.file, encoded];
-        }),
+      [...included].map(([file, { members, encoding }]) => {
+        const text =
+          members
+            .filter((name) => !deleted.has(name))
+            .map((name) => definition(byName.get(name)))
+            .join("\n\n") + "\n";
+        const encoded =
+          encoding === "crlf"
+            ? text.replaceAll("\n", "\r\n")
+            : encoding === "bom"
+              ? `\ufeff${text}`
+              : text;
+        return [file, encoded];
+      }),
     );
     return { main: sections.join("\n\n") + "\n", files };
   };
@@ -1424,17 +1437,22 @@ export function generateChecksumProject(seed, options = {}) {
       if (edit.cluster === "U") assert.equal(occurrences(edit.mention), 1, `${edit.id} mention`);
       assert.equal(occurrences(`namespace ${edit.namespace} {`), 1, `${edit.id} namespace`);
     }
-    if (edit.kind === "file-expression") {
-      // The expression stands once in its own file and nowhere else; only a W trap's
-      // file holds a carriage return, and only an X trap's a byte order mark.
+    if (edit.kind === "file-delete") {
+      // The function stands once, in its own file, which loses only its definition
+      // and the empty line after it. Only a W trap's file holds a carriage return, and
+      // only an X trap's a byte order mark, right before the function's first line.
       const own = startFiles[edit.file];
-      assert.equal(own.split(edit.before).length, 2, `${edit.id} expression is not unique`);
-      assert.equal(occurrences(edit.before), 0, `${edit.id} expression in main.cpp`);
+      const lf = own.replaceAll("\r\n", "\n").replace(/^\ufeff/, "");
+      assert.equal(lf.split(header(edit.name)).length, 2, `${edit.id} header is not unique`);
+      assert.equal(identifierCount(start, edit.name), 0, `${edit.id} name in main.cpp`);
       assert.equal(occurrences(`#include "${edit.file}"`), 1, `${edit.id} include`);
       assert.equal(own.includes("\r"), trap && edit.cluster === "W", `${edit.id} line endings`);
       assert.ok(!own.includes("\r") || !/[^\r]\n/.test(own), `${edit.id} mixed line endings`);
       assert.equal(own.startsWith("\ufeff"), trap && edit.cluster === "X", `${edit.id} mark`);
-      assert.equal(expectedFiles[edit.file], own.replace(edit.before, edit.after), edit.id);
+      assert.equal(lf.startsWith(header(edit.name)), edit.cluster === "X", `${edit.id} first`);
+      const cut = `${definitionText(lf, edit.name)}\n\n`;
+      const eol = own.includes("\r") ? "\r\n" : "\n";
+      assert.equal(expectedFiles[edit.file], own.replace(cut.replaceAll("\n", eol), ""), edit.id);
     }
     if (edit.kind === "commented-delete") {
       assert.equal(occurrences(header(edit.name)), 1, `${edit.id} header is not unique`);
@@ -1509,7 +1527,7 @@ export function generateChecksumProject(seed, options = {}) {
     new Map(
       done
         .flatMap((task) => task.parts ?? [task])
-        .filter(({ kind }) => ["expression", "scoped-replace", "file-expression"].includes(kind))
+        .filter(({ kind }) => kind === "expression" || kind === "scoped-replace")
         .map((edit) => [edit.statement, edit.newFactor]),
     );
   const result = tasks.map((task) => {

@@ -331,7 +331,7 @@ export function gradeSharedChecksum(project, candidate, files = {}) {
           (name) => identifierCount(candidate, name) === identifierCount(project.expected, name),
         ) && edit.mentions.every((line) => count(candidate, line) === 1);
     // A W or X file equals its reference byte for byte; nobody else edits it.
-    else if (edit.kind === "file-expression")
+    else if (edit.kind === "file-delete")
       passed = files[edit.file] === project.expectedFiles[edit.file];
     // A U namespace and its caller stand as in the reference.
     else if (edit.kind === "prune")

@@ -216,7 +216,7 @@ function followInstruction(start, task) {
   if (task.kind === "expression") return start.replace(task.before, task.after);
   if (task.kind === "insert") return start.replace(task.marker, task.text);
   // A W or X edit changes its own file only; see followFiles.
-  if (task.kind === "file-expression") return start;
+  if (task.kind === "file-delete") return start;
   // Code without comment lines and string literals; a naive follower reads them as
   // code too.
   const code = (line) =>
@@ -306,9 +306,17 @@ function followInstruction(start, task) {
 function followFiles(files, task, textMode = false) {
   const result = { ...files };
   for (const edit of task.parts ?? [task])
-    if (edit.kind === "file-expression") {
-      const text = result[edit.file].replace(edit.before, edit.after);
-      result[edit.file] = textMode ? text.replaceAll("\r\n", "\n") : text;
+    if (edit.kind === "file-delete") {
+      const text = result[edit.file];
+      const eol = text.includes("\r\n") ? "\r\n" : "\n";
+      // A byte order mark belongs to the file, not to its first line.
+      const mark = text.startsWith("\ufeff") ? "\ufeff" : "";
+      const lines = text.slice(mark.length).split(eol);
+      const first = lines.indexOf(`long long ${edit.name}(long long value) {`);
+      const length = definitionLength(lines, first);
+      assert.equal(lines[first + length], "", edit.id);
+      lines.splice(first, length + 1);
+      result[edit.file] = mark + lines.join(textMode ? "\n" : eol);
     }
   return result;
 }
@@ -614,9 +622,9 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
     project.tasks.find((task) => task.cluster === cluster && task.variant === variant);
   const failed = (candidate, task, files = project.expectedFiles) =>
     !gradeSharedChecksum(project, candidate, files).tasks.find(({ id }) => id === task.id).passed;
-  // A W edit written back in text mode loses the file's CRLF line endings, and an X
-  // edit that drops the byte order mark changes the file too: both fail their traps.
-  // The same writers pass the controls.
+  // A W deletion written back in text mode loses the file's CRLF line endings, and
+  // an X deletion that takes the byte order mark with the first line drops it: both
+  // fail their traps. The same writers pass the controls.
   for (const variant of ["trap", "control"]) {
     const lines = find("W", variant);
     const text = followFiles(project.startFiles, lines, true);
