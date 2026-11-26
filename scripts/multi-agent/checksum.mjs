@@ -19,7 +19,9 @@ keeps its session, and the final file is graded against the reference.
 sensitive, and the clusters after Z are lowercase; --per-variant N sets the trap
 and control edits per cluster; --density N puts N edits
 in each zone of neighbouring lines; --edits N groups N edits into one composite task;
---lines N adds functions until main.cpp has at least N lines.
+--lines N adds functions until main.cpp has at least N lines; --compact leaves out
+the functions that separate the edits, so the edits of all clusters stand side by
+side.
 --notice adds to shared-run prompts the sentence that other agents edit main.cpp at
 the same time; by default shared-run prompts equal the isolated ones.
 shared-rescore SEED SAVED_RUN grades a saved shared run again with the current grader.
@@ -40,6 +42,7 @@ const { values, positionals } = parseArgs({
     density: { type: "string" },
     edits: { type: "string" },
     lines: { type: "string" },
+    compact: { type: "boolean" },
   },
 });
 const [command, seedText, target] = positionals;
@@ -60,6 +63,7 @@ const options = Object.fromEntries(
     .map(([flag, key]) => [key, Number(values[flag])]),
 );
 if (values.clusters !== undefined) options.clusters = values.clusters;
+if (values.compact) options.compact = true;
 
 if (command === "show") {
   const { generateChecksumProject } =

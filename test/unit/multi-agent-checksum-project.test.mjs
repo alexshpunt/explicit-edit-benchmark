@@ -34,6 +34,8 @@ const CONFIGS = [
   { density: 5 },
   { edits: 4 },
   { density: 3, edits: 2 },
+  { clusters: ALL, compact: true },
+  { density: 3, clusters: ALL, compact: true },
 ];
 const atoms = (project) => project.tasks.flatMap((task) => task.parts ?? [task]);
 
@@ -68,6 +70,7 @@ for (const { seed, options } of [
   { seed: 4, options: { edits: 4, clusters: ALL } },
   { seed: 5, options: { perVariant: 3, density: 4 } },
   { seed: 6, options: { clusters: "FKLM", lines: 3000 } },
+  { seed: 7, options: { clusters: ALL, perVariant: 3, compact: true } },
 ]) {
   test(`checksum project ${seed} ${JSON.stringify(options)}: every state builds and prints its answer`, async (t) => {
     const project = generateChecksumProject(seed, options);
@@ -90,7 +93,11 @@ for (const { seed, options } of [
     const lines = project.start.split("\n").length;
     // Generated code stays near 20 lines per edit, so a run's file stays readable,
     // unless the size option asks for more.
-    if (size.lines === 0)
+    // A compact file keeps only the fillers that something needs.
+    if (size.compact) {
+      const loose = generateChecksumProject(seed, { ...options, compact: false });
+      assert.ok(lines < 0.7 * loose.start.split("\n").length, `${lines} lines`);
+    } else if (size.lines === 0)
       assert.ok(lines > 15 * edits.length && lines < 40 * edits.length, `${lines} lines`);
     else assert.ok(lines >= size.lines && lines < 1.2 * size.lines + 40 * edits.length);
     const states = [

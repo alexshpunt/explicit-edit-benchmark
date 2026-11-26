@@ -452,6 +452,12 @@ export function generateChecksumProject(seed, options = {}) {
   for (const key of ["perVariant", "density", "edits"])
     assert.ok(Number.isSafeInteger(counts[key]) && counts[key] >= 1, `${key} must be positive`);
   assert.ok(Number.isSafeInteger(counts.lines) && counts.lines >= 0, "lines must not be negative");
+  // A compact file puts the edits' functions side by side, with no fillers between
+  // them. The option stands in the counts only when it is set, so other projects
+  // keep their counts.
+  assert.ok([undefined, true, false].includes(options.compact), "compact must be a boolean");
+  const compact = options.compact === true;
+  assert.ok(!compact || counts.lines === 0, "A compact file has no size option");
   const clusters = [...new Set(counts.clusters)].sort();
   assert.ok(
     clusters.length > 0 && clusters.every((cluster) => cluster in CHECKSUM_CLUSTERS),
@@ -670,20 +676,36 @@ export function generateChecksumProject(seed, options = {}) {
     ofCluster("Z").length +
     ofCluster("b").length +
     ofCluster("c").length;
+  // A compact file has only the fillers that something needs: the library, room for
+  // the constant uses, and two F decoys per F trap. They are longer, so there are
+  // fewer of them, and their first declarations, where F sites stand, hold no
+  // constant use, so every filler can be a decoy.
+  const reserved = compact ? zoneSize + 2 : 0;
+  assert.ok(reserved + 4 <= VARIABLES.length, "A compact file allows zones of at most 14 edits");
+  const decoys = 2 * ofCluster("F").filter(({ variant }) => variant === "trap").length;
   const lengths = [];
   while (
     lengths.length <
-      Math.max(LIBRARY_SIZE, 2 * edits.length - zones.length + moves.length + ownGaps - 1) ||
-    lengths.reduce((sum, length) => sum + length, 0) < fillerUses.length * 1.4
+      (compact
+        ? Math.max(LIBRARY_SIZE, decoys)
+        : Math.max(LIBRARY_SIZE, 2 * edits.length - zones.length + moves.length + ownGaps - 1)) ||
+    lengths.reduce((sum, length) => sum + Math.max(0, length - reserved), 0) <
+      fillerUses.length * 1.4
   )
-    lengths.push(random.integer(3, 5));
+    lengths.push(
+      compact
+        ? Math.min(VARIABLES.length, random.integer(reserved + 8, reserved + 14))
+        : random.integer(3, 5),
+    );
   // The size option adds longer fillers until they alone reach the line count; a
   // filler takes its declarations, three more lines and an empty line.
   while (lengths.reduce((sum, length) => sum + length + 4, 0) < counts.lines)
     lengths.push(random.integer(8, 16));
   const plans = lengths.map(plain);
   const places = random.shuffle(
-    plans.flatMap((plan, filler) => plan.map((_, index) => [filler, index])),
+    plans.flatMap((plan, filler) =>
+      plan.flatMap((_, index) => (index < reserved ? [] : [[filler, index]])),
+    ),
   );
   fillerUses.forEach((constant, index) => {
     const [filler, at] = places[index];
@@ -1323,15 +1345,39 @@ export function generateChecksumProject(seed, options = {}) {
     }),
     ...moves.map(({ marker }) => [{ marker }]),
   ];
-  const fillerOrder = random.shuffle(fillers);
-  assert.ok(units.length <= fillerOrder.length + 1, "Too few fillers to separate the zones");
-  const gaps = random.shuffle(Array.from({ length: fillerOrder.length + 1 }, (_, gap) => gap));
-  const unitAt = new Map(units.map((unit, index) => [gaps[index], unit]));
   // The lead function is the first definition after the prototypes.
   const layout = [{ function: lead.name }];
-  for (let gap = 0; gap <= fillerOrder.length; gap++) {
-    layout.push(...(unitAt.get(gap) ?? []));
-    if (gap < fillerOrder.length) layout.push({ function: fillerOrder[gap].name });
+  if (compact) {
+    // Units and the few fillers in one random order, side by side. A move's slot
+    // keeps at least one unit between it and the function that moves there, so the
+    // move is not a no-op.
+    const at = (name) => units.findIndex((unit) => unit.some((block) => block.function === name));
+    const pieces = [...units, ...fillers.map(({ name }) => [{ function: name }])];
+    let order;
+    for (let attempt = 0; ; attempt++) {
+      assert.ok(attempt < 1000, "No layout keeps every slot away from its function");
+      order = random.shuffle(pieces.map((_, index) => index));
+      const where = new Map(order.map((piece, index) => [piece, index]));
+      if (
+        moves.every((edit) => {
+          const slot = units.findIndex((unit) =>
+            unit.some((block) => block.marker === edit.marker),
+          );
+          return Math.abs(where.get(slot) - where.get(at(edit.name))) > 1;
+        })
+      )
+        break;
+    }
+    for (const piece of order) layout.push(...pieces[piece]);
+  } else {
+    const fillerOrder = random.shuffle(fillers);
+    assert.ok(units.length <= fillerOrder.length + 1, "Too few fillers to separate the zones");
+    const gaps = random.shuffle(Array.from({ length: fillerOrder.length + 1 }, (_, gap) => gap));
+    const unitAt = new Map(units.map((unit, index) => [gaps[index], unit]));
+    for (let gap = 0; gap <= fillerOrder.length; gap++) {
+      layout.push(...(unitAt.get(gap) ?? []));
+      if (gap < fillerOrder.length) layout.push({ function: fillerOrder[gap].name });
+    }
   }
   const prototypes = random.shuffle(functions.filter(({ prototyped }) => prototyped));
   const declarations = random.shuffle(constants);
