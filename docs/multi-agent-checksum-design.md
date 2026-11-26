@@ -335,7 +335,7 @@ with one of each.
 | O traps | 0 of 10  | 0 of 10        | 0 of 10           |
 
 Every control passed, except one K control in a shared run that ran out of the
-deadline. Every shared file failed to build, with 1 to 2 collateral paragraphs per
+deadline. Every shared file failed to build, with 1 to 3 collateral paragraphs per
 run with the notice and 3 to 5 without it. The notice makes the Bash agents print
 the text around the match before they edit, which reveals a namespace or a comment
 marker; a lone `}` inside a raw string looks like the end of the function in that
