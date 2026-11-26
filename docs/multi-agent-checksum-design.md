@@ -49,8 +49,9 @@ comparison runs.
 | D. Supplied text    | Changing supplied text on the way into the file                      | Insert a supplied 13-line function whose five string literals hold backslash escapes, quotes, `$HOME`, `$(date)`, backticks and `%`                   | Insert a supplied 13-line function of the same shape whose literals hold plain words                   | Neither by design: a heredoc needs a quoted delimiter, a JSON argument needs exact escaping |
 | E. Byte exactness   | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space                             | Replace an expression on an ordinary line                                                              | Neither by design                                                                           |
 
-Later rounds added clusters F to X. Each targets a failure seen in a trace or a
-mechanism a harness could plausibly have:
+Later rounds added clusters F to Z and then a to d. Each targets a failure seen in
+a trace or a mechanism a harness could plausibly have. Cluster letters are case
+sensitive: `--clusters XYZab` picks X, Y, Z, a and b.
 
 | Cluster               | Trap                                                                                                                                                              | Control                                            |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
@@ -93,7 +94,11 @@ edits unchanged…". The cluster instructions are:
 - P: `In main.cpp, main passes the argument N to exactly one function. In the definition of that function, replace "a * 37 + 11" with "a * 41 + 11". The definition holds it once.` Q, R and S name the function by its callee, its neighbour or its constant in the same frame.
 - T: `In main.cpp, rename the function "f" to "g": change its prototype, its definition and every call of it. Comments and string literals that mention the function stay unchanged.`
 - U and V: `In main.cpp, delete the complete definition of every function in the namespace "diag" that no code calls, and the empty line that directly followed each deleted definition. Keep the namespace and the functions that are called.`
-- W and X: `In part.inc, delete the complete definition of the function "long long f(long long value)". Also delete the empty line that directly followed the definition.`
+- W, X, Y and a: `In part.inc, delete the complete definition of the function "long long f(long long value)". Also delete the empty line that directly followed the definition.`
+- Z: `In main.cpp, in the definition of the function "long long f(long long value)", add 1000 to every integer literal that multiplies a variable. The other numbers stay unchanged.`
+- b: the E wording, with the decomposed text as it stands in the file, not as `\u` escapes.
+- c: `In main.cpp, reorder the function definitions in the namespace "atlas" so that they stand in alphabetical order of their names. Keep each definition unchanged, with one empty line between definitions.`
+- d: the D wording for `In rules.mk`; a trap's supplied lines hold `\t`.
 
 The A wording is the same for traps and controls; for a control, the last sentence
 has nothing to apply to. Task ids are neutral (`edit-07`), because an agent can see
@@ -451,3 +456,34 @@ the start of the function's line as the position after the last newline before t
 signature, which is 0 when the function is the first in the file, and so deleted
 the byte order mark with the definition. The file still builds and prints the
 reference answer, so only the byte comparison sees the damage.
+
+Twelfth round, Bash only (`multi-agent-checksum-project-v9`): new axes. Y, Z, a, b,
+c and d, three traps and three controls each, seeds 42 and 7. Files beside main.cpp
+are byte strings from this version on: the runners read and write them as Latin-1,
+one character per byte, so a byte that is not UTF-8 survives and the grade
+compares bytes.
+
+| Cluster | Isolated, both seeds | Shared, both seeds |
+| ------- | -------------------- | ------------------ |
+| Y       | all 12               | all 12             |
+| Z       | all 12               | all 12             |
+| a       | all 12               | all 12             |
+| b       | all 12               | all 12             |
+| c       | all 12               | all 12             |
+| d       | all 12               | all 12             |
+
+The first version of Y deleted the last function of a file without a final
+newline, and every Y trap failed: the agents deleted whole lines, so the line
+before kept its newline, while the reference also dropped that newline. Both
+readings of the instruction are fair, so those results are not counted, and Y now
+deletes the middle function, which leaves the file's end unambiguous. The table
+shows the second version.
+
+None of the new traps caught a Bash agent. Their scripts read and wrote bytes from
+the first command, so a missing final newline, a Latin-1 byte and a tab passed
+through unchanged; for d they wrote the tab as `\t` in a Python bytes literal. For
+b they copied the decomposed text from the prompt code point for code point, in
+one script even as `"u\u0308ber mode"`, and asserted that it occurs once. For Z
+they printed the function first and replaced each product by its exact text,
+including the one written number first. For c they cut the namespace's body into
+definitions and sorted them in one script.
