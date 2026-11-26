@@ -360,7 +360,8 @@ with one trap and one control each (30 edits) in a file of about 50,000 lines
 | 7    | B, H, I, K, N and O traps | B, H, N and O traps    | 4                     | does not build |
 
 Every control passed in both modes, and so did every trap of C, F, G, J, L and M.
-The size made no new kind of failure: the Bash agents never read the file, so its
-length only adds a little time to each script. Next to the run of the same clusters
+The size made no new kind of failure. Of 74 commands in the seed-42 runs, 66 were
+Python scripts that find their target by search, and only two printed the whole
+file, so its length only adds a little time to each script. Next to the run of the same clusters
 in a file of 930 lines (seed 42, seventh round), the only change is that K traps
 failed in both modes. A shared run took 0.3 to 1.5 minutes and cost under $0.08.
