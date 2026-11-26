@@ -57,9 +57,13 @@ export async function startPiParticipant(
     onProviderFailure,
     disableAutoRetry = false,
     sharedSandbox,
+    // Called with every event the agent reports, as it arrives; an observer's failure
+    // does not reach the agent.
+    onEvent,
   } = {},
 ) {
   signal?.throwIfAborted();
+  assert.ok(onEvent === undefined || typeof onEvent === "function");
   assert.ok(
     !sharedSandbox || !enforceProcessBoundary,
     "A shared sandbox has no participant namespace boundary",
@@ -268,6 +272,12 @@ export async function startPiParticipant(
   const trace = (event) => {
     if (!["message_update", "tool_execution_update"].includes(event.type)) events.push(event);
     if (eventsFile) appendFileSync(eventsFile, JSON.stringify(event) + "\n", { mode: 0o600 });
+    if (onEvent)
+      try {
+        Promise.resolve(onEvent(event)).catch(() => {});
+      } catch {
+        // The observer is outside the agent's run.
+      }
   };
   /** @type {{
    * recoveryController: AbortController,

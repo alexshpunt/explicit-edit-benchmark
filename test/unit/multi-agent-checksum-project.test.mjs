@@ -18,6 +18,7 @@ import {
   failureKind,
   gradeSharedChecksum,
   passedAtFinish,
+  sharedFailure,
   sharedPrompt,
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
@@ -1025,6 +1026,19 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
   assert.deepEqual(score.gainedInCrowd, [
     { id: "edit-03", cluster: "I", variant: "trap", kind: "touched-other-text" },
   ]);
+  // A crowd failure names whose doing it was: the edit passed after its own agent's
+  // tool call, when that agent finished, or never.
+  assert.deepEqual(
+    [
+      { passedAtFinish: true, passedAfterOwnWrite: true },
+      { passedAtFinish: false, passedAfterOwnWrite: true },
+      { passedAtFinish: false, passedAfterOwnWrite: false },
+      { passedAtFinish: false },
+      { status: "timed-out", passedAtFinish: true },
+      {},
+    ].map((row) => sharedFailure(row)),
+    ["lost-later", "lost-before-finish", "own-mistake", "failed-at-finish", "timed-out", "unknown"],
+  );
   // Runs of another model are not one observation.
   const other = { ...shared, identity: { ...identity, model: "other" } };
   assert.throws(() => compareChecksumRuns(isolated, other), /model/);

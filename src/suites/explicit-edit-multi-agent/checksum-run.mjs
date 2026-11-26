@@ -638,10 +638,25 @@ export async function runChecksumShared(
     sandbox === "shared"
       ? () => (teamSandbox ??= startSharedSandbox(path.join(output, "sandbox")))
       : undefined;
+  const names = Object.keys(project.startFiles);
+  // The task each agent works on, by session, and the checks of its edits after its
+  // tool calls: an edit that passed after one of them was written correctly, so a
+  // later failure was another agent's doing.
+  const current = new Map();
+  const observations = new Set();
+  const observe = (session, event) => {
+    const own = current.get(session);
+    if (!own || event.type !== "tool_execution_end") return;
+    const check = settledState(workspace, names).then((state) => {
+      if (passedAtFinish(project, own.task, state)) own.row.passedAfterOwnWrite = true;
+    });
+    observations.add(check);
+    void check.finally(() => observations.delete(check)).catch(() => {});
+  };
   const drivers = chunkModelDrivers(path.join(output, "agents"), workspace, config, "", {
     sharedSandbox,
+    onEvent: observe,
   });
-  const names = Object.keys(project.startFiles);
   // The file as each task's agent left it, by task id.
   const finished = path.join(output, "finished");
   await mkdir(finished, { mode: 0o700 });
@@ -688,8 +703,11 @@ export async function runChecksumShared(
           // 1 for the agent's first task, 2 for its second, and so on.
           delivery: deliveries.get(session),
           started: new Date().toISOString(),
+          // Known only for agents that report their tool calls as they happen.
+          ...(drivers.observesEvents ? { passedAfterOwnWrite: false } : {}),
         };
         rows.set(task.id, row);
+        current.set(session, { task, row });
         const begin = Date.now();
         try {
           const outcome = await drivers.execute(driver, notice ? sharedPrompt(task) : task.prompt, {
@@ -709,6 +727,7 @@ export async function runChecksumShared(
         // The task's own checks on the file as its agent left it: an edit that passes
         // here and fails at the end was lost to a later write of another agent. The
         // file is kept, so a later grader can judge it again.
+        current.delete(session);
         const state = await settledState(workspace, names);
         await writeFile(path.join(finished, `${task.id}.json.gz`), gzipSync(JSON.stringify(state)));
         row.passedAtFinish = passedAtFinish(project, task, state);
@@ -728,6 +747,7 @@ export async function runChecksumShared(
     await drivers.cleanup();
     if (teamSandbox) await (await teamSandbox).stop();
   }
+  await Promise.allSettled([...observations]);
   const minutes = (Date.now() - started) / 60000;
   const ordered = project.tasks.flatMap((task) => (rows.has(task.id) ? [rows.get(task.id)] : []));
   const main = await readFile(path.join(workspace, "main.cpp"), "utf8");
@@ -778,16 +798,23 @@ export async function runChecksumShared(
   return summary;
 }
 
-/** Why a shared task failed at the end: the provider or the deadline broke its
- * delivery off; its edit passed on the file as its agent left it and a later write
- * of another agent undid it ("lost-later"); or it failed already then
- * ("failed-at-finish").
+/** Why a shared task failed at the end:
+ * - "provider-failure" or "timed-out": its delivery was broken off;
+ * - "lost-later": its edit passed on the file as its agent left it, and a later write
+ *   of another agent undid it;
+ * - "lost-before-finish": its edit passed right after one of its agent's tool calls
+ *   and was undone before the agent finished;
+ * - "own-mistake": its edit never passed after any of its agent's tool calls;
+ * - "failed-at-finish": it failed when its agent finished, for an agent that does
+ *   not report its tool calls.
  */
 export function sharedFailure(row) {
   if (row.status === "provider-failure" || row.status === "timed-out") return row.status;
   // Earlier runs did not grade the file at a task's finish.
   if (row.passedAtFinish === undefined) return "unknown";
-  return row.passedAtFinish ? "lost-later" : "failed-at-finish";
+  if (row.passedAtFinish) return "lost-later";
+  if (row.passedAfterOwnWrite === undefined) return "failed-at-finish";
+  return row.passedAfterOwnWrite ? "lost-before-finish" : "own-mistake";
 }
 
 /** Whether a shared task's own checks pass on `state`, the file as its agent left it
