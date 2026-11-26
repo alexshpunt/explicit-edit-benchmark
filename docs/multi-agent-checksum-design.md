@@ -590,3 +590,22 @@ checks each line of code that names the function and skips a line that is gone, 
 A rename checks that no old name stays and no look-alike is renamed, and an insert
 glued to the paragraph above it passes when the paragraph below it is the reference
 one. The table shows this grade; the first one gave 179 and 180 shared passes.
+
+Fourteenth round, Bash only: the first observations with the score. Seed 42, every
+cluster, three traps and three controls each, 198 edits; an isolated run and then
+a pool, 25 agents each.
+
+| Model, thinking | Precision | Resilience | Overall | Collateral paragraphs |
+| --------------- | --------- | ---------- | ------- | --------------------- |
+| Terra 6.1, low  | 90.9%     | 94.4%      | 85.9%   | 4                     |
+| Luna 6, high    | 96.0%     | 93.7%      | 89.9%   | 10                    |
+
+On traps alone, Terra passed 81.8% and Luna 94.9%. Terra failed every B, H, I, K, N
+and O trap alone, each as `touched-other-text`; Luna passed all of them. Luna's
+eight failures alone were two W traps and an X trap written back with changed line
+endings or without the byte order mark, a D trap with a changed escape, a T trap
+that renamed inside a literal, and three controls: a move that left a copy of the
+function behind, a reordering that lost an empty line, and a makefile rule whose
+recipes got tabs although the file sets `>` as the recipe prefix. In the crowd the
+two models lost about as much: 10 edits for Terra and 12 for Luna, most of them
+`own-mistake`.
