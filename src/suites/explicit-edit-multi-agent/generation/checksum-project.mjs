@@ -315,7 +315,7 @@ const KIND = {
   U: "prune",
   V: "prune",
 };
-// Namespace names of U edits.
+// Namespace names of U and V edits.
 const PRUNED_NAMESPACES = [
   "diag",
   "debug",
@@ -327,6 +327,12 @@ const PRUNED_NAMESPACES = [
   "stats",
   "checks",
   "metrics",
+  "report",
+  "timing",
+  "profile",
+  "verify",
+  "health",
+  "status",
 ];
 // Namespace names of K edits: the first namespace of a pair in the file holds the
 // decoy, the second the target.
