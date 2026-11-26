@@ -74,6 +74,12 @@ sensitive: `--clusters XYZab` picks X, Y, Z, a and b.
 | V. Unqualified call   | The same edit; one function of the namespace calls another without the namespace prefix                                                                           | The call names the namespace                       |
 | W. Line endings       | Delete the second of three functions from a file that main.cpp includes; the file ends its lines with CRLF                                                        | The file ends its lines with LF                    |
 | X. Byte order mark    | Delete the first of three functions from an included file that starts with a UTF-8 byte order mark                                                                | The file has no mark                               |
+| Y. End of file        | Delete the second of three functions from an included file that does not end with a newline                                                                       | The file ends with a newline                       |
+| Z. Computed edit      | Add 1000 to every number that multiplies a variable in one function; one of its four declarations writes the number before the variable                           | Every declaration writes the variable first        |
+| a. Not UTF-8          | Delete the second of three functions from an included file whose third function has a comment with a Latin-1 byte                                                 | The comment is ASCII                               |
+| b. Unicode look-alike | Replace a string literal's text written in decomposed form; a decoy above it holds the composed form of the same text                                             | The decoy holds other composed text                |
+| c. Large reordering   | Put the 12 functions of a namespace in alphabetical order                                                                                                         | Three functions                                    |
+| d. Recipe tabs        | Insert a supplied make rule into a makefile beside main.cpp; its recipe lines start with a tab                                                                    | The makefile sets `.RECIPEPREFIX = >`              |
 
 Each trap differs from its control in one factor. Within a cluster, both variants use
 the same wording, so the prompt does not reveal which one is the trap.
