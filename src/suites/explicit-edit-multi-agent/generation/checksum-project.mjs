@@ -35,6 +35,7 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   S: "located by a constant",
   T: "rename in code only",
   U: "unused functions",
+  V: "unqualified call",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -214,7 +215,8 @@ function expressionText(statement, context) {
   // A call passes the previous variable; a P decoy's call passes a number and adds
   // the previous variable.
   if (statement.kind === "call") {
-    const callee = context.call?.(statement.callee) ?? statement.callee;
+    // A call inside a namespace can name a function of the namespace without it.
+    const callee = statement.spelling ?? context.call?.(statement.callee) ?? statement.callee;
     return statement.literal === undefined
       ? `${callee}(${left}) + ${offset}`
       : `${callee}(${statement.literal}) + ${left}`;
@@ -311,6 +313,7 @@ const KIND = {
   S: "scoped-replace",
   T: "function-rename",
   U: "prune",
+  V: "prune",
 };
 // Namespace names of U edits.
 const PRUNED_NAMESPACES = [
@@ -495,6 +498,7 @@ export function generateChecksumProject(seed, options = {}) {
           ...base,
           kind: "call",
           callee: entry.callee ?? random.pick(callees),
+          spelling: entry.spelling,
           literal: entry.literal,
           offset: number(),
         };
@@ -564,9 +568,10 @@ export function generateChecksumProject(seed, options = {}) {
     2 * ofCluster("Q").length +
     ofCluster("R").length +
     ofCluster("S").length +
-    // T stands in two gaps, U with its caller in one.
+    // T stands in two gaps, U and V with their callers in one.
     2 * ofCluster("T").length +
-    ofCluster("U").length;
+    ofCluster("U").length +
+    ofCluster("V").length;
   const lengths = [];
   while (
     lengths.length <
@@ -947,6 +952,40 @@ export function generateChecksumProject(seed, options = {}) {
     pairs.push([...namespaceBlock(edit.namespace, members), { function: caller.name }]);
   }
 
+  // V: the same edit without a commented-out call. A caller right after the
+  // namespace calls one of its four functions, the entry, and the entry calls a
+  // second one, the helper, which stands above it. In a trap the entry names the
+  // helper without the namespace, so a search for the qualified name does not find
+  // the call; in a control it names the namespace too.
+  for (const edit of ofCluster("V")) {
+    edit.namespace = take(pruned);
+    const [helper, ...rest] = [0, 1, 2].map(() => namespaced(edit.namespace, take(functionNames)));
+    const name = take(functionNames);
+    const spelling = edit.variant === "trap" ? helper.function.split("::")[1] : undefined;
+    const entry = build(
+      `${edit.namespace}::${name}`,
+      ["plain", { callee: helper.function, spelling }, "plain"],
+      { prototyped: false },
+    );
+    Object.assign(entry, { display: name, uncalled: true });
+    edit.removed = rest.map((member) => member.function);
+    edit.helper = helper.function;
+    const caller = build(take(functionNames), ["plain", { callee: entry.name }, "plain"], {
+      prototyped: false,
+    });
+    edit.caller = caller.name;
+    // The helper stands above the entry, which has no prototype.
+    const order = random.shuffle([{ function: entry.name }, ...rest]);
+    const above = order.findIndex((block) => block.function === entry.name);
+    order.splice(random.integer(0, above), 0, helper);
+    pairs.push([
+      { raw: `namespace ${edit.namespace} {` },
+      ...order,
+      { raw: `}  // namespace ${edit.namespace}` },
+      { function: caller.name },
+    ]);
+  }
+
   // H: functions to delete; a trap has a prototype. Nothing calls them, so the
   // file builds without them.
   for (const edit of ofCluster("H")) {
@@ -1304,18 +1343,26 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(identifierCount(expected, edit.newName), 5, `${edit.id} new uses`);
       for (const line of edit.mentions) assert.equal(occurrences(line), 1, `${edit.id} mention`);
     }
+    if (edit.cluster === "V") {
+      // Only a control's entry names the helper with its namespace.
+      const helper = edit.helper.split("::")[1];
+      assert.equal(occurrences(`${edit.helper}(`), trap ? 0 : 1, `${edit.id} helper`);
+      assert.equal(identifierCount(start, helper), 2, `${edit.id} helper uses`);
+      assert.ok(expected.includes(header(helper)), `${edit.id} helper kept`);
+    }
     if (edit.kind === "prune") {
-      // Each of the namespace's functions stands once; the caller calls two, and only
-      // a trap's commented-out call names a function to delete.
+      // Each of the namespace's functions stands once. U's caller calls two, and only
+      // a trap's commented-out call names a function to delete; V's names none.
       const space = start.slice(start.indexOf(`namespace ${edit.namespace} {\n`));
       for (const key of edit.removed) {
         const own = header(key.split("::")[1]);
         assert.equal(occurrences(own), 1, `${edit.id} header is not unique`);
         assert.ok(space.indexOf(own) < space.indexOf(`}  // namespace ${edit.namespace}`));
         assert.ok(!expected.includes(own), `${edit.id} kept`);
-        assert.equal(occurrences(`${key}(`), key === edit.removed[0] && trap ? 1 : 0, edit.id);
+        const mentioned = edit.cluster === "U" && trap && key === edit.removed[0];
+        assert.equal(occurrences(`${key}(`), mentioned ? 1 : 0, edit.id);
       }
-      assert.equal(occurrences(edit.mention), 1, `${edit.id} mention`);
+      if (edit.cluster === "U") assert.equal(occurrences(edit.mention), 1, `${edit.id} mention`);
       assert.equal(occurrences(`namespace ${edit.namespace} {`), 1, `${edit.id} namespace`);
     }
     if (edit.kind === "commented-delete") {

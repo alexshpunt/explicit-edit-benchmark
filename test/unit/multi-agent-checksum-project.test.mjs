@@ -19,7 +19,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJKLMNOPQRSTU";
+const ALL = "ABCDEFGHIJKLMNOPQRSTUV";
 const CONFIGS = [
   {},
   { clusters: ALL },
@@ -221,12 +221,19 @@ function followInstruction(start, task) {
       const name = /^long long (\w+)\(long long value\) \{$/.exec(lines[first])?.[1];
       if (!name) continue;
       const length = definitionLength(lines, first);
+      // Inside the namespace a call can leave out the namespace; a naive follower
+      // only searches for the qualified name.
+      const own = new RegExp(`(^|[^:\\w])${name}\\(`);
       const called = lines.some(
         (line, at) =>
           (at < first || at >= first + length) &&
           code(line)
             .filter((_, index) => index % 2 === 0)
-            .some((part) => part.includes(`${task.namespace}::${name}(`)),
+            .some(
+              (part) =>
+                part.includes(`${task.namespace}::${name}(`) ||
+                (!task.naive && at > open && at < close && own.test(part)),
+            ),
       );
       if (!called) unused.push({ first, length });
     }
@@ -380,6 +387,8 @@ test("each trap differs from its control in its one factor", () => {
         assert.ok(edit.mentions.every((line) => identifierCount(line, edit.name) === +trap));
       if (edit.cluster === "U")
         assert.equal(edit.mention.includes(`${edit.removed[0]}(`), trap, edit.id);
+      // A V trap's entry calls its helper without the namespace.
+      if (edit.cluster === "V") assert.equal(!start.includes(`${edit.helper}(`), trap, edit.id);
       // A C trap scans for a brace character.
       if (edit.cluster === "C")
         assert.equal(/'[{}]'/.test(definitionText(start, edit.name)), trap, edit.id);
@@ -476,9 +485,9 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J, K, L, N and P to U edits stand in gaps of their own, and M edits
+        // J, K, L, N and P to V edits stand in gaps of their own, and M edits
         // everywhere.
-        const edits = all.filter(({ cluster }) => !"JKLMNPQRSTU".includes(cluster));
+        const edits = all.filter(({ cluster }) => !"JKLMNPQRSTUV".includes(cluster));
         if (edits.length === 0) continue;
         // An O definition holds an empty line, so it spans two paragraphs.
         const reach = zoneReach + edits.filter(({ cluster }) => cluster === "O").length;
@@ -680,9 +689,10 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
       const task = find(cluster, variant);
       assert.ok(failed(project.start.replace(task.before, task.after), task), task.id);
     }
-  // A rename of every occurrence of a T name, and a deletion of only the U functions
-  // that nothing names, fail their traps and pass their controls.
-  for (const cluster of "TU")
+  // A rename of every occurrence of a T name, and a deletion of the U and V
+  // functions whose qualified name nothing mentions, fail their traps and pass their
+  // controls.
+  for (const cluster of "TUV")
     for (const variant of ["trap", "control"]) {
       const task = find(cluster, variant);
       const naive = followInstruction(project.start, { ...task, naive: true });
