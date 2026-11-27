@@ -689,3 +689,28 @@ their agents' scripts left the semicolon in their only write. The run had read
 main.cpp right after a Python script truncated it and before it wrote the file
 back, and every deletion passes on an empty file. A shared run now skips a read
 unless the file still ends with main.
+
+Seventeenth round: classes with sections, fields and constructors, and clusters j
+to m, in the compact file of every cluster: 252 edits.
+
+| Model, thinking | Precision | Resilience | Overall |
+| --------------- | --------- | ---------- | ------- |
+| Terra 6.1, low  | 90.5%     | 98.2%      | 88.9%   |
+| Luna 6, high    | 97.6%     | 94.7%      | 92.5%   |
+
+| Cluster | Terra alone: traps, controls | Terra crowd | Luna alone | Luna crowd |
+| ------- | ---------------------------- | ----------- | ---------- | ---------- |
+| e       | 1/3, 3/3                     | 3/3, 3/3    | 3/3, 3/3   | 3/3, 3/3   |
+| f       | 1/3, 2/3                     | 1/3, 3/3    | 3/3, 3/3   | 3/3, 3/3   |
+| j       | 3/3, 3/3                     | 3/3, 3/3    | 3/3, 3/3   | 3/3, 3/3   |
+| k       | 3/3, 3/3                     | 3/3, 3/3    | 3/3, 3/3   | 2/3, 3/3   |
+| l       | 3/3, 3/3                     | 3/3, 3/3    | 3/3, 3/3   | 3/3, 3/3   |
+| m       | 1/3, 3/3                     | 3/3, 3/3    | 3/3, 3/3   | 3/3, 3/3   |
+
+j, k and l caught neither model. Terra's scripts print the definition first and
+then replace its exact text after asserting that it stands once: a k trap's brace
+initializers and an l trap's parameter line are part of the printed text, and a j
+trap's first replacement stopped at the assertion, because the expression stands
+twice, before the script was narrowed to the four-parameter overload. These traps
+fail loudly or are visible in what the agent reads; the ones that catch Terra, e,
+f and m, are silent: the first match is a valid edit of the wrong function.
