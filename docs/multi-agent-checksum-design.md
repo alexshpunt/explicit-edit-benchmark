@@ -737,3 +737,22 @@ also stands in the decoy. A decoy that the agent's first read shows does not cat
 it; the traps that did, B, H, I, N and O, put the decoy where the first read
 misleads: a prototype before the definition, a commented-out copy, or a brace in a
 literal.
+
+Nineteenth round, version 13 with clusters n, o and p, seed 42, three traps and
+three controls each. In a compact file of these clusters alone, Terra failed 8 of
+9 traps alone and passed every control; Luna passed every edit. Terra's scripts
+find the signature with `s.index(...)` and take the first brace after it, or the
+first match of the expression after it: the disabled copy, the friend declaration
+and the quoted signature all come first. In the crowd run of all 42 clusters,
+every task holds three edits (`--edits 3`), 270 edits in all:
+
+| Model | Precision | Resilience | Overall | n, o, p traps alone |
+| ----- | --------- | ---------- | ------- | ------------------- |
+| Terra | 89.3%     | 99.2%      | 88.5%   | 3/3, 0/3, 0/3       |
+| Luna  | 97.8%     | 93.9%      | 91.9%   | 3/3, 3/3, 3/3       |
+
+Resilience barely moved from the seventeenth round, where every task held one
+edit: 98.2% for Terra and 94.7% for Luna. Three edits per task do not make the
+crowd measurably harder. Luna's losses in the crowd are spread over 16 clusters,
+almost all `own-mistake`. The crowd run cost $2.22 for Terra and $0.33 for Luna,
+the run of n, o and p $0.08 and $0.02, both modes included.
