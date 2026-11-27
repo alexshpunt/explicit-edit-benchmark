@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
  * agents edit neighbouring lines of one function at the same moment.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v13";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v14";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
@@ -56,6 +56,11 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   n: "disabled copy",
   o: "friend declaration",
   p: "signature in a comment",
+  q: "placeholder in a note",
+  r: "region extraction",
+  s: "preprocessor twin",
+  t: "batch move order",
+  u: "rename by owner",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -279,6 +284,8 @@ function itemLines(item, depth, context) {
 function instruction(edit) {
   if (edit.kind === "rename")
     return `In main.cpp, replace every occurrence of the identifier ${q(edit.name)} with ${q(edit.newName)}; there are ${edit.occurrences} occurrences. Longer identifiers that contain this spelling stay unchanged.`;
+  if (edit.kind === "function-rename" && edit.cluster === "u")
+    return `In main.cpp, rename the function ${q(signature(edit.name))} of the global namespace to ${q(edit.newName)}: change its prototype, its definition and every call of it. The functions of the namespace ${q(edit.namespace)} and the calls of them stay unchanged.`;
   if (edit.kind === "function-rename")
     return `In main.cpp, rename the function ${q(edit.name)} to ${q(edit.newName)}: change its prototype, its definition and every call of it. Comments and string literals that mention the function stay unchanged.`;
   if (edit.kind === "prune")
@@ -291,6 +298,16 @@ function instruction(edit) {
     return `In main.cpp, in the definition of the function ${q(signature(edit.host))}, add ${FACTOR_STEP} to every integer literal that multiplies a variable. The other numbers stay unchanged.`;
   if (edit.kind === "reorder")
     return `In main.cpp, reorder the function definitions in the namespace ${q(edit.namespace)} so that they stand in alphabetical order of their names. Keep each definition unchanged, with one empty line between definitions.`;
+  if (edit.kind === "region-extract")
+    return `In main.cpp, move the region that starts with the line ${q(edit.open)} into a new file ${edit.file}. The region ends with the line ${q(REGION_END)} that closes it. The new file holds the lines between those two lines, unchanged, each line ending with a newline. In main.cpp, replace the region, its first and last lines included, with the line ${q(`#include "${edit.file}"`)}.`;
+  if (edit.kind === "batch-move") {
+    // The prompt lists the functions in alphabetical order, not in file order.
+    const listed = [...edit.names].sort().map((name) => q(signature(name)));
+    const list = `${listed.slice(0, -1).join(", ")} and ${listed.at(-1)}`;
+    return `In main.cpp, move the complete definitions of the functions ${list} to the placeholder line ${q(edit.marker)}: the definitions replace that placeholder line, in the order in which they stand in main.cpp now, with one empty line between two definitions. Also delete the empty line that directly followed each definition in its old place. Keep the text of each definition unchanged.`;
+  }
+  if (edit.kind === "move" && edit.cluster === "s")
+    return `In main.cpp, move the complete definition of the function ${q(signature(edit.name))} that stands between the lines ${q("#else")} and ${q("#endif")} to the placeholder line ${q(edit.marker)}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`;
   if (edit.kind === "move")
     return `In main.cpp, move the complete definition of the function ${q(signature(edit.name))} to the placeholder line ${q(edit.marker)}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`;
   if (edit.kind === "insert")
@@ -401,7 +418,22 @@ const KIND = {
   n: "disabled-delete",
   o: "scoped-replace",
   p: "scoped-replace",
+  // q moves a function to a slot that a note above repeats, r moves a region into a
+  // file of its own, s moves a function out of an #else branch, t moves four
+  // functions to one slot, and u renames a global function that a namespace
+  // function shares its name with.
+  q: "move",
+  r: "region-extract",
+  s: "move",
+  t: "batch-move",
+  u: "function-rename",
 };
+// The line that closes a region.
+const REGION_END = "#pragma endregion";
+// The first line of the region nested in an r trap's region.
+const NESTED_REGION = "#pragma region details";
+// The note after an earlier slot's text on a q decoy line.
+const SLOT_NOTE = "  // reserved for a later move";
 // The branch whose block a g edit changes.
 const BRANCH = "else if ((a + j) % 3 == 1)";
 // The step a Z edit adds to each factor.
@@ -457,6 +489,21 @@ const PRUNED_NAMESPACES = [
   "journal",
   "atlas",
   "registry",
+];
+// Namespace names of u edits.
+const OWNER_NAMESPACES = [
+  "engine",
+  "codec",
+  "parser",
+  "render",
+  "scene",
+  "storage",
+  "network",
+  "physics",
+  "audio",
+  "input",
+  "script",
+  "shader",
 ];
 // Namespace names of K edits: the first namespace of a pair in the file holds the
 // decoy, the second the target.
@@ -746,7 +793,13 @@ export function generateChecksumProject(seed, options = {}) {
     // An n function with its copy, an o class with its function and a p pair too.
     ofCluster("n").length +
     ofCluster("o").length +
-    ofCluster("p").length;
+    ofCluster("p").length +
+    // An r region and an s #if block too; a t edit has four functions and a slot,
+    // and a u edit its function with its caller and a namespace.
+    ofCluster("r").length +
+    ofCluster("s").length +
+    5 * ofCluster("t").length +
+    2 * ofCluster("u").length;
   // A compact file has only the fillers that something needs: the library, room for
   // the constant uses, and two F decoys per F trap. They are longer, so there are
   // fewer of them, and their first declarations, where F sites stand, hold no
@@ -1174,6 +1227,92 @@ export function generateChecksumProject(seed, options = {}) {
       ...order,
       { raw: `}  // namespace ${edit.namespace}` },
       { function: caller.name },
+    ]);
+  }
+
+  // q: moved functions whose slot a note line repeats. The notes stand right after
+  // the lead function, above every slot. A trap's note starts with the text of the
+  // function's own slot, so the first match of that text is in the note, and a
+  // definition put there still builds; a control's note names another slot.
+  for (const edit of ofCluster("q"))
+    edit.name = build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false }).name;
+
+  // r: a region of two functions to move into a file of its own, which main.cpp
+  // includes in its place. In a trap a nested region holds the second function, so
+  // the first closing line after the region's first line closes the nested region,
+  // and a cut there still builds; a control's region has no nested region. Main
+  // calls both functions.
+  for (const edit of ofCluster("r")) {
+    edit.region = take(functionNames);
+    edit.open = `#pragma region ${edit.region}`;
+    edit.file = `${edit.region}.inc`;
+    edit.members = [0, 1].map(
+      () => build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false }).name,
+    );
+    pairs.push([{ region: edit }]);
+  }
+
+  // s: a function to move out of the #else branch of an #if block whose macro no
+  // code defines. In a trap the #if branch holds a legacy twin with the same
+  // signature, so the first match of the signature is the inactive twin, and moving
+  // it redefines the function; a control's #if branch holds a function with another
+  // name. Main calls the function.
+  for (const edit of ofCluster("s")) {
+    edit.name = build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false }).name;
+    const twinName = edit.variant === "trap" ? edit.name : take(functionNames);
+    const twin = build(`legacy-twin::${twinName}`, plain(random.integer(2, 4)), {
+      prototyped: false,
+    });
+    Object.assign(twin, { display: twinName, uncalled: true });
+    edit.condition = `#if defined(LEGACY_${edit.name.toUpperCase()})`;
+    pairs.push([
+      { raw: edit.condition },
+      { function: twin.name },
+      { raw: "#else" },
+      { function: edit.name },
+      { raw: "#endif" },
+    ]);
+  }
+
+  // t: four functions to move to one slot in the order in which they stand in the
+  // file. The prompt lists them in alphabetical order: a trap's functions stand in
+  // another order, a control's in that one. Each stands in a gap of its own, and the
+  // order is set once the layout is known. Main calls them.
+  for (const edit of ofCluster("t")) {
+    edit.names = [0, 1, 2, 3].map(
+      () => build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false }).name,
+    );
+    pairs.push(...edit.names.map((name) => [{ function: name }]));
+  }
+
+  // u: a global function to rename, with a prototype, a caller and main's call. A
+  // namespace holds a function and, below it, a second one that calls the first
+  // without the namespace. In a trap the namespace's function has the same name, so
+  // its definition and the call of it match the name too, and renaming them still
+  // builds; in a control it has another name. Nothing calls the namespace.
+  const owners = ofCluster("u").length > 0 ? random.shuffle(OWNER_NAMESPACES) : [];
+  for (const edit of ofCluster("u")) {
+    edit.name = build(take(functionNames), plain(random.integer(2, 4)), { prototyped: true }).name;
+    edit.newName = take(functionNames);
+    edit.mentions = [];
+    edit.namespace = take(owners);
+    const caller = build(take(functionNames), ["plain", { callee: edit.name }, "plain"], {
+      prototyped: false,
+    });
+    const ownName = edit.variant === "trap" ? edit.name : take(functionNames);
+    const own = namespaced(edit.namespace, ownName);
+    const userName = take(functionNames);
+    const user = build(
+      `${edit.namespace}::${userName}`,
+      ["plain", { callee: own.function, spelling: ownName }, "plain"],
+      { prototyped: false },
+    );
+    Object.assign(user, { display: userName, uncalled: true });
+    pairs.push(random.shuffle([{ function: edit.name }, { function: caller.name }]), [
+      { raw: `namespace ${edit.namespace} {` },
+      own,
+      { function: user.name },
+      { raw: `}  // namespace ${edit.namespace}` },
     ]);
   }
 
@@ -1765,7 +1904,7 @@ export function generateChecksumProject(seed, options = {}) {
   // Placeholders, numbered in zone order.
   let slot = 0;
   for (const edit of ordered)
-    if (edit.kind === "move" || edit.kind === "insert")
+    if (edit.kind === "move" || edit.kind === "insert" || edit.kind === "batch-move")
       edit.marker = `// __EXPLICIT_EDIT_SLOT_${++slot}_1__`;
     else if (edit.kind === "file-insert") edit.marker = `# __EXPLICIT_EDIT_SLOT_${++slot}_1__`;
 
@@ -1776,7 +1915,7 @@ export function generateChecksumProject(seed, options = {}) {
       random.shuffle([
         { function: hosts[index].name },
         ...zone
-          .filter(({ cluster }) => "BCGHIOi".includes(cluster))
+          .filter(({ cluster }) => "BCGHIOiq".includes(cluster))
           .map((edit) => ({ function: edit.name ?? edit.host })),
         ...zone.filter(({ cluster }) => cluster === "D").map(({ marker }) => ({ marker })),
       ]),
@@ -1792,9 +1931,15 @@ export function generateChecksumProject(seed, options = {}) {
       return edit.variant === "trap" ? [...slots, own] : [own, ...slots];
     }),
     ...moves.map(({ marker }) => [{ marker }]),
+    ...ofCluster("t").map(({ marker }) => [{ marker }]),
   ];
-  // The lead function is the first definition after the prototypes.
-  const layout = [{ function: lead.name }];
+  // The lead function is the first definition after the prototypes; the q notes
+  // follow it.
+  for (const edit of ofCluster("q")) {
+    const text = edit.variant === "trap" ? edit.marker : edit.marker.replace(/_1__$/, "_2__");
+    edit.note = `${text}${SLOT_NOTE}`;
+  }
+  const layout = [{ function: lead.name }, ...ofCluster("q").map(({ note }) => ({ raw: note }))];
   if (compact) {
     // Units and the few fillers in one random order, side by side. A move's slot
     // keeps at least one unit between it and the function that moves there, so the
@@ -1826,6 +1971,20 @@ export function generateChecksumProject(seed, options = {}) {
       layout.push(...(unitAt.get(gap) ?? []));
       if (gap < fillerOrder.length) layout.push({ function: fillerOrder[gap].name });
     }
+  }
+  // t: a control's functions take their places in alphabetical order; a trap's
+  // keep the random order, unless it is alphabetical by chance.
+  for (const edit of ofCluster("t")) {
+    const places = edit.names
+      .map((name) => layout.findIndex((block) => block.function === name))
+      .sort((left, right) => left - right);
+    const sorted = [...edit.names].sort();
+    let order = places.map((place) => layout[place].function);
+    if (edit.variant === "control") order = sorted;
+    else if (order.every((name, index) => name === sorted[index]))
+      order = [sorted[1], sorted[0], ...sorted.slice(2)];
+    places.forEach((place, index) => (layout[place] = { function: order[index] }));
+    edit.order = order;
   }
   const prototypes = random.shuffle(functions.filter(({ prototyped }) => prototyped));
   const declarations = random.shuffle(constants);
@@ -1935,7 +2094,8 @@ export function generateChecksumProject(seed, options = {}) {
       calls = new Map(),
       labels = new Map(),
       branches = new Map(),
-      filled = new Set();
+      filled = new Set(),
+      extracted = new Set();
     let order = layout;
     for (const edit of done.flatMap((task) => task.parts ?? [task])) {
       if (edit.kind === "rename") names.set(edit.name, edit.newName);
@@ -1983,6 +2143,16 @@ export function generateChecksumProject(seed, options = {}) {
           .map((block) => (block.marker === edit.marker ? { function: edit.name } : block));
       if (edit.kind === "insert")
         order = order.map((block) => (block.marker === edit.marker ? { text: edit.text } : block));
+      if (edit.kind === "batch-move")
+        order = order
+          .filter((block) => !edit.names.includes(block.function))
+          .flatMap((block) =>
+            block.marker === edit.marker ? edit.order.map((name) => ({ function: name })) : [block],
+          );
+      if (edit.kind === "region-extract") {
+        extracted.add(edit.id);
+        order = order.map((block) => (block.region === edit ? { include: edit.file } : block));
+      }
     }
     const call = (name) => calls.get(name) ?? name;
     const context = { factors, name: (name) => names.get(name) ?? name, call };
@@ -2032,6 +2202,14 @@ export function generateChecksumProject(seed, options = {}) {
         "};",
       ].join("\n");
     };
+    // The lines between an r region's first and last lines; a trap's second function
+    // stands in a nested region.
+    const regionInner = (edit) => {
+      const [first, second] = edit.members.map((name) => definition(byName.get(name)));
+      return edit.variant === "trap"
+        ? [first, "", NESTED_REGION, second, REGION_END].join("\n")
+        : `${first}\n\n${second}`;
+    };
     const sections = [
       [`// Checksum program generated from seed ${seed}.`, "#include <iostream>"].join("\n"),
       [
@@ -2051,6 +2229,9 @@ export function generateChecksumProject(seed, options = {}) {
           block.text ??
           block.raw ??
           (block.cls ? classDefinition(block.cls) : undefined) ??
+          (block.region
+            ? [block.region.open, regionInner(block.region), REGION_END].join("\n")
+            : undefined) ??
           (block.include ? `#include "${block.include}"` : definition(byName.get(block.function))),
       ),
       [
@@ -2089,6 +2270,11 @@ export function generateChecksumProject(seed, options = {}) {
         return [file, encoded];
       }),
       ...ofCluster("d").map((edit) => [edit.file, makefile(edit, filled.has(edit.file))]),
+      // An r file exists only once its region has moved there.
+      ...ofCluster("r").map((edit) => [
+        edit.file,
+        extracted.has(edit.id) ? `${regionInner(edit)}\n` : null,
+      ]),
     ]);
     // j and m edits replace a member function's text, and k edits delete one with the
     // empty line after it; each text stands once.
@@ -2301,14 +2487,26 @@ export function generateChecksumProject(seed, options = {}) {
         assert.equal(occurrences(`namespace ${space} {`), 1, `${edit.id} namespace`);
     }
     if (edit.kind === "function-rename") {
-      // Code names the function five times: its prototype, its definition, two
-      // callers and main. Only a trap's comment and literal name it too.
+      // Code names a T function five times: its prototype, its definition, two
+      // callers and main. Only a trap's comment and literal name it too. A u function
+      // has one caller, and only a trap's namespace names it too: in its function's
+      // definition and in the call of that function.
       const mentioned = trap ? 2 : 0;
-      assert.equal(identifierCount(start, edit.name), 5 + mentioned, `${edit.id} uses`);
+      const code = edit.cluster === "u" ? 4 : 5;
+      assert.equal(identifierCount(start, edit.name), code + mentioned, `${edit.id} uses`);
       assert.equal(occurrences(`${signature(edit.name)};`), 1, `${edit.id} prototype`);
       assert.equal(identifierCount(start, edit.newName), 0, `${edit.id} new name exists`);
       assert.equal(identifierCount(expected, edit.name), mentioned, `${edit.id} mentions`);
-      assert.equal(identifierCount(expected, edit.newName), 5, `${edit.id} new uses`);
+      assert.equal(identifierCount(expected, edit.newName), code, `${edit.id} new uses`);
+      if (edit.cluster === "u") {
+        // The namespace's function stands above the function that calls it.
+        const open = start.indexOf(`namespace ${edit.namespace} {\n`);
+        const space = start.slice(open, start.indexOf(`}  // namespace ${edit.namespace}`, open));
+        const own = space.match(/^long long (\w+)\(long long value\) \{$/m)[1];
+        assert.equal(own === edit.name, trap, `${edit.id} namespace name`);
+        assert.equal(identifierCount(space, own), 2, `${edit.id} namespace uses`);
+        assert.equal(occurrences(`${edit.namespace}::`), 0, `${edit.id} qualified`);
+      }
       for (const line of edit.mentions) assert.equal(occurrences(line), 1, `${edit.id} mention`);
     }
     if (edit.cluster === "V") {
@@ -2414,8 +2612,71 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(calls(expected), 0, `${edit.id} calls left`);
       assert.equal(occurrences(edit.name), edit.occurrences + 1, `${edit.id} other uses`);
     }
-    if (edit.kind === "move" || edit.kind === "insert")
-      assert.equal(occurrences(edit.marker), 1, `${edit.id} marker is not unique`);
+    // A slot stands once; only a q trap's note repeats its text, above it.
+    if (edit.kind === "move" || edit.kind === "insert" || edit.kind === "batch-move") {
+      const noted = edit.cluster === "q" && trap;
+      assert.equal(occurrences(edit.marker), noted ? 2 : 1, `${edit.id} marker is not unique`);
+      assert.equal(start.split(`\n${edit.marker}\n`).length, 2, `${edit.id} slot line`);
+    }
+    if (edit.cluster === "q") {
+      assert.equal(occurrences(edit.note), 1, `${edit.id} note`);
+      assert.ok(start.indexOf(edit.note) < start.indexOf(`\n${edit.marker}\n`), edit.id);
+      assert.equal(expected.split(`\n${edit.note}\n`).length, 2, `${edit.id} note kept`);
+    }
+    if (edit.kind === "region-extract") {
+      // The region stands once and leaves main.cpp for its file. Only a trap's
+      // region holds a nested region, so a closing line stands before its own.
+      const at = start.indexOf(`\n${edit.open}\n`) + 1;
+      assert.ok(at > 0 && occurrences(edit.open) === 1, `${edit.id} region`);
+      const inner = expectedFiles[edit.file];
+      assert.equal(startFiles[edit.file], null, `${edit.id} file exists`);
+      assert.ok(start.startsWith(`${edit.open}\n${inner}${REGION_END}\n`, at), `${edit.id} file`);
+      assert.equal(inner.includes(REGION_END), trap, `${edit.id} nested`);
+      assert.equal(occurrences(`#include "${edit.file}"`), 0, `${edit.id} include`);
+      assert.equal(expected.split(`\n#include "${edit.file}"\n`).length, 2, `${edit.id} result`);
+      edit.unique = inner.split("\n").filter((line) => line.trim() && occurrences(line) === 1);
+      assert.ok(
+        edit.members.every((name) => edit.unique.includes(header(name))),
+        `${edit.id} unique`,
+      );
+    }
+    if (edit.cluster === "s") {
+      // The function stands between #else and #endif; only a trap's #if branch holds
+      // a definition with the same signature.
+      assert.equal(occurrences(header(edit.name)), trap ? 2 : 1, `${edit.id} twin`);
+      assert.equal(occurrences(`${signature(edit.name)};`), 0, `${edit.id} prototype`);
+      const at = start.indexOf(`\n${edit.condition}\n`) + 1;
+      assert.ok(at > 0 && occurrences(edit.condition) === 1, `${edit.id} condition`);
+      const block = start.slice(at, start.indexOf("\n#endif\n", at) + 7);
+      const inside = block.indexOf(`\n#else\n\n${header(edit.name)}`) + 8;
+      assert.ok(inside > 8, `${edit.id} branch`);
+      edit.full = block.slice(inside, block.length - 8);
+      assert.ok(edit.full.endsWith("\n}") && occurrences(edit.full) === 1, `${edit.id} full`);
+      edit.frame = expected.slice(
+        expected.indexOf(`${edit.condition}\n`),
+        expected.indexOf("\n#endif\n", expected.indexOf(`${edit.condition}\n`)) + 7,
+      );
+      assert.ok(edit.frame.endsWith("\n#else\n\n#endif"), `${edit.id} frame`);
+    }
+    if (edit.kind === "batch-move") {
+      // The prompt lists the functions in alphabetical order; only a trap's stand in
+      // another order.
+      const places = edit.names.map((name) => start.indexOf(`\n${header(name)}`));
+      const inFile = [...edit.names].sort(
+        (left, right) => places[edit.names.indexOf(left)] - places[edit.names.indexOf(right)],
+      );
+      assert.deepEqual(inFile, edit.order, `${edit.id} order`);
+      assert.equal(
+        edit.order.every((name, index) => name === [...edit.names].sort()[index]),
+        !trap,
+        `${edit.id} alphabetical`,
+      );
+      edit.definitions = edit.order.map((name) => definitionText(start, name));
+      edit.batch = edit.definitions.join("\n\n");
+      for (const name of edit.names)
+        assert.equal(occurrences(header(name)), 1, `${edit.id} header is not unique`);
+      assert.ok(expected.includes(`\n${edit.batch}\n`), `${edit.id} result`);
+    }
     if (edit.kind === "insert")
       assert.equal(identifierCount(start, edit.name), 0, `${edit.id} name exists`);
     if (edit.kind === "scoped-replace") {

@@ -69,10 +69,12 @@ export const CHECKSUM_MAIN_END = "  std::cout << total << '\\n';\n  return 0;\n}
  */
 export const PROJECT_FILE_ENCODING = "latin1";
 
-/** Write files beside main.cpp, by name, byte for byte. */
+/** Write files beside main.cpp, by name, byte for byte; a null file is one that does
+ * not exist yet.
+ */
 export async function writeProjectFiles(directory, files = {}) {
   for (const [name, text] of Object.entries(files))
-    await writeFile(path.join(directory, name), text, PROJECT_FILE_ENCODING);
+    if (text !== null) await writeFile(path.join(directory, name), text, PROJECT_FILE_ENCODING);
 }
 
 /** Read the named files beside main.cpp; a missing file reads as null. */
@@ -95,10 +97,7 @@ export async function buildAndRun(directory, source, signal, files = {}) {
   const file = path.join(directory, "main.cpp"),
     binary = path.join(directory, "program");
   await writeFile(file, source);
-  await writeProjectFiles(
-    directory,
-    Object.fromEntries(Object.entries(files).filter(([, text]) => text !== null)),
-  );
+  await writeProjectFiles(directory, files);
   try {
     await execFileAsync("clang++", ["-std=c++17", file, "-o", binary], { signal });
   } catch (error) {
@@ -378,9 +377,9 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
   const moved = new Set(
     project.tasks
       .flatMap((task) => task.parts ?? [task])
-      .filter(({ kind }) => kind === "move")
-      .flatMap(({ name, full }) => [
-        `long long ${name}(long long value) {`,
+      .filter(({ kind }) => kind === "move" || kind === "batch-move")
+      .flatMap(({ name, names, full }) => [
+        ...(names ?? [name]).map((own) => `long long ${own}(long long value) {`),
         // The later paragraphs of an O definition move with it.
         ...(full
           ? blocks(full)
@@ -439,7 +438,8 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
       reference >= 0 &&
       paragraphs.get(got[at]) === 1 &&
       variants.some((variant) => got[at] === variant(wanted[reference])) &&
-      count(candidate, marker) === 0 &&
+      // A q trap's note keeps the slot's text.
+      count(candidate, marker) === count(project.expected, marker) &&
       (ownOnly ||
         neighbour(got, at, -1) === neighbour(wanted, reference, -1) ||
         neighbour(got, at, 1) === neighbour(wanted, reference, 1))
@@ -478,11 +478,29 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
           count(candidate, right) > 0 ? "right" : count(candidate, wrong) > 0 ? "wrong" : "gone",
         ),
       );
+      // A u namespace keeps its function's name, so the new name stands no more often
+      // than in the reference.
       passed =
         states.has("right") &&
         !states.has("wrong") &&
-        identifierCount(candidate, edit.name) <= identifierCount(project.expected, edit.name);
+        identifierCount(candidate, edit.name) <= identifierCount(project.expected, edit.name) &&
+        identifierCount(candidate, edit.newName) <= identifierCount(project.expected, edit.newName);
     }
+    // An r file equals its reference, and main.cpp includes it in place of the
+    // region, which leaves none of its own lines.
+    else if (edit.kind === "region-extract")
+      passed =
+        files[edit.file] === project.expectedFiles[edit.file] &&
+        count(candidate, edit.open) === 0 &&
+        count(candidate, `#include "${edit.file}"`) === 1 &&
+        candidate.includes(`\n#include "${edit.file}"\n\n`) &&
+        edit.unique.every((line) => !candidate.includes(line));
+    // A t slot holds the four definitions in their order, and each stands once.
+    else if (edit.kind === "batch-move")
+      passed =
+        placed((block) => block === edit.definitions[0], edit.marker) &&
+        count(candidate, edit.batch) === 1 &&
+        edit.definitions.every((text) => count(candidate, text) === 1);
     // A file beside main.cpp equals its reference byte for byte; nobody else edits it.
     else if (edit.kind === "file-delete" || edit.kind === "file-insert")
       passed = files[edit.file] === project.expectedFiles[edit.file];
@@ -624,10 +642,18 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
       if (inner && edit.variant === "trap")
         variants.push((block) => block.replace(inner.after, inner.before));
       // An O definition holds an empty line, so its first paragraph alone does not
-      // show that the whole definition moved.
+      // show that the whole definition moved. An s trap's twin has the same first
+      // line, so an s definition is known by its whole text, and its #if block keeps
+      // the twin. A q note stays as a line of its own.
+      const find =
+        edit.frame === undefined
+          ? (block) => block.startsWith(`${signature} {`)
+          : (block) => block === edit.full;
       passed =
-        placed((block) => block.startsWith(`${signature} {`), edit.marker, variants) &&
+        placed(find, edit.marker, variants) &&
         (edit.full === undefined || count(candidate, edit.full) === 1) &&
+        (edit.frame === undefined || count(candidate, edit.frame) === 1) &&
+        (edit.note === undefined || candidate.split("\n").includes(edit.note)) &&
         count(candidate, `${signature};`) === count(project.expected, `${signature};`);
     }
     checks.set(edit.id, {

@@ -72,9 +72,9 @@ if (command === "show") {
   await mkdir(target, { mode: 0o700 });
   await writeFile(path.join(target, "main.cpp"), project.start);
   await writeFile(path.join(target, "expected-main.cpp"), project.expected);
-  // Files beside main.cpp are byte strings.
+  // Files beside main.cpp are byte strings; a null file does not exist at the start.
   for (const [name, text] of Object.entries(project.startFiles))
-    await writeFile(path.join(target, name), text, "latin1");
+    if (text !== null) await writeFile(path.join(target, name), text, "latin1");
   for (const [name, text] of Object.entries(project.expectedFiles))
     await writeFile(path.join(target, `expected-${name}`), text, "latin1");
   const tasks = project.tasks.map(

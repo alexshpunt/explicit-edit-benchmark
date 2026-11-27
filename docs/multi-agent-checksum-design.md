@@ -49,8 +49,9 @@ comparison runs.
 | D. Supplied text    | Changing supplied text on the way into the file                      | Insert a supplied 13-line function whose five string literals hold backslash escapes, quotes, `$HOME`, `$(date)`, backticks and `%`                   | Insert a supplied 13-line function of the same shape whose literals hold plain words                   | Neither by design: a heredoc needs a quoted delimiter, a JSON argument needs exact escaping |
 | E. Byte exactness   | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space                             | Replace an expression on an ordinary line                                                              | Neither by design                                                                           |
 
-Later rounds added clusters F to Z and then a to p. Each targets a failure seen in
-a trace or a mechanism a harness could plausibly have. Cluster letters are case
+Later rounds added clusters F to Z and then a to u. Each targets a failure seen in
+a trace or a mechanism a harness could plausibly have; q to u carry failures seen in
+the original suite's large renderer file over to generated code. Cluster letters are case
 sensitive: `--clusters XYZab` picks X, Y, Z, a and b.
 
 | Cluster               | Trap                                                                                                                                                              | Control                                            |
@@ -92,12 +93,18 @@ sensitive: `--clusters XYZab` picks X, Y, Z, a and b.
 | n. Disabled copy      | Delete a function named by its signature; an earlier version with the same signature stands right above it inside `#if 0` and `#endif`                            | The earlier version has another name               |
 | o. Friend declaration | Replace an expression in a function; a class above it declares the function as a `friend` right above a member function that holds the same expression            | The friend declaration names another function      |
 | p. Quoted signature   | Replace an expression in a function; a comment above a decoy with the same expression quotes the function's signature                                             | The comment quotes another signature               |
+| q. Slot in a note     | Move a function to a placeholder line; a note line above every slot starts with the same placeholder text and ends with a comment                                 | The note names another slot                        |
+| r. Region extraction  | Move a `#pragma region` of two functions into a new file and include that file in its place; a nested region holds the second function                            | The region has no nested region                    |
+| s. Preprocessor twin  | Move the definition of `f` that stands between `#else` and `#endif`; the `#if` branch above it holds a legacy `f` with the same signature                         | The legacy function has another name               |
+| t. Batch move order   | Move four functions to one slot in the order in which they stand in the file; the prompt lists them in alphabetical order, which differs from the file order      | The file order is alphabetical                     |
+| u. Rename by owner    | Rename a global function; a namespace holds a function of the same name and a function that calls it without the namespace, and both stay unchanged               | The namespace's function has another name          |
 
 Clusters e to m and o are the only places with classes, nested blocks with braces,
 lambdas and templates. A class has a public section with a constructor and its
 member functions, a protected helper that reads its fields, and a private section
 with the fields. Every other function is a straight run of declarations, with at
-most a one-line loop over the characters of a string.
+most a one-line loop over the characters of a string. Clusters n, r and s are the
+only places with preprocessor blocks, and r is the only edit that creates a file.
 
 Each trap differs from its control in one factor. Within a cluster, both variants use
 the same wording, so the prompt does not reveal which one is the trap.
