@@ -147,7 +147,7 @@ if (command === "show") {
     ...shared,
     damaged: grade.damaged,
     collateral: grade.collateral,
-    integrity: grade.integrity,
+    intact: grade.intact,
     tasks: await Promise.all(
       shared.tasks.map(async (row) => ({
         ...row,
@@ -191,14 +191,15 @@ if (command === "show") {
       `${name}: ${percent(score.score.all[key])}; traps ${percent(score.score.traps[key])}, ` +
         `controls ${percent(score.score.controls[key])}`,
     );
-  if (score.shared.integrity) {
+  if (score.shared.intact) {
+    const { intact } = score.shared;
     console.log(
-      `Integrity (paragraphs no edit touches, intact in the crowd): ` +
-        percent(score.shared.integrity),
+      `Integrity (edits over edits plus the ${intact.total - intact.passed} damaged ` +
+        `paragraphs that no edit touches): ${percent(score.score.all.integrity)}; ` +
+        `untouched paragraphs intact ${intact.passed} of ${intact.total}`,
     );
     console.log(
-      `Final (right in both, each damaged untouched paragraph counted as a failed edit): ` +
-        percent(score.score.final),
+      `Final (precision times resilience times integrity): ${percent(score.score.all.final)}`,
     );
   }
   console.log(line("Alone (isolated)", score.isolated));

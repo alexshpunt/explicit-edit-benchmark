@@ -1209,14 +1209,14 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   const wrong = paragraphs.filter((block) => block !== lead).join("\n\n");
   assert.ok(failed(wrong, deletion));
   assert.deepEqual(gradeSharedChecksum(project, wrong).collateral, [lead.split("\n")[0]]);
-  // Integrity counts the paragraphs that no edit touches and that stand as in the
+  // The grade counts the paragraphs that no edit touches and that stand as in the
   // reference: all of them in the reference, all but the lead here.
-  const { integrity } = gradeSharedChecksum(project, project.expected);
-  assert.ok(integrity.total > 0);
-  assert.equal(integrity.passed, integrity.total);
-  assert.deepEqual(gradeSharedChecksum(project, wrong).integrity, {
-    passed: integrity.total - 1,
-    total: integrity.total,
+  const { intact } = gradeSharedChecksum(project, project.expected);
+  assert.ok(intact.total > 0);
+  assert.equal(intact.passed, intact.total);
+  assert.deepEqual(gradeSharedChecksum(project, wrong).intact, {
+    passed: intact.total - 1,
+    total: intact.total,
   });
   // A J trap's move written from a copy read before its partner's edit loses that
   // edit. The final file cannot tell a stale move from a partner that never edited,
@@ -1415,7 +1415,7 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     expectedAnswer: "2",
     damaged: ["x"],
     collateral: ["x"],
-    integrity: { passed: 9, total: 10 },
+    intact: { passed: 9, total: 10 },
     // The T control passed when its agent finished and was lost to a later write.
     tasks: [
       { id: "edit-01", failedEdits: ["edit-01"], passedAtFinish: false },
@@ -1439,31 +1439,32 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     answer: false,
     damaged: 1,
     collateral: 1,
-    integrity: { passed: 9, total: 10 },
+    intact: { passed: 9, total: 10 },
     agents: 25,
     providerFailures: 0,
   });
   assert.equal(score.isolatedProviderFailures, 0);
   // One edit of three is right alone, and it is lost in the crowd; the I trap that
-  // passes only in the crowd earns nothing.
+  // passes only in the crowd earns nothing. Integrity counts the one damaged
+  // untouched paragraph as one more failed edit, and the final score is the product.
   assert.deepEqual(score.score.all, {
     precision: { passed: 1, total: 3 },
     resilience: { passed: 0, total: 1 },
     overall: { passed: 0, total: 3 },
+    integrity: { passed: 3, total: 4 },
+    final: { passed: 0, total: 4 },
   });
   assert.deepEqual(score.score.traps.overall, { passed: 0, total: 2 });
-  // The final score counts each damaged untouched paragraph as one more failed edit.
   const rescued = compareChecksumRuns(isolated, {
     ...shared,
     tasks: shared.tasks.map((own) => ({ ...own, failedEdits: [] })),
   });
   assert.deepEqual(rescued.score.all.overall, { passed: 1, total: 3 });
-  assert.deepEqual(rescued.score.final, { passed: 1, total: 4, damaged: 1 });
-  assert.deepEqual(score.score.final, { passed: 0, total: 4, damaged: 1 });
-  assert.equal(
-    compareChecksumRuns(isolated, { ...shared, integrity: undefined }).score.final,
-    null,
-  );
+  assert.deepEqual(rescued.score.all.final, { passed: 1, total: 4 });
+  // A shared run saved before the count of intact paragraphs has neither.
+  const older = compareChecksumRuns(isolated, { ...shared, intact: undefined });
+  assert.equal(older.score.all.integrity, null);
+  assert.equal(older.score.all.final, null);
   assert.deepEqual(score.score.controls.precision, { passed: 1, total: 1 });
   assert.deepEqual(score.byCluster.T, {
     isolated: { trap: { passed: 0, total: 0 }, control: { passed: 1, total: 1 } },

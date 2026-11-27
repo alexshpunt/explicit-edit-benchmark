@@ -708,9 +708,9 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
     collateral: damaged
       .filter((block) => untouched.has(block))
       .map((block) => block.split("\n")[0]),
-    // Integrity: of the paragraphs that no edit was meant to change or move, the
-    // share that stand in the candidate as in the reference.
-    integrity: {
+    // Of the paragraphs that no edit was meant to change or move, those that stand in
+    // the candidate as in the reference.
+    intact: {
       passed: [...untouched].filter((block) => paragraphs.get(block) === 1).length,
       total: untouched.size,
     },
@@ -933,7 +933,7 @@ export async function runChecksumShared(
     byCluster: clusterSummary(grade.edits),
     damaged: grade.damaged,
     collateral: grade.collateral,
-    integrity: grade.integrity,
+    intact: grade.intact,
     extra: grade.extra,
     built: run.built,
     answer: run.output,
@@ -1065,10 +1065,12 @@ export function compareChecksumRuns(isolated, shared) {
   // The observation's score: precision is the share of edits done right alone;
   // resilience the share of those that stay right in the crowd, so an edit that
   // passes only in the crowd earns nothing; the overall score is the share of edits
-  // right in both, precision times resilience. The final score counts each paragraph
-  // that no edit touches and that the crowd damaged as one more failed edit, so a
-  // damaged paragraph costs the same in a file of any size; a shared run from before
-  // integrity has none.
+  // right in both, precision times resilience. Integrity counts each paragraph that no
+  // edit touches and that the crowd damaged as one more failed edit: the edits over
+  // the edits plus those paragraphs, so a damaged paragraph costs the same in a file
+  // of any size. The final score is precision times resilience times integrity, the
+  // edits right in both over the edits plus the damaged paragraphs. A shared run from
+  // before the count of intact paragraphs has neither.
   const measures = (keep) => {
     const own = together.filter(keep);
     const right = own.filter((edit) => aloneById.get(edit.id).passed);
@@ -1080,7 +1082,8 @@ export function compareChecksumRuns(isolated, shared) {
     };
   };
   const all = measures(() => true);
-  const lost = shared.integrity ? shared.integrity.total - shared.integrity.passed : 0;
+  const intact = shared.intact ?? shared.integrity ?? null;
+  const lost = intact ? intact.total - intact.passed : 0;
   const counted = all.overall.total + lost;
   return {
     project: isolated.identity.project,
@@ -1088,12 +1091,13 @@ export function compareChecksumRuns(isolated, shared) {
     harness: isolated.identity.harness,
     model: isolated.identity.model,
     score: {
-      all,
+      all: {
+        ...all,
+        integrity: intact ? { passed: all.overall.total, total: counted } : null,
+        final: intact ? { passed: all.overall.passed, total: counted } : null,
+      },
       traps: measures((edit) => edit.variant === "trap"),
       controls: measures((edit) => edit.variant === "control"),
-      final: shared.integrity
-        ? { passed: all.overall.passed, total: counted, damaged: lost }
-        : null,
     },
     isolated: score(alone),
     shared: {
@@ -1103,7 +1107,7 @@ export function compareChecksumRuns(isolated, shared) {
       damaged: shared.damaged.length,
       collateral: shared.collateral.length,
       // Untouched paragraphs intact in the final file; runs from before it carry none.
-      integrity: shared.integrity ?? null,
+      intact,
       agents: shared.identity.agents,
       // Deliveries the provider broke off; their tasks count as failed.
       providerFailures: shared.providerFailures ?? 0,

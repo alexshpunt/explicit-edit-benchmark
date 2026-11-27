@@ -208,16 +208,16 @@ apart:
   wrong target first, earns nothing. In the crowd every agent changes the file, so
   an edit is checked by its own text only;
 - overall: the share of edits right in both runs, precision times resilience;
-- integrity: of the paragraphs that no edit changes or moves, the share that stand
-  in the final shared file as in the reference. It shows damage that the other
-  numbers miss, such as a script that deletes thousands of lines in which no task
-  stands;
-- final: the observation's one number, the edits right in both runs over all
-  edits plus the untouched paragraphs damaged in the crowd. Each damaged paragraph
-  counts as one more failed edit: a paragraph is one function, the size of what a
-  task edits, and it costs the same in a file of any size. A share of the file
-  would make one lost function cost 1.1% in a compact file and 0.03% in a file of
-  50,000 lines.
+- integrity: the edits over the edits plus the paragraphs that no edit changes or
+  moves and that the crowd damaged. Each damaged paragraph counts as one more
+  failed edit: a paragraph is one function, the size of what a task edits, and it
+  costs the same in a file of any size. It shows damage that the other numbers
+  miss, such as a script that deletes thousands of lines in which no task stands.
+  A share of the file would make one lost function cost 1.1% in a compact file and
+  0.03% in a file of 50,000 lines, so `compare` prints the count of intact
+  untouched paragraphs beside it only for reference;
+- final: precision times resilience times integrity, the observation's one number:
+  the edits right in both runs over the edits plus the damaged paragraphs.
 
 Below the score, `compare` shows each cluster's traps and controls alone and in
 the crowd, and lists the edits that passed alone and failed in the crowd, and the
@@ -893,24 +893,24 @@ for Luna, both modes included.
 Graded again with exact files alone and with integrity, only Luna's 54,287-line
 run changes: two O traps whose own checks passed alone left damage elsewhere in the
 file, so its precision falls to 91.7%, resilience is 72.7% and overall 66.7%.
-Integrity, the share of untouched paragraphs intact in the crowd, and the final
-score, with each damaged untouched paragraph counted as a failed edit:
+Integrity, with each damaged untouched paragraph counted as a failed edit, and the
+final score, precision times resilience times integrity:
 
-| Run          | Terra integrity     | Terra final   | Luna integrity      | Luna final    |
-| ------------ | ------------------- | ------------- | ------------------- | ------------- |
-| Compact      | 96.6% (86/89)       | 86.7% (39/45) | 93.3% (83/89)       | 58.3% (28/48) |
-| 6,000 lines  | 99.0% (516/521)     | 53.7% (22/41) | 99.0% (516/521)     | 73.2% (30/41) |
-| 54,287 lines | 99.8% (3,282/3,287) | 43.9% (18/41) | 81.0% (2,662/3,287) | 3.6% (24/661) |
+| Run          | Terra integrity | Terra final   | Luna integrity | Luna final    |
+| ------------ | --------------- | ------------- | -------------- | ------------- |
+| Compact      | 93.3% (42/45)   | 86.7% (39/45) | 87.5% (42/48)  | 58.3% (28/48) |
+| 6,000 lines  | 87.8% (36/41)   | 53.7% (22/41) | 87.8% (36/41)  | 73.2% (30/41) |
+| 54,287 lines | 87.8% (36/41)   | 43.9% (18/41) | 5.4% (36/661)  | 3.6% (24/661) |
 
 ## Twenty-second round: Pi Agent IDE on 54,287 lines
 
 The same seed and clusters ran with the `pi-agent-ide-codemode-no-bash` harness,
 Pi Agent IDE 1.1.0 without Bash, and the same models:
 
-| Model | Precision | Resilience | Overall | Integrity           | Final         |
-| ----- | --------- | ---------- | ------- | ------------------- | ------------- |
-| Terra | 100%      | 100%       | 100%    | 100% (3,287/3,287)  | 100% (36/36)  |
-| Luna  | 86.1%     | 100%       | 86.1%   | 99.7% (3,278/3,287) | 68.9% (31/45) |
+| Model | Precision | Resilience | Overall | Integrity     | Final         |
+| ----- | --------- | ---------- | ------- | ------------- | ------------- |
+| Terra | 100%      | 100%       | 100%    | 100% (36/36)  | 100% (36/36)  |
+| Luna  | 86.1%     | 100%       | 86.1%   | 80.0% (36/45) | 68.9% (31/45) |
 
 Terra's shared file equals the reference and prints its answer. Luna lost five
 edits alone, a trap and four controls, all by an empty line. Four of them kept
