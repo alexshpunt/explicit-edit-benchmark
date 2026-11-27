@@ -146,7 +146,7 @@ export async function runChecksumIsolated(
   const started = Date.now();
   // A task whose delivery the provider broke off, such as with a usage limit, starts
   // again from the start project with a new agent; the broken attempt stays beside
-  // it. Other failures stop the run.
+  // it. Another delivery error ends its task with the status "error".
   let pending = project.tasks;
   for (let attempt = 1; pending.length > 0; attempt++) {
     const queued = await runAgentQueue(pending, {
@@ -186,9 +186,11 @@ export async function runChecksumIsolated(
           row.status = outcome.status;
           return outcome;
         } catch (error) {
-          if (error?.category !== "provider_failure") throw error;
-          row.status = "provider-failure";
-          row.error = String(error.message);
+          // A delivery that the provider broke off starts again; any other error, such
+          // as an agent process that stops answering after its turn, ends this task
+          // only, and its workspace is graded as the agent left it.
+          row.status = error?.category === "provider_failure" ? "provider-failure" : "error";
+          row.error = String(error?.message ?? error);
           return { status: row.status };
         } finally {
           row.ended = new Date().toISOString();

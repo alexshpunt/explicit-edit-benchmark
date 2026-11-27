@@ -925,8 +925,12 @@ signature, so that signature was deleted with the move and the file does not
 build. The result of that replace showed the orphaned body; the agent did not
 check it.
 
-The first Luna isolated run stopped before any task: the start-up `get_state`
-call of one agent got no answer within 15 seconds, and any failure other than a
-provider failure stops an isolated run. The second run used the same commit and
-configuration. The runs cost $0.66 for Terra and $0.16 for Luna, both modes
+The first Luna isolated run stopped while its last three tasks were starting:
+after its turn had settled, one agent's process did not answer the `get_state` call
+that checks it is idle within 15 seconds. Its last event was the Agent IDE
+extension updating its problem widget, so the extension was likely still busy
+with the 2.3 MB file. Any failure other than a provider failure stopped an
+isolated run then; now such a delivery ends its own task with the status
+`error`, the workspace is graded as the agent left it, and the run goes on, as
+in the shared run. The second run used the same commit and configuration. The runs cost $0.66 for Terra and $0.16 for Luna, both modes
 included.
