@@ -61,6 +61,8 @@ export const CHECKSUM_AGENTS = 25;
 export const CHECKSUM_PROVIDER_RETRIES = 2;
 export const CHECKSUM_PROVIDER_RETRY_WAIT_MS = 60_000;
 const execFileAsync = promisify(execFile);
+/** The last lines of every main.cpp: no edit touches main's end. */
+export const CHECKSUM_MAIN_END = "  std::cout << total << '\\n';\n  return 0;\n}\n";
 
 /** Files beside main.cpp are byte strings: one character per byte, so a byte that is
  * not UTF-8 survives the round trip and the grade compares bytes.
@@ -699,6 +701,10 @@ export async function runChecksumShared(
         main: await readFile(path.join(workspace, "main.cpp"), "utf8"),
         files: await readProjectFiles(workspace, names),
       };
+      // A writer that truncates the file before it writes leaves it empty or cut
+      // short for a moment, and every deletion passes on such a read. A file that
+      // still ends with main is whole.
+      if (!state.main.endsWith(CHECKSUM_MAIN_END)) return;
       for (const { task, row } of pending)
         if (passedAtFinish(project, task, state)) row.passedAfterOwnWrite = true;
     })().catch(() => {});

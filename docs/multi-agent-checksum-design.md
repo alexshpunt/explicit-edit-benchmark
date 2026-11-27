@@ -646,3 +646,35 @@ The first compact isolated run of Terra lost 63 tasks to the provider's false
 usage-limit error, all within five seconds, and every retry started right away and
 failed the same way. Retries now wait a minute, then two; the table shows the run
 after that change.
+
+Sixteenth round: clusters e to i, the first with classes, nested blocks with braces
+and lambdas, added to the compact file of every cluster: 228 edits.
+
+| Model, thinking | Precision | Resilience | Overall | Collateral paragraphs |
+| --------------- | --------- | ---------- | ------- | --------------------- |
+| Terra 6.1, low  | 90.8%     | 97.6%      | 88.6%   | 10                    |
+| Luna 6, high    | 96.1%     | 94.5%      | 90.8%   | 6                     |
+
+| Cluster | Terra alone: traps, controls | Terra crowd | Luna alone | Luna crowd |
+| ------- | ---------------------------- | ----------- | ---------- | ---------- |
+| e       | 0/3, 3/3                     | 2/3, 3/3    | 3/3, 3/3   | 3/3, 3/3   |
+| f       | 0/3, 3/3                     | 1/3, 3/3    | 3/3, 3/3   | 3/3, 3/3   |
+| g       | 3/3, 3/3                     | 3/3, 3/3    | 3/3, 3/3   | 3/3, 3/3   |
+| h       | 3/3, 3/3                     | 3/3, 3/3    | 2/3, 3/3   | 1/3, 3/3   |
+| i       | 3/3, 3/3                     | 3/3, 3/3    | 3/3, 3/3   | 3/3, 3/3   |
+
+Terra's isolated agents failed every e and f trap: they deleted the other class's
+member function, or edited the lead behind the declaration, the same first-match
+habit as in B, H, I and K. Luna passed them, but three of its h scripts cut the
+class at the brace that closes it, one of them with a comment that says it
+includes the semicolon, and left a lone `;`. g and i caught neither model: both read
+the branch condition and moved the lambda's function whole.
+
+The first grade of the Luna crowd failed all six h edits: a lone semicolon failed
+every h edit, controls included. A semicolon now fails only the deletion whose
+definition stood between the same paragraphs; the table shows the grade after that
+change. The two h traps lost in the crowd were labelled `lost-before-finish`, but
+their agents' scripts left the semicolon in their only write. The run had read
+main.cpp right after a Python script truncated it and before it wrote the file
+back, and every deletion passes on an empty file. A shared run now skips a read
+unless the file still ends with main.

@@ -14,6 +14,7 @@ import {
   identifierCount,
 } from "../../src/suites/explicit-edit-multi-agent/generation/checksum-project.mjs";
 import {
+  CHECKSUM_MAIN_END,
   clusterSummary,
   compareChecksumRuns,
   failureKind,
@@ -62,6 +63,10 @@ async function output(root, name, source, signal, files = {}) {
 test("a seed fixes the checksum project and its tasks", () => {
   assert.deepEqual(generateChecksumProject(7), generateChecksumProject(7));
   assert.notEqual(generateChecksumProject(7).start, generateChecksumProject(8).start);
+  // A shared run reads a version of main.cpp only when it ends as every project does.
+  const project = generateChecksumProject(7, { clusters: ALL });
+  for (const text of [project.start, project.expected, ...project.tasks.map((task) => task.result)])
+    assert.ok(text.endsWith(CHECKSUM_MAIN_END));
 });
 
 for (const { seed, options } of [
