@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
  * agents edit neighbouring lines of one function at the same moment.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v10";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v11";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
@@ -49,6 +49,10 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   g: "nested branch",
   h: "class end",
   i: "lambda and init list",
+  j: "overload",
+  k: "constructor initializers",
+  l: "function template",
+  m: "override",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -213,11 +217,11 @@ export function definitionText(text, name) {
 }
 
 /** The definition of a class in a main.cpp, from its first line through the next
- * line that starts with "};", or undefined.
+ * line that starts with "};", or undefined. The first line may name a base class.
  */
 export function classText(text, name) {
-  const open = text.startsWith(`class ${name} {\n`) ? 0 : text.indexOf(`\nclass ${name} {\n`) + 1;
-  if (open === 0 && !text.startsWith(`class ${name} {\n`)) return undefined;
+  const open = text.startsWith(`class ${name} `) ? 0 : text.indexOf(`\nclass ${name} `) + 1;
+  if (open === 0 && !text.startsWith(`class ${name} `)) return undefined;
   const close = text.indexOf("\n};", open);
   return close < 0 ? undefined : text.slice(open, close + 3);
 }
@@ -294,8 +298,14 @@ function instruction(edit) {
     return `In main.cpp, delete the complete definition that starts with the line ${q(edit.firstLine)}. Also delete the empty line that directly followed the definition.`;
   if (edit.kind === "branch-replace")
     return `In main.cpp, in the definition of the function ${q(signature(edit.host))}, in the block of the branch ${q(edit.branch)}, replace ${q(edit.before)} with ${q(edit.after)}. That block holds it once.`;
+  if (edit.kind === "constructor-delete")
+    return `In main.cpp, delete the complete definition of the constructor ${q(edit.signature)} of the class ${q(edit.cls)}. Also delete the empty line that directly followed the definition.`;
+  if (edit.kind === "template-delete")
+    return `In main.cpp, delete the complete definition of the function template ${q(edit.name)}. Also delete the empty line that directly followed the definition.`;
   const replacement = `replace ${q(edit.before)} with ${q(edit.after)}. The definition holds it once.`;
-  if (edit.kind === "member-replace")
+  if (edit.kind === "overload-replace")
+    return `In main.cpp, in the definition of the member function ${q(edit.signature)} of the class ${q(edit.cls)}, ${replacement}`;
+  if (edit.kind === "member-replace" || edit.kind === "override-replace")
     return `In main.cpp, in the definition of the member function ${q(`${signature(edit.name)} const`)} of the class ${q(edit.cls)}, ${replacement}`;
   if (edit.cluster === "P")
     return `In main.cpp, main passes the argument ${edit.argument} to exactly one function. In the definition of that function, ${replacement}`;
@@ -377,6 +387,12 @@ const KIND = {
   g: "branch-replace",
   h: "block-delete",
   i: "move",
+  // j replaces an expression in one overload, k deletes a constructor, l a function
+  // template, and m replaces an expression in an override.
+  j: "overload-replace",
+  k: "constructor-delete",
+  l: "template-delete",
+  m: "override-replace",
 };
 // The branch whose block a g edit changes.
 const BRANCH = "else if ((a + j) % 3 == 1)";
@@ -713,7 +729,12 @@ export function generateChecksumProject(seed, options = {}) {
     ofCluster("e").length +
     ofCluster("f").length +
     ofCluster("g").length +
-    ofCluster("h").length;
+    ofCluster("h").length +
+    // A j, k or m class and an l template too.
+    ofCluster("j").length +
+    ofCluster("k").length +
+    ofCluster("l").length +
+    ofCluster("m").length;
   // A compact file has only the fillers that something needs: the library, room for
   // the constant uses, and two F decoys per F trap. They are longer, so there are
   // fewer of them, and their first declarations, where F sites stand, hold no
@@ -1310,7 +1331,12 @@ export function generateChecksumProject(seed, options = {}) {
     });
     return entry;
   };
-  const classOf = (name, members) => ({ cls: { name, members } });
+  // A class has a public section with a constructor that sets its fields and its
+  // member functions, a protected helper that reads the fields, and a private
+  // section with the fields.
+  const classOf = (name, members, options = {}) => ({
+    cls: { name, members, fields: ["scale_", "offset_"], constructor: true, ...options },
+  });
 
   // e: a member function to delete in the second of two classes with two member
   // functions each, the named one first. In a trap the first class starts with a
@@ -1445,6 +1471,124 @@ export function generateChecksumProject(seed, options = {}) {
       edit.firstLine = header(entry.name);
       pairs.push([{ function: entry.name }]);
     }
+  }
+
+  // The expression a j or m edit replaces, and the one its decoy holds: the same in
+  // a trap, another in a control.
+  const replaced = (edit) => {
+    const offset = number();
+    edit.before = `a * ${number()} + ${offset}`;
+    edit.after = `a * ${number()} + ${offset}`;
+    return edit.variant === "trap" ? edit.before : `a * ${number()} + ${number()}`;
+  };
+  // A member function as lines of text, whose second declaration holds the given
+  // expression; nothing calls it.
+  const memberLines = (first, expression) =>
+    [
+      first,
+      `    long long a = (value * ${number()} + ${number()}) % kModulus;`,
+      `    long long b = (${expression}) % kModulus;`,
+      "    return (b + value) % kModulus;",
+      "  }",
+    ].join("\n");
+
+  // j: an expression to replace in the overload of a member function that takes
+  // four parameters, named by its parameter types; its signature spans two lines.
+  // The overload with one parameter stands above it. In a trap that overload holds
+  // the same expression at the same place, so the first definition of the name is
+  // the wrong one; in a control it holds another expression.
+  for (const edit of ofCluster("j")) {
+    edit.cls = className();
+    const name = take(functionNames);
+    const decoyExpression = replaced(edit);
+    edit.decoyText = memberLines(`  long long ${name}(long long value) const {`, decoyExpression);
+    const pad = " ".repeat(`  long long ${name}(`.length);
+    const target = [
+      `  long long ${name}(long long value, long long scale, long long offset,`,
+      `${pad}long long bias) const {`,
+      "    long long a = (value * scale + offset) % kModulus;",
+      `    long long b = (${edit.before}) % kModulus;`,
+      "    long long c = (b + bias) % kModulus;",
+      "    return (c + value) % kModulus;",
+      "  }",
+    ].join("\n");
+    Object.assign(edit, {
+      name,
+      signature: `${name}(long long, long long, long long, long long)`,
+      site: target,
+      siteAfter: target.replace(edit.before, edit.after),
+    });
+    edit.targetText = edit.siteAfter;
+    pairs.push([classOf(edit.cls, [{ declaration: edit.decoyText }, { declaration: target }])]);
+  }
+
+  // k: a constructor of three parameters to delete; it is the class's only one. A
+  // trap's member initializers use braces, so counting braces from the first one
+  // after the signature ends the definition inside the initializer list; a
+  // control's use parentheses.
+  for (const edit of ofCluster("k")) {
+    edit.cls = className();
+    const fields = ["scale", "offset", "bias"];
+    const initialize = (field) =>
+      edit.variant === "trap" ? `${field}_{${field}}` : `${field}_(${field})`;
+    edit.signature = `${edit.cls}(${fields.map((field) => `long long ${field}`).join(", ")})`;
+    edit.site = [
+      `  ${edit.signature}`,
+      `      : ${fields.map(initialize).join(", ")} {`,
+      `    if (bias_ > ${number()}) bias_ = bias_ % kModulus;`,
+      "  }",
+    ].join("\n");
+    pairs.push([
+      classOf(
+        edit.cls,
+        [{ declaration: edit.site }, { function: method(edit.cls, take(functionNames)).name }],
+        { fields: fields.map((field) => `${field}_`), constructor: false },
+      ),
+    ]);
+  }
+
+  // l: a function template to delete. A trap writes the template parameter list on
+  // its own line above the signature, so a cut that starts at the line with the
+  // name leaves it behind, where it turns the next definition into a template; a
+  // control writes both on one line.
+  for (const edit of ofCluster("l")) {
+    edit.name = take(functionNames);
+    const parameters = `template <typename T, int kScale = ${number()}>`;
+    const first = `T ${edit.name}(T value) {`;
+    const opening = edit.variant === "trap" ? [parameters, first] : [`${parameters} ${first}`];
+    edit.firstLine = opening[0];
+    edit.site = [
+      ...opening,
+      `  T a = (value * kScale + ${number()}) % kModulus;`,
+      `  T b = (a * ${number()} + ${number()}) % kModulus;`,
+      "  return (b + value) % kModulus;",
+      "}",
+    ].join("\n");
+    pairs.push([{ raw: edit.site }]);
+  }
+
+  // m: an expression to replace in a member function of a derived class that
+  // overrides a virtual one of its base class, above it. The prompt gives the
+  // signature without "override", so its text also starts the base's function. In a
+  // trap the base's function holds the same expression at the same place; in a
+  // control another one.
+  for (const edit of ofCluster("m")) {
+    const base = className();
+    edit.cls = className();
+    edit.name = take(functionNames);
+    const own = signature(edit.name);
+    edit.decoyText = memberLines(`  virtual ${own} const {`, replaced(edit));
+    edit.site = memberLines(`  ${own} const override {`, edit.before);
+    edit.siteAfter = edit.site.replace(edit.before, edit.after);
+    edit.targetText = edit.siteAfter;
+    pairs.push([
+      classOf(
+        base,
+        [{ declaration: `  virtual ~${base}() = default;` }, { declaration: edit.decoyText }],
+        { fields: [], constructor: false },
+      ),
+      classOf(edit.cls, [{ declaration: edit.site }], { base }),
+    ]);
   }
 
   // i: moved functions with a list of weights and a lambda, whose closing lines
@@ -1745,6 +1889,7 @@ export function generateChecksumProject(seed, options = {}) {
         order = order.filter(
           (block) => block.function !== edit.block && block.cls?.name !== edit.block,
         );
+      if (edit.kind === "template-delete") order = order.filter((block) => block.raw !== edit.site);
       if (edit.kind === "reorder") {
         const sorted = [...edit.members].sort();
         let next = 0;
@@ -1784,23 +1929,35 @@ export function generateChecksumProject(seed, options = {}) {
       if (label) return text.replace(label.before, label.after);
       return local ? text.replace(new RegExp(`\\b${local.local}\\b`, "g"), local.newName) : text;
     };
-    // A class defines its member functions indented by one more level.
-    const classDefinition = ({ name, members }) =>
-      [
-        `class ${name} {`,
-        " public:",
-        members
-          .map(
-            (member) =>
-              member.declaration ??
-              definition(byName.get(member.function))
-                .split("\n")
-                .map((line) => (line ? `  ${line}` : line))
-                .join("\n"),
-          )
-          .join("\n\n"),
+    // A class defines its member functions indented by one more level, after its
+    // constructor; a helper and the fields follow in sections of their own.
+    const classDefinition = ({ name, members, fields, constructor, base }) => {
+      const parameter = (field) => field.slice(0, -1);
+      const own = members.map(
+        (member) =>
+          member.declaration ??
+          definition(byName.get(member.function))
+            .split("\n")
+            .map((line) => (line ? `  ${line}` : line))
+            .join("\n"),
+      );
+      if (constructor)
+        own.unshift(
+          `  ${name}(${fields.map((field) => `long long ${parameter(field)}`).join(", ")})` +
+            ` : ${fields.map((field) => `${field}(${parameter(field)})`).join(", ")} {}`,
+        );
+      const sections = [` public:\n${own.join("\n\n")}`];
+      if (fields.length > 0)
+        sections.push(
+          ` protected:\n  long long adjust(long long value) const { return (value * ${fields.join(" + ")}) % kModulus; }`,
+          ` private:\n${fields.map((field) => `  long long ${field};`).join("\n")}`,
+        );
+      return [
+        `class ${name}${base ? ` : public ${base}` : ""} {`,
+        sections.join("\n\n"),
         "};",
       ].join("\n");
+    };
     const sections = [
       [`// Checksum program generated from seed ${seed}.`, "#include <iostream>"].join("\n"),
       [
@@ -1859,7 +2016,15 @@ export function generateChecksumProject(seed, options = {}) {
       }),
       ...ofCluster("d").map((edit) => [edit.file, makefile(edit, filled.has(edit.file))]),
     ]);
-    return { main: sections.join("\n\n") + "\n", files };
+    // j and m edits replace a member function's text, and k edits delete one with the
+    // empty line after it; each text stands once.
+    let source = sections.join("\n\n") + "\n";
+    for (const edit of done.flatMap((task) => task.parts ?? [task])) {
+      if (edit.kind === "overload-replace" || edit.kind === "override-replace")
+        source = source.replace(edit.site, edit.siteAfter);
+      if (edit.kind === "constructor-delete") source = source.replace(`${edit.site}\n\n`, "");
+    }
+    return { main: source, files };
   };
 
   const { main: start, files: startFiles } = render([]);
@@ -1943,12 +2108,40 @@ export function generateChecksumProject(seed, options = {}) {
     if (edit.kind === "member-delete") {
       // Only a trap's other class starts with the same signature.
       assert.equal(occurrences(member(edit.name)), trap ? 2 : 1, `${edit.id} member`);
-      for (const cls of [edit.decoy, edit.cls]) {
+      for (const cls of [edit.decoy, edit.cls])
         assert.equal(occurrences(`class ${cls} {`), 1, `${edit.id} class`);
-        assert.ok(classText(start, cls).startsWith(`class ${cls} {\n public:\n  long long `));
-      }
-      assert.ok(classText(start, edit.cls).includes(`public:\n${member(edit.name)}\n`), edit.id);
+      assert.ok(classText(start, edit.cls).includes(`\n${member(edit.name)}\n`), edit.id);
       assert.ok(!classText(expected, edit.cls).includes(member(edit.name)), edit.id);
+    }
+    if (edit.kind === "overload-replace" || edit.kind === "override-replace") {
+      // The target and the decoy above it stand once, and only a trap's decoy holds
+      // the text too.
+      assert.equal(occurrences(edit.site), 1, `${edit.id} site`);
+      assert.equal(occurrences(edit.decoyText), 1, `${edit.id} decoy`);
+      assert.ok(start.indexOf(edit.decoyText) < start.indexOf(edit.site), `${edit.id} order`);
+      assert.equal(occurrences(edit.before), trap ? 2 : 1, `${edit.id} copies`);
+      assert.equal(occurrences(edit.after), 0, `${edit.id} replacement exists`);
+      assert.equal(expected.split(edit.targetText).length, 2, `${edit.id} result`);
+      assert.equal(expected.split(edit.decoyText).length, 2, `${edit.id} decoy kept`);
+    }
+    if (edit.kind === "constructor-delete") {
+      // The constructor is the class's only one.
+      const own = classText(start, edit.cls);
+      assert.equal(occurrences(edit.site), 1, `${edit.id} site`);
+      assert.equal(own.split(`  ${edit.cls}(`).length, 2, `${edit.id} constructors`);
+      assert.equal(own.includes("scale_{scale}"), trap, `${edit.id} braces`);
+      assert.ok(!expected.includes(edit.signature), `${edit.id} kept`);
+    }
+    if (edit.kind === "template-delete") {
+      // Only a trap's template parameter list stands on its own line.
+      assert.equal(start.split(`\n${edit.firstLine}\n`).length, 2, `${edit.id} first line`);
+      assert.equal(edit.firstLine.includes("("), !trap, `${edit.id} parameter line`);
+      edit.unique = edit.site.split("\n").filter((line) => line.trim() && occurrences(line) === 1);
+      assert.ok(edit.unique.includes(edit.firstLine), `${edit.id} unique`);
+      assert.ok(
+        edit.unique.every((line) => !expected.includes(line)),
+        `${edit.id} kept`,
+      );
     }
     if (edit.kind === "member-replace") {
       // The lead holds the text too. Only a trap's class declares the function and

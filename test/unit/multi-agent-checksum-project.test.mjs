@@ -25,7 +25,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi";
+const ALL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm";
 // Files beside main.cpp are byte strings; an X trap's starts with this mark.
 const BOM = "\xef\xbb\xbf";
 const CONFIGS = [
@@ -97,14 +97,14 @@ for (const { seed, options } of [
     assert.notEqual(project.answers.expected, project.answers.start);
     assert.doesNotMatch(project.expected, /__EXPLICIT_EDIT_SLOT_/);
     const lines = project.start.split("\n").length;
-    // Generated code stays near 20 lines per edit, so a run's file stays readable,
-    // unless the size option asks for more.
+    // Generated code stays near 20 lines per edit, and below 45 with the classes, so
+    // a run's file stays readable, unless the size option asks for more.
     // A compact file keeps only the fillers that something needs.
     if (size.compact) {
       const loose = generateChecksumProject(seed, { ...options, compact: false });
       assert.ok(lines < 0.7 * loose.start.split("\n").length, `${lines} lines`);
     } else if (size.lines === 0)
-      assert.ok(lines > 15 * edits.length && lines < 40 * edits.length, `${lines} lines`);
+      assert.ok(lines > 15 * edits.length && lines < 45 * edits.length, `${lines} lines`);
     else assert.ok(lines >= size.lines && lines < 1.2 * size.lines + 40 * edits.length);
     const states = [
       {
@@ -156,6 +156,7 @@ test("the size option reaches a file of 50,000 lines that builds", async (t) => 
  */
 function definitionLength(lines, first, naive = false) {
   let depth = 0;
+  let opened = false;
   let raw = false;
   for (let index = first; index < lines.length; index++) {
     let code = lines[index];
@@ -174,8 +175,12 @@ function definitionLength(lines, first, naive = false) {
       }
       code = code.replace(/'(?:\\.|[^'])'|"(?:\\.|[^"])*"/g, "");
     }
-    for (const character of code) depth += character === "{" ? 1 : character === "}" ? -1 : 0;
-    if (depth === 0) return index - first + 1;
+    // A signature can span lines before the first brace.
+    for (const character of code) {
+      if (character === "{") opened = true;
+      depth += character === "{" ? 1 : character === "}" ? -1 : 0;
+    }
+    if (opened && depth === 0) return index - first + 1;
   }
   throw new Error("Unbalanced definition");
 }
@@ -360,6 +365,51 @@ function followInstruction(start, task) {
       assert.equal(definition.split(task.before).length, 2, task.id);
       lines.splice(first, length, definition.replace(task.before, task.after));
     }
+    return lines.join("\n");
+  }
+  if (task.kind === "overload-replace" || task.kind === "override-replace") {
+    // A naive follower replaces the first match in the file.
+    if (task.naive) return start.replace(task.before, task.after);
+    // The overload with four parameters, or the class's own function.
+    const open = lines.findIndex((line) => line.startsWith(`class ${task.cls} `));
+    const own =
+      task.kind === "overload-replace"
+        ? `  long long ${task.name}(long long value, long long scale`
+        : `  long long ${task.name}(long long value) const`;
+    const first = lines.findIndex((line, at) => at > open && line.startsWith(own));
+    const length = definitionLength(lines, first);
+    const definition = lines.slice(first, first + length).join("\n");
+    assert.equal(definition.split(task.before).length, 2, task.id);
+    lines.splice(first, length, definition.replace(task.before, task.after));
+    return lines.join("\n");
+  }
+  if (task.kind === "constructor-delete") {
+    const at = start.indexOf(`\n  ${task.signature}\n`) + 1;
+    if (task.naive) {
+      // A cut through the brace that matches the first one after the signature.
+      let depth = 0;
+      let end = start.indexOf("{", at);
+      for (; ; end++) {
+        depth += start[end] === "{" ? 1 : start[end] === "}" ? -1 : 0;
+        if (depth === 0) break;
+      }
+      const rest = start.slice(end + 1);
+      return start.slice(0, at) + (rest.startsWith("\n\n") ? rest.slice(2) : rest);
+    }
+    const first = lines.indexOf(`  ${task.signature}`);
+    const length = definitionLength(lines, first);
+    assert.equal(lines[first + length], "", task.id);
+    lines.splice(first, length + 1);
+    return lines.join("\n");
+  }
+  if (task.kind === "template-delete") {
+    // A naive follower starts the cut at the line with the name.
+    const first = task.naive
+      ? lines.findIndex((line) => line.includes(` ${task.name}(`))
+      : lines.indexOf(task.firstLine);
+    const length = definitionLength(lines, first);
+    assert.equal(lines[first + length], "", task.id);
+    lines.splice(first, length + 1);
     return lines.join("\n");
   }
   if (task.kind === "branch-replace") {
@@ -650,7 +700,7 @@ test("each trap differs from its control in its one factor", () => {
       if (edit.cluster === "e") {
         const decoy = classText(start, edit.decoy);
         assert.ok(start.indexOf(decoy) < start.indexOf(classText(start, edit.cls)), edit.id);
-        const named = decoy.split("\n")[2] === `  long long ${edit.name}(long long value) const {`;
+        const named = decoy.includes(`\n  long long ${edit.name}(long long value) const {\n`);
         assert.equal(named, trap, edit.id);
       }
       if (edit.cluster === "f")
@@ -665,6 +715,15 @@ test("each trap differs from its control in its one factor", () => {
         assert.equal(definitionText(start, edit.host).split(edit.before).length, trap ? 3 : 2);
       if (edit.cluster === "h") assert.equal(edit.firstLine.startsWith("class "), trap, edit.id);
       if (edit.cluster === "i") assert.equal(edit.full.includes("  };\n\n"), trap, edit.id);
+      // A j trap's other overload and an m trap's base function hold the same text; a
+      // k trap's initializers use braces; an l trap's parameter list has its own line.
+      if ("jm".includes(edit.cluster))
+        assert.equal(edit.decoyText.includes(edit.before), trap, edit.id);
+      if (edit.cluster === "k")
+        assert.equal(classText(start, edit.cls).includes("scale_{scale}"), trap, edit.id);
+      if (edit.cluster === "l")
+        assert.equal(start.includes(`\n${edit.firstLine}\nT ${edit.name}(`), trap, edit.id);
+      if (edit.cluster === "m") assert.ok(start.includes(`\nclass ${edit.cls} : public `), edit.id);
       if (edit.cluster === "F")
         assert.equal(start.split(edit.before).length - 1, trap ? 3 : 1, edit.id);
       if (edit.cluster === "G")
@@ -758,9 +817,11 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J, K, L, N, P to c and e to h edits stand in gaps of their own, M edits
+        // J, K, L, N, P to c, e to h and j to m edits stand in gaps of their own, M edits
         // everywhere, and d edits in files of their own.
-        const edits = all.filter(({ cluster }) => !"JKLMNPQRSTUVWXYZabcdefgh".includes(cluster));
+        const edits = all.filter(
+          ({ cluster }) => !"JKLMNPQRSTUVWXYZabcdefghjklm".includes(cluster),
+        );
         if (edits.length === 0) continue;
         // An O definition and an i trap's hold an empty line, so they span two
         // paragraphs.
@@ -1020,8 +1081,10 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   // and a b text typed in composed form fail their traps and pass their controls. So
   // do an edit of the first match of an e or f signature, a replacement of the first
   // g match in the function, a cut of an h definition at its closing brace, and a
-  // move of an i definition's first paragraph.
-  for (const cluster of "TUVZbefghi")
+  // move of an i definition's first paragraph. So do a replacement of the first j or
+  // m match in the file, a cut of a k constructor at the brace that closes the first
+  // one, and a cut of an l template from the line with its name.
+  for (const cluster of "TUVZbefghijklm")
     for (const variant of ["trap", "control"]) {
       const task = find(cluster, variant);
       const naive = followInstruction(project.start, { ...task, naive: true });

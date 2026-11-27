@@ -362,9 +362,18 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
   const wanted = blocks(project.expected),
     got = blocks(candidate);
   const count = (text, part) => text.split(part).length - 1;
-  const paragraphs = new Map();
-  for (const block of got) paragraphs.set(block, (paragraphs.get(block) ?? 0) + 1);
-  const damaged = wanted.filter((block) => paragraphs.get(block) !== 1);
+  const tally = (list) => {
+    const counts = new Map();
+    for (const block of list) counts.set(block, (counts.get(block) ?? 0) + 1);
+    return counts;
+  };
+  const paragraphs = tally(got);
+  // Classes share some paragraphs, such as their private sections, so a paragraph
+  // must stand as often as in the reference.
+  const references = tally(wanted);
+  const damaged = [
+    ...new Set(wanted.filter((block) => paragraphs.get(block) !== references.get(block))),
+  ];
   // Paragraphs that stand unchanged in the start and that no edit moves.
   const moved = new Set(
     project.tasks
@@ -380,9 +389,16 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
           : []),
       ]),
   );
-  const original = new Set(blocks(project.start ?? ""));
+  // A paragraph that several classes share comes and goes with the deletions of
+  // others, so it is not one that no edit touches.
+  const original = tally(blocks(project.start ?? ""));
   const untouched = new Set(
-    wanted.filter((block) => original.has(block) && !moved.has(block.split("\n")[0])),
+    wanted.filter(
+      (block) =>
+        original.get(block) === 1 &&
+        references.get(block) === 1 &&
+        !moved.has(block.split("\n")[0]),
+    ),
   );
   const edits = project.tasks.flatMap((task) => task.parts ?? [task]);
   // A neighbour is known by its first line, so another agent's unfinished edit
@@ -398,15 +414,15 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
           ? [edit.comment[0]]
           : edit.kind === "prune"
             ? edit.removed.map((key) => `long long ${key.split("::")[1]}(long long value) {`)
-            : edit.kind === "block-delete"
+            : edit.kind === "block-delete" || edit.kind === "template-delete"
               ? [edit.firstLine]
               : [],
     ),
   );
-  // The later paragraphs of a class start with one of its member functions, which
+  // The later paragraphs of a class are indented: its members and sections, which
   // other agents may delete.
   const passing = (block) =>
-    /^ {2}long long \w+\(long long value\) const[ ;]/.test(block) ||
+    /^\s/.test(block) ||
     block.startsWith("// __EXPLICIT_EDIT_SLOT_") ||
     inserted.has(block) ||
     deleted.has(first(block));
@@ -542,6 +558,18 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
           classText(candidate, cls) !== undefined &&
           classText(candidate, cls) === classText(project.expected, cls),
       );
+    // A j overload and an m override stand once as in the reference, and so does
+    // the decoy above each.
+    else if (edit.kind === "overload-replace" || edit.kind === "override-replace")
+      passed = count(candidate, edit.targetText) === 1 && count(candidate, edit.decoyText) === 1;
+    // A k class stands as in the reference, without its constructor.
+    else if (edit.kind === "constructor-delete")
+      passed =
+        classText(candidate, edit.cls) !== undefined &&
+        classText(candidate, edit.cls) === classText(project.expected, edit.cls);
+    // An l template leaves none of its own lines, its parameter list included.
+    else if (edit.kind === "template-delete")
+      passed = edit.unique.every((line) => !candidate.includes(line));
     // An f text is replaced once, and the lead keeps its copy.
     else if (edit.kind === "member-replace")
       passed = count(candidate, edit.after) === 1 && count(candidate, edit.leadText) === 1;

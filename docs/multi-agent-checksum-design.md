@@ -49,46 +49,52 @@ comparison runs.
 | D. Supplied text    | Changing supplied text on the way into the file                      | Insert a supplied 13-line function whose five string literals hold backslash escapes, quotes, `$HOME`, `$(date)`, backticks and `%`                   | Insert a supplied 13-line function of the same shape whose literals hold plain words                   | Neither by design: a heredoc needs a quoted delimiter, a JSON argument needs exact escaping |
 | E. Byte exactness   | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space                             | Replace an expression on an ordinary line                                                              | Neither by design                                                                           |
 
-Later rounds added clusters F to Z and then a to i. Each targets a failure seen in
+Later rounds added clusters F to Z and then a to m. Each targets a failure seen in
 a trace or a mechanism a harness could plausibly have. Cluster letters are case
 sensitive: `--clusters XYZab` picks X, Y, Z, a and b.
 
-| Cluster               | Trap                                                                                                                                                              | Control                                            |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| F. Scoped replacement | Replace an expression inside one named function while two other functions hold the same text                                                                      | The expression stands only in that function        |
-| G. Scoped rename      | Rename the local variable `b` inside one function while every function declares a `b`                                                                             | The local variable's name is unique                |
-| H. Deletion target    | Delete a function named by its signature, which also stands in a prototype                                                                                        | The function has no prototype                      |
-| I. In-place target    | Replace an expression inside a function with a prototype; the first definition after the prototypes repeats the expression                                        | The function has no prototype                      |
-| J. Overlapping pair   | Two agents at once: one moves a function, the other changes an expression inside it                                                                               | The expression is in the function right next to it |
-| K. Namespace target   | Delete the definition of `f` in the namespace `slow`, while the namespace `fast` above it defines a function with the same signature                              | The function in `fast` has another name            |
-| L. Shifted lines      | Delete a function with the comment lines above it, whose number the prompt does not give; two neighbours insert 29-line functions right above it in the same wave | The neighbours insert right below it               |
-| M. Bulk deletion      | Delete each of 32 lines, spread over the file, that call an empty trace function, and keep its definition                                                         | Three such lines                                   |
-| N. Commented copy     | Delete a function whose commented-out earlier version, with the same signature, stands in the paragraph above it                                                  | The earlier version had another name               |
-| O. Raw string         | Move a function whose raw string literal holds a lone `}` line followed by an empty line                                                                          | The literal's line is a lone `]`                   |
-| P. Located by main    | Replace an expression in the function to which main passes a given number; a decoy above it holds the expression and passes the number to a library function      | The decoy passes another number                    |
-| Q. Located by callee  | Replace an expression in the only function that calls a given helper; the decoy holds the expression and a commented-out call of the helper                       | The decoy's comment names another function         |
-| R. Located by order   | Replace an expression in the definition that follows a given function's; that function has a prototype, and the lead holds the expression                         | The function has no prototype                      |
-| S. Located by use     | Replace an expression in the only function that uses a given constant; the decoy holds the expression and the constant's name in a string literal                 | The decoy's literal holds another word             |
-| T. Code-only rename   | Rename a function in its prototype, definition and calls; a comment and a string literal also name it and stay unchanged                                          | The comment and literal name another function      |
-| U. Unused functions   | Delete the functions of a namespace that no code calls; the caller holds a commented-out call of one of them                                                      | The commented-out call names a called function     |
-| V. Unqualified call   | The same edit; one function of the namespace calls another without the namespace prefix                                                                           | The call names the namespace                       |
-| W. Line endings       | Delete the second of three functions from a file that main.cpp includes; the file ends its lines with CRLF                                                        | The file ends its lines with LF                    |
-| X. Byte order mark    | Delete the first of three functions from an included file that starts with a UTF-8 byte order mark                                                                | The file has no mark                               |
-| Y. End of file        | Delete the second of three functions from an included file that does not end with a newline                                                                       | The file ends with a newline                       |
-| Z. Computed edit      | Add 1000 to every number that multiplies a variable in one function; one of its four declarations writes the number before the variable                           | Every declaration writes the variable first        |
-| a. Not UTF-8          | Delete the second of three functions from an included file whose third function has a comment with a Latin-1 byte                                                 | The comment is ASCII                               |
-| b. Unicode look-alike | Replace a string literal's text written in decomposed form; a decoy above it holds the composed form of the same text                                             | The decoy holds other composed text                |
-| c. Large reordering   | Put the 12 functions of a namespace in alphabetical order                                                                                                         | Three functions                                    |
-| d. Recipe tabs        | Insert a supplied make rule into a makefile beside main.cpp; its recipe lines start with a tab                                                                    | The makefile sets `.RECIPEPREFIX = >`              |
-| e. Class method       | Delete a member function of the class `Slow`, while the class `Fast` above it starts with a member function of the same signature                                 | The member function in `Fast` has another name     |
-| f. Out-of-class       | Replace an expression in a member function that the class only declares, right above another member function, the lead, that holds the same expression            | The class defines the function itself              |
-| g. Nested branch      | Replace an expression in the `else if` block of an if chain inside two nested loops; the first branch holds the same expression                                   | The first branch holds another expression          |
-| h. Class end          | Delete a definition named by its first line; it is a class, which ends with `};`                                                                                  | It is a function                                   |
-| i. Lambda             | Move a function with a list of weights and a lambda, both closed by `};`, and an empty line after the lambda                                                      | No empty line                                      |
+| Cluster               | Trap                                                                                                                                                                               | Control                                            |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| F. Scoped replacement | Replace an expression inside one named function while two other functions hold the same text                                                                                       | The expression stands only in that function        |
+| G. Scoped rename      | Rename the local variable `b` inside one function while every function declares a `b`                                                                                              | The local variable's name is unique                |
+| H. Deletion target    | Delete a function named by its signature, which also stands in a prototype                                                                                                         | The function has no prototype                      |
+| I. In-place target    | Replace an expression inside a function with a prototype; the first definition after the prototypes repeats the expression                                                         | The function has no prototype                      |
+| J. Overlapping pair   | Two agents at once: one moves a function, the other changes an expression inside it                                                                                                | The expression is in the function right next to it |
+| K. Namespace target   | Delete the definition of `f` in the namespace `slow`, while the namespace `fast` above it defines a function with the same signature                                               | The function in `fast` has another name            |
+| L. Shifted lines      | Delete a function with the comment lines above it, whose number the prompt does not give; two neighbours insert 29-line functions right above it in the same wave                  | The neighbours insert right below it               |
+| M. Bulk deletion      | Delete each of 32 lines, spread over the file, that call an empty trace function, and keep its definition                                                                          | Three such lines                                   |
+| N. Commented copy     | Delete a function whose commented-out earlier version, with the same signature, stands in the paragraph above it                                                                   | The earlier version had another name               |
+| O. Raw string         | Move a function whose raw string literal holds a lone `}` line followed by an empty line                                                                                           | The literal's line is a lone `]`                   |
+| P. Located by main    | Replace an expression in the function to which main passes a given number; a decoy above it holds the expression and passes the number to a library function                       | The decoy passes another number                    |
+| Q. Located by callee  | Replace an expression in the only function that calls a given helper; the decoy holds the expression and a commented-out call of the helper                                        | The decoy's comment names another function         |
+| R. Located by order   | Replace an expression in the definition that follows a given function's; that function has a prototype, and the lead holds the expression                                          | The function has no prototype                      |
+| S. Located by use     | Replace an expression in the only function that uses a given constant; the decoy holds the expression and the constant's name in a string literal                                  | The decoy's literal holds another word             |
+| T. Code-only rename   | Rename a function in its prototype, definition and calls; a comment and a string literal also name it and stay unchanged                                                           | The comment and literal name another function      |
+| U. Unused functions   | Delete the functions of a namespace that no code calls; the caller holds a commented-out call of one of them                                                                       | The commented-out call names a called function     |
+| V. Unqualified call   | The same edit; one function of the namespace calls another without the namespace prefix                                                                                            | The call names the namespace                       |
+| W. Line endings       | Delete the second of three functions from a file that main.cpp includes; the file ends its lines with CRLF                                                                         | The file ends its lines with LF                    |
+| X. Byte order mark    | Delete the first of three functions from an included file that starts with a UTF-8 byte order mark                                                                                 | The file has no mark                               |
+| Y. End of file        | Delete the second of three functions from an included file that does not end with a newline                                                                                        | The file ends with a newline                       |
+| Z. Computed edit      | Add 1000 to every number that multiplies a variable in one function; one of its four declarations writes the number before the variable                                            | Every declaration writes the variable first        |
+| a. Not UTF-8          | Delete the second of three functions from an included file whose third function has a comment with a Latin-1 byte                                                                  | The comment is ASCII                               |
+| b. Unicode look-alike | Replace a string literal's text written in decomposed form; a decoy above it holds the composed form of the same text                                                              | The decoy holds other composed text                |
+| c. Large reordering   | Put the 12 functions of a namespace in alphabetical order                                                                                                                          | Three functions                                    |
+| d. Recipe tabs        | Insert a supplied make rule into a makefile beside main.cpp; its recipe lines start with a tab                                                                                     | The makefile sets `.RECIPEPREFIX = >`              |
+| e. Class method       | Delete a member function of the class `Slow`, while the class `Fast` above it starts with a member function of the same signature                                                  | The member function in `Fast` has another name     |
+| f. Out-of-class       | Replace an expression in a member function that the class only declares, right above another member function, the lead, that holds the same expression                             | The class defines the function itself              |
+| g. Nested branch      | Replace an expression in the `else if` block of an if chain inside two nested loops; the first branch holds the same expression                                                    | The first branch holds another expression          |
+| h. Class end          | Delete a definition named by its first line; it is a class, which ends with `};`                                                                                                   | It is a function                                   |
+| i. Lambda             | Move a function with a list of weights and a lambda, both closed by `};`, and an empty line after the lambda                                                                       | No empty line                                      |
+| j. Overload           | Replace an expression in the overload `f(long long, long long, long long, long long)`, whose signature spans two lines; the one-parameter overload above holds the same expression | It holds another expression                        |
+| k. Constructor        | Delete a three-parameter constructor whose member initializers use braces, `scale_{scale}`, so counting from the first brace ends inside the initializer list                      | The initializers use parentheses                   |
+| l. Function template  | Delete a function template whose `template <typename T, int kScale = N>` line stands above the signature                                                                           | Both stand on one line                             |
+| m. Override           | Replace an expression in `f` of `class Derived : public Base`; `Base` declares `virtual` `f` with the same signature and expression above it                                       | Base's `f` holds another one                       |
 
-Clusters e to i are the only places with classes, nested blocks with braces and
-lambdas. Every other function is a straight run of declarations, with at most a
-one-line loop over the characters of a string.
+Clusters e to m are the only places with classes, nested blocks with braces,
+lambdas and templates. A class has a public section with a constructor and its
+member functions, a protected helper that reads its fields, and a private section
+with the fields. Every other function is a straight run of declarations, with at
+most a one-line loop over the characters of a string.
 
 Each trap differs from its control in one factor. Within a cluster, both variants use
 the same wording, so the prompt does not reveal which one is the trap.
@@ -119,6 +125,10 @@ edits unchanged…". The cluster instructions are:
 - g: `In main.cpp, in the definition of the function "long long f(long long value)", in the block of the branch "else if ((a + j) % 3 == 1)", replace "a * 37 + 11" with "a * 41 + 11". That block holds it once.`
 - h: `In main.cpp, delete the complete definition that starts with the line "class Slow {". Also delete the empty line that directly followed the definition.` A control names a function's first line.
 - i: the B wording.
+- j: `In main.cpp, in the definition of the member function "f(long long, long long, long long, long long)" of the class "Slow", replace "a * 37 + 11" with "a * 41 + 11". The definition holds it once.`
+- k: `In main.cpp, delete the complete definition of the constructor "Slow(long long scale, long long offset, long long bias)" of the class "Slow". Also delete the empty line that directly followed the definition.`
+- l: `In main.cpp, delete the complete definition of the function template "f". Also delete the empty line that directly followed the definition.`
+- m: the f wording, for the derived class.
 
 The A wording is the same for traps and controls; for a control, the last sentence
 has nothing to apply to. Task ids are neutral (`edit-07`), because an agent can see
@@ -133,8 +143,9 @@ Constants use snake case, so a trap `gain_rate` has the look-alikes
 - Functions without a prototype are called only from `main`, so moving them anywhere
   above `main` still compiles. Functions with a prototype can be moved freely.
 - The checksum comes only from straight runs of declarations. Functions with loops,
-  branches, lambdas or string literals (C, O, S, T, b, g, i) and member functions
-  (e, f, h) are not called, so the generator does not evaluate them.
+  branches, lambdas, templates or string literals (C, O, S, T, b, g, i, l) and
+  member functions (e, f, h, j, k, m) are not called, so the generator does not
+  evaluate them.
 - E traps put the only tabs, trailing spaces and no-break spaces of the file on their
   own lines and comments, so a tool that normalizes them elsewhere fails integrity, and
   a tool that normalizes the edited line fails the task.
