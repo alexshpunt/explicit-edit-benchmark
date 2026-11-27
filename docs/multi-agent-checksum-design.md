@@ -763,3 +763,31 @@ edit: 98.2% for Terra and 94.7% for Luna. Three edits per task do not make the
 crowd measurably harder. Luna's losses in the crowd are spread over 16 clusters,
 almost all `own-mistake`. The crowd run cost $2.22 for Terra and $0.33 for Luna,
 the run of n, o and p $0.08 and $0.02, both modes included.
+
+Twentieth round, version 14 with clusters q to u, seed 42, three traps and three
+controls each, in a compact file of these clusters alone. These clusters carry
+failures from the original suite's renderer file over to generated code:
+
+| Model | Precision | Resilience | Overall | Traps alone (q, r, s, t, u) | Traps in the crowd |
+| ----- | --------- | ---------- | ------- | --------------------------- | ------------------ |
+| Terra | 96.7%     | 96.6%      | 93.3%   | 3, 3, 2, 3, 3 of 3          | 3, 3, 2, 3, 3 of 3 |
+| Luna  | 83.3%     | 76.0%      | 63.3%   | 2, 0, 3, 3, 2 of 3          | 3, 0, 1, 1, 3 of 3 |
+
+Every control passed alone. The roles of the two models turned around: Terra lost
+only one trap alone, while Luna lost five, each without a word. Luna cut every r
+region at the first `#pragma endregion` after its first line, which closes the
+nested region, so the new file lacks its last line and main.cpp keeps a stray
+`#pragma endregion`; both still build. Two q scripts stopped at their own
+`assert s.count(slot) == 1` and retried with the slot's whole line. One of them
+checked that the whole line stands once and then replaced the first match of the
+slot's text, which is the note. One u script replaced every match of the name
+without reading the file, the namespace's function and its call included. Terra's s
+failure searched for the signature after the first `#else` of the file, which
+belongs to another block, so it moved the legacy twin and the program no longer
+builds.
+
+In the crowd, Luna moved one t trap's functions in the prompt's alphabetical order
+and wrote two r controls' include lines without a newline of their own, which
+removes the empty line after them. Luna's shared file did not build at the end.
+Terra lost one more s trap in the crowd. The run cost $0.31 for Terra and $0.08 for Luna, both
+modes included.
