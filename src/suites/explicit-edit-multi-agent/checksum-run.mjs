@@ -230,15 +230,20 @@ export async function runChecksumIsolated(
     };
     const grade = main === null ? null : gradeSharedChecksum(reference, main, own);
     const status = results.get(task.id)?.status ?? rows.get(task.id)?.status ?? "not-run";
+    const exact =
+      main === task.result && names.every((name) => own[name] === task.resultFiles[name]);
+    const extraFiles = files.filter((file) => file !== "main.cpp" && !names.includes(file));
     tasks.push({
       ...rows.get(task.id),
       cluster: task.cluster,
       variant: task.variant,
       status,
-      // Why a task with a failed edit failed; see isolatedFailure.
-      failure: grade?.tasks[0].passed
-        ? undefined
-        : isolatedFailure(project, task, status, main, own),
+      // Why a task failed; see isolatedFailure. A task passes only when its files
+      // equal the reference, so a right edit with damage elsewhere fails too.
+      failure:
+        grade?.tasks[0].passed && exact && extraFiles.length === 0
+          ? undefined
+          : isolatedFailure(project, task, status, main, own, extraFiles),
       edits:
         grade?.edits ??
         (task.parts ?? [task]).map(({ id, cluster, variant }) => ({
@@ -248,11 +253,11 @@ export async function runChecksumIsolated(
           passed: false,
         })),
       damaged: grade?.damaged ?? [],
-      exact: main === task.result && names.every((name) => own[name] === task.resultFiles[name]),
+      exact,
       built: run?.built ?? false,
       answer: run?.output ?? null,
       expectedAnswer: task.answer,
-      extraFiles: files.filter((file) => file !== "main.cpp" && !names.includes(file)),
+      extraFiles,
     });
   }
   const usage = { input: 0, output: 0, cacheRead: 0, cost: 0 };
@@ -294,9 +299,10 @@ export function sharedPrompt(task) {
 const blocks = (text) => text.replace(/\n$/, "").split("\n\n");
 
 /** Why an isolated task failed: the provider or the deadline broke its delivery off,
- * main.cpp is gone, or the kind that failureKind finds in its workspace.
+ * main.cpp is gone, the kind that failureKind finds in its workspace, or files the
+ * task did not ask for beside a result that equals the reference.
  */
-export function isolatedFailure(project, task, status, main, files) {
+export function isolatedFailure(project, task, status, main, files, extraFiles = []) {
   if (status === "provider-failure" || status === "timed-out") return status;
   if (main === null) return "no-main";
   const reference = {
@@ -305,9 +311,11 @@ export function isolatedFailure(project, task, status, main, files) {
     startFiles: project.startFiles,
     resultFiles: task.resultFiles,
   };
+  const kind = failureKind(reference, main, files);
+  if (kind === undefined && extraFiles.length > 0) return "extra-files";
   // The edit's own checks failed although the bytes equal the reference: this does
   // not happen, but the kind must name something.
-  return failureKind(reference, main, files) ?? "wrong-own-text";
+  return kind ?? "wrong-own-text";
 }
 
 /** Why one task's result differs from its reference, judged from the start, the
@@ -700,6 +708,12 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
     collateral: damaged
       .filter((block) => untouched.has(block))
       .map((block) => block.split("\n")[0]),
+    // Integrity: of the paragraphs that no edit was meant to change or move, the
+    // share that stand in the candidate as in the reference.
+    integrity: {
+      passed: [...untouched].filter((block) => paragraphs.get(block) === 1).length,
+      total: untouched.size,
+    },
     extra: got.filter((block) => !wanted.includes(block)).map((block) => block.split("\n")[0]),
   };
 }
@@ -919,6 +933,7 @@ export async function runChecksumShared(
     byCluster: clusterSummary(grade.edits),
     damaged: grade.damaged,
     collateral: grade.collateral,
+    integrity: grade.integrity,
     extra: grade.extra,
     built: run.built,
     answer: run.output,
@@ -1000,23 +1015,27 @@ async function settledState(workspace, names) {
 
 /** The two scores of one observation: the isolated run of a seed's tasks, which
  * measures what the harness and the model get right alone, and the shared run of
- * the same tasks, which adds the crowd. Both count edits by their own checks. The
- * comparison lists the edits that passed alone and failed in the crowd, and the
- * ones that passed only in the crowd, such as a blind script whose wrong target
- * another agent had already removed.
+ * the same tasks, which adds the crowd. Alone, an edit passes only when its own
+ * checks pass and its task's files equal the reference with nothing beside them, so
+ * damage anywhere fails it; in the crowd, other agents change the text around an
+ * edit, so its own checks decide, and integrity reports the damage to text that no
+ * edit touches. The comparison lists the edits that passed alone and failed in the
+ * crowd, and the ones that passed only in the crowd, such as a blind script whose
+ * wrong target another agent had already removed.
  */
 export function compareChecksumRuns(isolated, shared) {
   for (const key of ["project", "seed", "harness", "model", "thinking"])
     assert.deepEqual(isolated.identity[key], shared.identity[key], `The runs differ in ${key}`);
   assert.deepEqual(isolated.identity.counts, shared.identity.counts, "The runs differ in tasks");
   // Each failed edit carries why its task failed; see isolatedFailure and
-  // sharedFailure.
-  const alone = isolated.tasks.flatMap((row) =>
-    row.edits.map((edit) => ({
-      ...edit,
-      kind: edit.passed ? undefined : (row.failure ?? "unknown"),
-    })),
-  );
+  // sharedFailure. A row without exact predates it and counts as exact.
+  const alone = isolated.tasks.flatMap((row) => {
+    const whole = row.exact !== false && !(row.extraFiles?.length > 0);
+    return row.edits.map((edit) => {
+      const passed = edit.passed && whole;
+      return { ...edit, passed, kind: passed ? undefined : (row.failure ?? "unknown") };
+    });
+  });
   const crowd = new Map(shared.tasks.map((row) => [row.id, row]));
   const together = isolated.tasks.flatMap((row) =>
     row.edits.map((edit) => {
@@ -1074,6 +1093,8 @@ export function compareChecksumRuns(isolated, shared) {
       answer: shared.answer === shared.expectedAnswer,
       damaged: shared.damaged.length,
       collateral: shared.collateral.length,
+      // Untouched paragraphs intact in the final file; runs from before it carry none.
+      integrity: shared.integrity ?? null,
       agents: shared.identity.agents,
       // Deliveries the provider broke off; their tasks count as failed.
       providerFailures: shared.providerFailures ?? 0,

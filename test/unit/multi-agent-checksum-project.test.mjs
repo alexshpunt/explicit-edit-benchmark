@@ -1209,6 +1209,15 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   const wrong = paragraphs.filter((block) => block !== lead).join("\n\n");
   assert.ok(failed(wrong, deletion));
   assert.deepEqual(gradeSharedChecksum(project, wrong).collateral, [lead.split("\n")[0]]);
+  // Integrity counts the paragraphs that no edit touches and that stand as in the
+  // reference: all of them in the reference, all but the lead here.
+  const { integrity } = gradeSharedChecksum(project, project.expected);
+  assert.ok(integrity.total > 0);
+  assert.equal(integrity.passed, integrity.total);
+  assert.deepEqual(gradeSharedChecksum(project, wrong).integrity, {
+    passed: integrity.total - 1,
+    total: integrity.total,
+  });
   // A J trap's move written from a copy read before its partner's edit loses that
   // edit. The final file cannot tell a stale move from a partner that never edited,
   // so the partner fails and the move, finished either way, passes.
@@ -1406,6 +1415,7 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     expectedAnswer: "2",
     damaged: ["x"],
     collateral: ["x"],
+    integrity: { passed: 9, total: 10 },
     // The T control passed when its agent finished and was lost to a later write.
     tasks: [
       { id: "edit-01", failedEdits: ["edit-01"], passedAtFinish: false },
@@ -1429,6 +1439,7 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     answer: false,
     damaged: 1,
     collateral: 1,
+    integrity: { passed: 9, total: 10 },
     agents: 25,
     providerFailures: 0,
   });
@@ -1469,6 +1480,28 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     ].map((row) => sharedFailure(row)),
     ["lost-later", "lost-before-finish", "own-mistake", "failed-at-finish", "timed-out", "unknown"],
   );
+  // Alone, an edit whose own checks pass fails when its file differs from the
+  // reference elsewhere or extra files stand beside it; a row from before exact
+  // counts as exact.
+  const alter = (id, change) => ({
+    ...isolated,
+    tasks: isolated.tasks.map((own) => (own.id === id ? { ...own, ...change } : own)),
+  });
+  for (const change of [
+    { exact: false, failure: "touched-other-text" },
+    { exact: true, extraFiles: ["edit.py"], failure: "extra-files" },
+  ]) {
+    const sloppy = compareChecksumRuns(alter("edit-02", change), shared);
+    assert.deepEqual(sloppy.score.all.precision, { passed: 0, total: 3 });
+    assert.deepEqual(sloppy.failedAlone[1], {
+      id: "edit-02",
+      cluster: "T",
+      variant: "control",
+      kind: change.failure,
+    });
+  }
+  const clean = compareChecksumRuns(alter("edit-02", { exact: true, extraFiles: [] }), shared);
+  assert.deepEqual(clean.score.all.precision, { passed: 1, total: 3 });
   // Runs of another model are not one observation.
   const other = { ...shared, identity: { ...identity, model: "other" } };
   assert.throws(() => compareChecksumRuns(isolated, other), /model/);

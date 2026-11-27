@@ -200,17 +200,27 @@ runs of the same seed's tasks, one after the other, each with 25 agents at once:
 apart:
 
 - precision: the share of edits done right alone; it measures the harness and the
-  model;
+  model. An edit is right alone only when its own checks pass and its task's files
+  equal the reference byte for byte, with no extra files beside them, so a right
+  edit that damages other text or leaves a script in the project fails;
 - resilience: of the edits done right alone, the share that stay right in the
   crowd; an edit that passes only in the crowd, because another agent removed its
-  wrong target first, earns nothing;
-- overall: the share of edits right in both runs, precision times resilience.
+  wrong target first, earns nothing. In the crowd every agent changes the file, so
+  an edit is checked by its own text only;
+- overall: the share of edits right in both runs, precision times resilience;
+- integrity: of the paragraphs that no edit changes or moves, the share that stand
+  in the final shared file as in the reference. It shows damage that the other
+  numbers miss, such as a script that deletes thousands of lines in which no task
+  stands.
 
 Below the score, `compare` shows each cluster's traps and controls alone and in
 the crowd, and lists the edits that passed alone and failed in the crowd, and the
-edits that passed only in the crowd. The shared run also
-reports whether the file builds and prints the reference answer, and how many
-paragraphs that no edit was meant to touch were damaged.
+edits that passed only in the crowd. The shared run also reports whether the file
+builds and prints the reference answer, and how many untouched paragraphs were
+damaged.
+
+Rounds up to the twenty-first recorded precision by each edit's own checks alone;
+`compare` regrades their saved runs by the rule above.
 
 Every failed edit also gets a kind, found without reading the agent's trace. An
 isolated failure is judged from the start, the task's reference and the result:
@@ -219,7 +229,9 @@ isolated failure is judged from the start, the task's reference and the result:
 - `touched-other-text`: a paragraph that the task keeps in place is lost, changed,
   duplicated or moved, as with a wrong target or a wrong cut;
 - `wrong-own-text`: everything else is in place, but the task's own text differs
-  from the reference, such as an escape, a line ending or a byte order mark.
+  from the reference, such as an escape, a line ending or a byte order mark;
+- `extra-files`: the files equal the reference, but the agent left files the task
+  did not ask for, such as its edit script.
 
 A shared run reads the file after each of an agent's tool calls and on every change
 of the workspace, and keeps the file as each task's agent left it. Only a task's

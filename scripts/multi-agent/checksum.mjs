@@ -147,6 +147,7 @@ if (command === "show") {
     ...shared,
     damaged: grade.damaged,
     collateral: grade.collateral,
+    integrity: grade.integrity,
     tasks: await Promise.all(
       shared.tasks.map(async (row) => ({
         ...row,
@@ -155,10 +156,12 @@ if (command === "show") {
       })),
     ),
   };
-  // An isolated run from before failure kinds gets them from its saved workspaces.
+  // An isolated run from before failure kinds, or from before a task had to leave
+  // its files equal to the reference, gets them from its saved workspaces.
   const names = Object.keys(project.startFiles);
-  for (const row of isolated.tasks)
-    if (row.failure === undefined && row.edits.some(({ passed }) => !passed)) {
+  for (const row of isolated.tasks) {
+    const whole = row.exact !== false && !(row.extraFiles?.length > 0);
+    if (row.failure === undefined && (!whole || row.edits.some(({ passed }) => !passed))) {
       const own = path.join(target, "tasks", row.id, "workspace");
       const main = await readFile(path.join(own, "main.cpp"), "utf8").catch(() => null);
       const task = project.tasks.find(({ id }) => id === row.id);
@@ -168,8 +171,10 @@ if (command === "show") {
         row.status,
         main,
         await readProjectFiles(own, names),
+        row.extraFiles ?? [],
       );
     }
+  }
   const score = compareChecksumRuns(isolated, regraded);
   const part = ({ passed, total }) => `${passed} of ${total}`;
   const line = (name, own) =>
@@ -185,6 +190,11 @@ if (command === "show") {
     console.log(
       `${name}: ${percent(score.score.all[key])}; traps ${percent(score.score.traps[key])}, ` +
         `controls ${percent(score.score.controls[key])}`,
+    );
+  if (score.shared.integrity)
+    console.log(
+      `Integrity (paragraphs no edit touches, intact in the crowd): ` +
+        percent(score.shared.integrity),
     );
   console.log(line("Alone (isolated)", score.isolated));
   console.log(
