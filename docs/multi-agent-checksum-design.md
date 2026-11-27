@@ -844,9 +844,30 @@ c, three traps and three controls each:
 
 Terra failed the B, H, N and O traps as in the earlier rounds; in the two traces
 checked, a single script took the first match of the signature and counted braces
-without reading the file first. Luna lost two of the three c traps alone. No tool result of any task was
-truncated: no agent printed the large file in whole, only searches and line ranges,
-so a partial read and write of the whole file did not occur. Both
-shared files of the large run failed to build at the end. The compact run cost
-$0.31 for Terra and $0.06 for Luna, the large run $0.43 and $0.07, both modes
-included.
+without reading the file first. Luna lost two of the three c traps alone. Pi's Bash
+tool keeps the last 2,000 lines or 50 KB of an output. Terra got a cut output in
+five of its 36 tasks, all of them c tasks, and Luna in four, three B tasks and a c
+task; none of the tasks that failed alone had a cut output. Both shared files of the large run failed to build at
+the end. The compact run cost $0.31 for Terra and $0.06 for Luna, the large run
+$0.43 and $0.07, both modes included.
+
+A third run used the same clusters in a file of 54,287 lines:
+
+| Model | Precision | Resilience | Overall | Traps alone (B, H, N, O, T, c) | Traps in the crowd |
+| ----- | --------- | ---------- | ------- | ------------------------------ | ------------------ |
+| Terra | 66.7%     | 75.0%      | 50.0%   | 0, 0, 0, 0, 3, 3 of 3          | 0, 0, 0, 0, 0, 3   |
+| Luna  | 97.2%     | 74.3%      | 72.2%   | 3, 3, 3, 3, 3, 2 of 3          | 2, 3, 1, 3, 3, 1   |
+
+Alone, the size changed little against 6,000 lines. Terra's cut outputs came from
+the same five c tasks; Luna's from three c tasks, one of them the c trap it failed. In the crowd, Luna's final file had 44,707 lines and lost 625 paragraphs
+that no edit touches. One O trap's agent had printed the whole file, got its last
+2,000 lines, and then moved the function by the first lone `}` line, which is in the
+raw string. Its repair script wrote the whole function at the slot and then deleted
+from the first match of a line of the literal to the next function after the old
+place. That first match was the repaired copy at the slot, so the deletion removed
+the 9,500 lines between the slot and the old place; the rest of the run kept the cut.
+In a large file a slot and its function stand far apart, so one wrong anchor removes
+thousands of lines. Terra lost every T trap in the crowd: its renames rewrote the
+whole file of 2.3 MB with a byte-by-byte Python lexer, and the rename did not
+survive until the check after its own write. The run cost $0.50 for Terra and $0.08
+for Luna, both modes included.
