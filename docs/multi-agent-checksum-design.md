@@ -883,3 +883,14 @@ thousands of lines. Terra lost every T trap in the crowd: its renames rewrote th
 whole file of 2.3 MB with a byte-by-byte Python lexer, and the rename did not
 survive until the check after its own write. The run cost $0.50 for Terra and $0.08
 for Luna, both modes included.
+
+Graded again with exact files alone and with integrity, only Luna's 54,287-line
+run changes: two O traps whose own checks passed alone left damage elsewhere in the
+file, so its precision falls to 91.7%, resilience is 72.7% and overall 66.7%.
+Integrity, the share of untouched paragraphs intact in the crowd:
+
+| Run          | Terra               | Luna                |
+| ------------ | ------------------- | ------------------- |
+| Compact      | 96.6% (86/89)       | 93.3% (83/89)       |
+| 6,000 lines  | 99.0% (516/521)     | 99.0% (516/521)     |
+| 54,287 lines | 99.8% (3,282/3,287) | 81.0% (2,662/3,287) |
