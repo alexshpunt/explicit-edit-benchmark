@@ -1022,6 +1022,20 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
       const naive = followInstruction(project.start, { ...task, naive: true });
       assert.equal(failed(naive, task), variant === "trap", task.id);
     }
+  // The semicolon that a cut leaves after a class fails only the deletion that left
+  // it, not the other h edits.
+  const closed = find("h", "trap");
+  const leftover = project.tasks.reduce(
+    (text, task) => (task === closed ? text : followInstruction(text, task)),
+    followInstruction(project.start, { ...closed, naive: true }),
+  );
+  assert.match(leftover, /\n;\n/);
+  assert.deepEqual(
+    gradeSharedChecksum(project, leftover, project.expectedFiles)
+      .tasks.filter(({ passed }) => !passed)
+      .map(({ id }) => id),
+    [closed.id],
+  );
   // Damage that another agent did does not fail an edit: a T rename whose prototype
   // went with a neighbour's cut, an A rename that lost a use in a destroyed paragraph
   // and an insert glued to the paragraph above it still pass.

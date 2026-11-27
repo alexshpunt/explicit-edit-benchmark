@@ -1986,6 +1986,23 @@ export function generateChecksumProject(seed, options = {}) {
         edit.unique.every((line) => !expected.includes(line)),
         `${edit.id} kept`,
       );
+      // The first lines of the paragraphs around the definition, at the start and
+      // once every other edit is done, so a grader can tell which deletion left a
+      // lone semicolon behind.
+      const others = render(edits.filter((other) => other !== edit)).main;
+      edit.above = [];
+      edit.below = [];
+      for (const text of [start, others]) {
+        const at = text.indexOf(`\n${own}\n`) + 1;
+        edit.above.push(
+          text
+            .slice(0, at - 2)
+            .split("\n\n")
+            .at(-1)
+            .split("\n")[0],
+        );
+        edit.below.push(text.slice(at + own.length + 2).split("\n")[0]);
+      }
     }
     if (edit.cluster === "K") {
       // Only a trap's signature stands in the other namespace too.

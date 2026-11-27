@@ -549,13 +549,23 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
         definitionText(candidate, edit.host) !== undefined &&
         definitionText(candidate, edit.host) === definitionText(project.expected, edit.host);
     // An h definition leaves none of its own lines and no lone semicolon, which a cut
-    // at the brace that closes a class leaves behind. Only h traps leave one, so a
-    // lone semicolon fails each of them.
-    else if (edit.kind === "block-delete")
+    // at the brace that closes a class leaves behind. A semicolon belongs to the
+    // deletion whose definition stood between the same paragraphs.
+    else if (edit.kind === "block-delete") {
+      const lines = candidate.split("\n");
+      const near = (at, step) => {
+        let index = at + step;
+        while (lines[index] === "") index += step;
+        if (step < 0) while (index > 0 && lines[index - 1] !== "") index--;
+        return lines[index];
+      };
       passed =
         edit.unique.every((line) => !candidate.includes(line)) &&
-        !candidate.split("\n").includes(";");
-    else if (edit.kind === "commented-delete")
+        !lines.some(
+          (line, at) =>
+            line === ";" && (edit.above.includes(near(at, -1)) || edit.below.includes(near(at, 1))),
+        );
+    } else if (edit.kind === "commented-delete")
       passed =
         definitionText(candidate, edit.name) === undefined &&
         edit.comment.every((line) => count(candidate, line) === 0);
