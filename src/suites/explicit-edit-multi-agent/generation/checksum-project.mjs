@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
  * agents edit neighbouring lines of one function at the same moment.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v11";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v12";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
@@ -50,8 +50,8 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   h: "class end",
   i: "lambda and init list",
   j: "overload",
-  k: "constructor initializers",
-  l: "function template",
+  k: "constructor overload",
+  l: "template overload",
   m: "override",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
@@ -1492,79 +1492,83 @@ export function generateChecksumProject(seed, options = {}) {
       "  }",
     ].join("\n");
 
-  // j: an expression to replace in the overload of a member function that takes
-  // four parameters, named by its parameter types; its signature spans two lines.
-  // The overload with one parameter stands above it. In a trap that overload holds
-  // the same expression at the same place, so the first definition of the name is
-  // the wrong one; in a control it holds another expression.
+  // j: an expression to replace in the overload f(long long, long long) of a member
+  // function, named by its parameter types. The overload f(long long, int) stands
+  // above it and differs only in the type of its second parameter. In a trap it
+  // holds the same expression at the same place, so an edit of the first
+  // definition of the name is the wrong one and still builds; in a control it holds
+  // another expression.
   for (const edit of ofCluster("j")) {
     edit.cls = className();
-    const name = take(functionNames);
-    const decoyExpression = replaced(edit);
-    edit.decoyText = memberLines(`  long long ${name}(long long value) const {`, decoyExpression);
-    const pad = " ".repeat(`  long long ${name}(`.length);
-    const target = [
-      `  long long ${name}(long long value, long long scale, long long offset,`,
-      `${pad}long long bias) const {`,
-      "    long long a = (value * scale + offset) % kModulus;",
-      `    long long b = (${edit.before}) % kModulus;`,
-      "    long long c = (b + bias) % kModulus;",
-      "    return (c + value) % kModulus;",
-      "  }",
-    ].join("\n");
-    Object.assign(edit, {
-      name,
-      signature: `${name}(long long, long long, long long, long long)`,
-      site: target,
-      siteAfter: target.replace(edit.before, edit.after),
-    });
+    edit.name = take(functionNames);
+    const overload = (type, expression) =>
+      [
+        `  long long ${edit.name}(long long value, ${type} scale) const {`,
+        `    long long a = (value * scale + ${number()}) % kModulus;`,
+        `    long long b = (${expression}) % kModulus;`,
+        "    return (b + value) % kModulus;",
+        "  }",
+      ].join("\n");
+    edit.decoyText = overload("int", replaced(edit));
+    edit.site = overload("long long", edit.before);
+    edit.siteAfter = edit.site.replace(edit.before, edit.after);
     edit.targetText = edit.siteAfter;
-    pairs.push([classOf(edit.cls, [{ declaration: edit.decoyText }, { declaration: target }])]);
+    edit.signature = `${edit.name}(long long, long long)`;
+    pairs.push([classOf(edit.cls, [{ declaration: edit.decoyText }, { declaration: edit.site }])]);
   }
 
-  // k: a constructor of three parameters to delete; it is the class's only one. A
-  // trap's member initializers use braces, so counting braces from the first one
-  // after the signature ends the definition inside the initializer list; a
-  // control's use parentheses.
+  // k: a constructor of three parameters to delete, named by its parameter types.
+  // In a trap a constructor of two parameters stands above it, so the first
+  // constructor of the class is the wrong one, and deleting it still builds, since
+  // nothing constructs the class; a control's class has only the one constructor.
   for (const edit of ofCluster("k")) {
     edit.cls = className();
-    const fields = ["scale", "offset", "bias"];
-    const initialize = (field) =>
-      edit.variant === "trap" ? `${field}_{${field}}` : `${field}_(${field})`;
-    edit.signature = `${edit.cls}(${fields.map((field) => `long long ${field}`).join(", ")})`;
+    edit.signature = `${edit.cls}(long long, long long, long long)`;
     edit.site = [
-      `  ${edit.signature}`,
-      `      : ${fields.map(initialize).join(", ")} {`,
+      `  ${edit.cls}(long long scale, long long offset, long long bias)`,
+      "      : scale_(scale), offset_(offset), bias_(bias) {",
       `    if (bias_ > ${number()}) bias_ = bias_ % kModulus;`,
       "  }",
     ].join("\n");
+    const members = [
+      { declaration: edit.site },
+      { function: method(edit.cls, take(functionNames)).name },
+    ];
+    if (edit.variant === "trap")
+      members.unshift({
+        declaration: `  ${edit.cls}(long long scale, long long offset) : scale_(scale), offset_(offset), bias_(${number()}) {}`,
+      });
     pairs.push([
-      classOf(
-        edit.cls,
-        [{ declaration: edit.site }, { function: method(edit.cls, take(functionNames)).name }],
-        { fields: fields.map((field) => `${field}_`), constructor: false },
-      ),
+      classOf(edit.cls, members, {
+        fields: ["scale_", "offset_", "bias_"],
+        constructor: false,
+      }),
     ]);
   }
 
-  // l: a function template to delete. A trap writes the template parameter list on
-  // its own line above the signature, so a cut that starts at the line with the
-  // name leaves it behind, where it turns the next definition into a template; a
-  // control writes both on one line.
+  // l: a function template to delete, with its parameter list on a line of its own.
+  // A function right above it has the same name in a trap, an overload that is no
+  // template, so the first definition of the name is the wrong one, and deleting it
+  // still builds; in a control that function has another name.
   for (const edit of ofCluster("l")) {
     edit.name = take(functionNames);
-    const parameters = `template <typename T, int kScale = ${number()}>`;
-    const first = `T ${edit.name}(T value) {`;
-    const opening = edit.variant === "trap" ? [parameters, first] : [`${parameters} ${first}`];
-    edit.firstLine = opening[0];
+    const other = build(
+      edit.variant === "trap" ? edit.name : take(functionNames),
+      plain(random.integer(2, 4)),
+      { prototyped: false },
+    );
+    other.uncalled = true;
+    edit.other = other.name;
+    edit.firstLine = `template <typename T, int kScale = ${number()}>`;
     edit.site = [
-      ...opening,
+      edit.firstLine,
+      `T ${edit.name}(T value) {`,
       `  T a = (value * kScale + ${number()}) % kModulus;`,
       `  T b = (a * ${number()} + ${number()}) % kModulus;`,
       "  return (b + value) % kModulus;",
       "}",
     ].join("\n");
-    pairs.push([{ raw: edit.site }]);
+    pairs.push([{ function: other.name }, { raw: edit.site }]);
   }
 
   // m: an expression to replace in a member function of a derived class that
@@ -2125,17 +2129,18 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(expected.split(edit.decoyText).length, 2, `${edit.id} decoy kept`);
     }
     if (edit.kind === "constructor-delete") {
-      // The constructor is the class's only one.
+      // Only a trap's class has another constructor, above this one.
       const own = classText(start, edit.cls);
       assert.equal(occurrences(edit.site), 1, `${edit.id} site`);
-      assert.equal(own.split(`  ${edit.cls}(`).length, 2, `${edit.id} constructors`);
-      assert.equal(own.includes("scale_{scale}"), trap, `${edit.id} braces`);
-      assert.ok(!expected.includes(edit.signature), `${edit.id} kept`);
+      assert.equal(own.split(`\n  ${edit.cls}(`).length, trap ? 3 : 2, `${edit.id} constructors`);
+      assert.ok(!expected.includes(edit.site.split("\n")[0]), `${edit.id} kept`);
     }
     if (edit.kind === "template-delete") {
-      // Only a trap's template parameter list stands on its own line.
+      // Only a trap's other function, right above the template, has its name.
       assert.equal(start.split(`\n${edit.firstLine}\n`).length, 2, `${edit.id} first line`);
-      assert.equal(edit.firstLine.includes("("), !trap, `${edit.id} parameter line`);
+      assert.equal(edit.other === edit.name, trap, `${edit.id} other name`);
+      assert.ok(start.includes(`}\n\n${edit.site}`), `${edit.id} order`);
+      assert.equal(identifierCount(start, edit.name), trap ? 2 : 1, `${edit.id} name`);
       edit.unique = edit.site.split("\n").filter((line) => line.trim() && occurrences(line) === 1);
       assert.ok(edit.unique.includes(edit.firstLine), `${edit.id} unique`);
       assert.ok(

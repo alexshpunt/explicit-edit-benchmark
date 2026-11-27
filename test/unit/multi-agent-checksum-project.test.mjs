@@ -384,29 +384,28 @@ function followInstruction(start, task) {
     return lines.join("\n");
   }
   if (task.kind === "constructor-delete") {
-    const at = start.indexOf(`\n  ${task.signature}\n`) + 1;
-    if (task.naive) {
-      // A cut through the brace that matches the first one after the signature.
-      let depth = 0;
-      let end = start.indexOf("{", at);
-      for (; ; end++) {
-        depth += start[end] === "{" ? 1 : start[end] === "}" ? -1 : 0;
-        if (depth === 0) break;
-      }
-      const rest = start.slice(end + 1);
-      return start.slice(0, at) + (rest.startsWith("\n\n") ? rest.slice(2) : rest);
-    }
-    const first = lines.indexOf(`  ${task.signature}`);
+    // The constructor with three parameters; a naive follower takes the class's first
+    // constructor.
+    const open = lines.findIndex((line) => line.startsWith(`class ${task.cls} `));
+    const first = lines.findIndex(
+      (line, at) =>
+        at > open &&
+        line.startsWith(`  ${task.cls}(`) &&
+        (task.naive || line.startsWith(`  ${task.cls}(long long scale, long long offset, long`)),
+    );
     const length = definitionLength(lines, first);
     assert.equal(lines[first + length], "", task.id);
     lines.splice(first, length + 1);
     return lines.join("\n");
   }
   if (task.kind === "template-delete") {
-    // A naive follower starts the cut at the line with the name.
-    const first = task.naive
-      ? lines.findIndex((line) => line.includes(` ${task.name}(`))
-      : lines.indexOf(task.firstLine);
+    // A naive follower takes the first definition of the name, with a template
+    // parameter list right above it if there is one.
+    let first = lines.indexOf(task.firstLine);
+    if (task.naive) {
+      first = lines.findIndex((line) => line.includes(` ${task.name}(`));
+      if (lines[first - 1].startsWith("template <")) first--;
+    }
     const length = definitionLength(lines, first);
     assert.equal(lines[first + length], "", task.id);
     lines.splice(first, length + 1);
@@ -716,13 +715,20 @@ test("each trap differs from its control in its one factor", () => {
       if (edit.cluster === "h") assert.equal(edit.firstLine.startsWith("class "), trap, edit.id);
       if (edit.cluster === "i") assert.equal(edit.full.includes("  };\n\n"), trap, edit.id);
       // A j trap's other overload and an m trap's base function hold the same text; a
-      // k trap's initializers use braces; an l trap's parameter list has its own line.
+      // k trap's class has another constructor; an l trap's template has an overload
+      // that is no template.
       if ("jm".includes(edit.cluster))
         assert.equal(edit.decoyText.includes(edit.before), trap, edit.id);
       if (edit.cluster === "k")
-        assert.equal(classText(start, edit.cls).includes("scale_{scale}"), trap, edit.id);
+        assert.equal(
+          classText(start, edit.cls).includes(
+            `\n  ${edit.cls}(long long scale, long long offset) :`,
+          ),
+          trap,
+          edit.id,
+        );
       if (edit.cluster === "l")
-        assert.equal(start.includes(`\n${edit.firstLine}\nT ${edit.name}(`), trap, edit.id);
+        assert.equal(start.includes(`\nlong long ${edit.name}(long long value) {\n`), trap);
       if (edit.cluster === "m") assert.ok(start.includes(`\nclass ${edit.cls} : public `), edit.id);
       if (edit.cluster === "F")
         assert.equal(start.split(edit.before).length - 1, trap ? 3 : 1, edit.id);
