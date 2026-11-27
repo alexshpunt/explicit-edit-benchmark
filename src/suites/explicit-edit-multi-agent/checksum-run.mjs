@@ -1065,9 +1065,10 @@ export function compareChecksumRuns(isolated, shared) {
   // The observation's score: precision is the share of edits done right alone;
   // resilience the share of those that stay right in the crowd, so an edit that
   // passes only in the crowd earns nothing; the overall score is the share of edits
-  // right in both, precision times resilience. The final score multiplies the overall
-  // score of all edits by integrity, so damage to text that no edit touches costs as
-  // much as it destroys; a shared run from before integrity has none.
+  // right in both, precision times resilience. The final score counts each paragraph
+  // that no edit touches and that the crowd damaged as one more failed edit, so a
+  // damaged paragraph costs the same in a file of any size; a shared run from before
+  // integrity has none.
   const measures = (keep) => {
     const own = together.filter(keep);
     const right = own.filter((edit) => aloneById.get(edit.id).passed);
@@ -1079,7 +1080,8 @@ export function compareChecksumRuns(isolated, shared) {
     };
   };
   const all = measures(() => true);
-  const share = ({ passed, total }) => (total === 0 ? 1 : passed / total);
+  const lost = shared.integrity ? shared.integrity.total - shared.integrity.passed : 0;
+  const counted = all.overall.total + lost;
   return {
     project: isolated.identity.project,
     seed: isolated.identity.seed,
@@ -1089,7 +1091,9 @@ export function compareChecksumRuns(isolated, shared) {
       all,
       traps: measures((edit) => edit.variant === "trap"),
       controls: measures((edit) => edit.variant === "control"),
-      final: shared.integrity ? share(all.overall) * share(shared.integrity) : null,
+      final: shared.integrity
+        ? { passed: all.overall.passed, total: counted, damaged: lost }
+        : null,
     },
     isolated: score(alone),
     shared: {

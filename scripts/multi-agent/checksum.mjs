@@ -196,7 +196,10 @@ if (command === "show") {
       `Integrity (paragraphs no edit touches, intact in the crowd): ` +
         percent(score.shared.integrity),
     );
-    console.log(`Final (overall times integrity): ${(100 * score.score.final).toFixed(1)}%`);
+    console.log(
+      `Final (right in both, each damaged untouched paragraph counted as a failed edit): ` +
+        percent(score.score.final),
+    );
   }
   console.log(line("Alone (isolated)", score.isolated));
   console.log(

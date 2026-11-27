@@ -212,9 +212,12 @@ apart:
   in the final shared file as in the reference. It shows damage that the other
   numbers miss, such as a script that deletes thousands of lines in which no task
   stands;
-- final: overall times integrity, the observation's one number. An agent that
-  destroys a fifth of the file loses a fifth of the score, even when no task
-  stood in the lost text.
+- final: the observation's one number, the edits right in both runs over all
+  edits plus the untouched paragraphs damaged in the crowd. Each damaged paragraph
+  counts as one more failed edit: a paragraph is one function, the size of what a
+  task edits, and it costs the same in a file of any size. A share of the file
+  would make one lost function cost 1.1% in a compact file and 0.03% in a file of
+  50,000 lines.
 
 Below the score, `compare` shows each cluster's traps and controls alone and in
 the crowd, and lists the edits that passed alone and failed in the crowd, and the
@@ -891,10 +894,10 @@ Graded again with exact files alone and with integrity, only Luna's 54,287-line
 run changes: two O traps whose own checks passed alone left damage elsewhere in the
 file, so its precision falls to 91.7%, resilience is 72.7% and overall 66.7%.
 Integrity, the share of untouched paragraphs intact in the crowd, and the final
-score, overall times integrity:
+score, with each damaged untouched paragraph counted as a failed edit:
 
-| Run          | Terra integrity     | Terra final | Luna integrity      | Luna final |
-| ------------ | ------------------- | ----------- | ------------------- | ---------- |
-| Compact      | 96.6% (86/89)       | 89.7%       | 93.3% (83/89)       | 62.2%      |
-| 6,000 lines  | 99.0% (516/521)     | 60.5%       | 99.0% (516/521)     | 82.5%      |
-| 54,287 lines | 99.8% (3,282/3,287) | 49.9%       | 81.0% (2,662/3,287) | 54.0%      |
+| Run          | Terra integrity     | Terra final   | Luna integrity      | Luna final    |
+| ------------ | ------------------- | ------------- | ------------------- | ------------- |
+| Compact      | 96.6% (86/89)       | 86.7% (39/45) | 93.3% (83/89)       | 58.3% (28/48) |
+| 6,000 lines  | 99.0% (516/521)     | 53.7% (22/41) | 99.0% (516/521)     | 73.2% (30/41) |
+| 54,287 lines | 99.8% (3,282/3,287) | 43.9% (18/41) | 81.0% (2,662/3,287) | 3.6% (24/661) |
