@@ -722,3 +722,15 @@ trap's is a function of the same name, which is no template, right above the
 template. In each, the first definition of the name is a valid edit of the wrong
 function. The brace initializers of k and the template line of l as written in
 the seventeenth round caught nobody and are gone.
+
+Eighteenth round: the silent j, k and l with m, three traps and three controls
+each, in a compact file of these clusters alone. Both models passed every edit
+alone; in the crowd Terra lost a j and an m trap and Luna an m trap, all as
+`own-mistake`. Terra's scripts first print the region around the name with
+`grep -C` or `grep -A 25 -B 5`, which shows both overloads, both constructors or
+both functions, and then replace or delete the exact text they read. A replacement
+across the file stops at its own `assert s.count(old) == 1` when the expression
+also stands in the decoy. A decoy that the agent's first read shows does not catch
+it; the traps that did, B, H, I, N and O, put the decoy where the first read
+misleads: a prototype before the definition, a commented-out copy, or a brace in a
+literal.
