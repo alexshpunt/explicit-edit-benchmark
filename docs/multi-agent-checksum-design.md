@@ -901,3 +901,32 @@ score, with each damaged untouched paragraph counted as a failed edit:
 | Compact      | 96.6% (86/89)       | 86.7% (39/45) | 93.3% (83/89)       | 58.3% (28/48) |
 | 6,000 lines  | 99.0% (516/521)     | 53.7% (22/41) | 99.0% (516/521)     | 73.2% (30/41) |
 | 54,287 lines | 99.8% (3,282/3,287) | 43.9% (18/41) | 81.0% (2,662/3,287) | 3.6% (24/661) |
+
+## Twenty-second round: Pi Agent IDE on 54,287 lines
+
+The same seed and clusters ran with the `pi-agent-ide-codemode-no-bash` harness,
+Pi Agent IDE 1.1.0 without Bash, and the same models:
+
+| Model | Precision | Resilience | Overall | Integrity           | Final         |
+| ----- | --------- | ---------- | ------- | ------------------- | ------------- |
+| Terra | 100%      | 100%       | 100%    | 100% (3,287/3,287)  | 100% (36/36)  |
+| Luna  | 86.1%     | 100%       | 86.1%   | 99.7% (3,278/3,287) | 68.9% (31/45) |
+
+Terra's shared file equals the reference and prints its answer. Luna lost five
+edits alone, a trap and four controls, all by an empty line. Four of them kept
+the empty line that the task says to delete: the agent replaced the definition's
+lines with nothing, which leaves the line ending of the last line and so one
+empty line too many. The fifth, a c control, rewrote its namespace in order and
+dropped the empty line before the namespace's closing line. Eight of the nine
+damaged paragraphs in the crowd are the same extra empty line. The ninth is the
+one real loss: an O trap's first replace was blocked because `}` matched many
+times after its start, and the second ended its selection at the next function's
+signature, so that signature was deleted with the move and the file does not
+build. The result of that replace showed the orphaned body; the agent did not
+check it.
+
+The first Luna isolated run stopped before any task: the start-up `get_state`
+call of one agent got no answer within 15 seconds, and any failure other than a
+provider failure stops an isolated run. The second run used the same commit and
+configuration. The runs cost $0.66 for Terra and $0.16 for Luna, both modes
+included.
