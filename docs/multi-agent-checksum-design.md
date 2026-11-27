@@ -809,3 +809,44 @@ and wrote two r controls' include lines without a newline of their own, which
 removes the empty line after them. Luna's shared file did not build at the end.
 Terra lost one more s trap in the crowd. The run cost $0.31 for Terra and $0.08 for Luna, both
 modes included.
+
+Twenty-first round, version 15 with clusters v to z, 0 and 1, seed 42, three traps
+and three controls each, in a compact file of these clusters alone. They carry over
+the semantic tasks of the earlier hard pool, an assembly trap, the header contract
+and the original suite's copy and cross-file families:
+
+| Model | Precision | Resilience | Overall | Traps alone (v, w, x, y, z, 0, 1) | Traps in the crowd  |
+| ----- | --------- | ---------- | ------- | --------------------------------- | ------------------- |
+| Terra | 92.9%     | 100.0%     | 92.9%   | 0, 3, 3, 3, 3, 3, 3 of 3          | 0, 3, 3, 3, 3, 3, 3 |
+| Luna  | 76.2%     | 87.5%      | 66.7%   | 0, 2, 3, 2, 1, 3, 2 of 3          | 1, 3, 3, 2, 0, 2, 2 |
+
+Both models renamed every v overload: each wrote one replacement of the name
+without reading the file, which also renames the function of one parameter and its
+calls, and the file still builds. One Luna w script swapped the arguments of the
+inner call of `f(f(a, 7), value)` and left the outer call as it was. Luna wrote one
+1 source file back in text mode, which turned its CRLF line endings into LF. The z
+failures were Luna's alone, in traps and controls: one header kept the guard's
+`#define` line, one header and main.cpp moved an empty line across the boundary, one
+trap closed the block at the inner `#endif` and moved the closing `#endif` to the end
+of the header, and one header ended with an extra `#endif` and does not build. The
+y trap that Luna failed alone replaced the slot before it deleted the old text, so
+its deletion of the first match removed the new copy. Alone, no agent was caught by
+the brace in the y comment or by the empty line in a 0 definition, and no x rename
+touched the other class.
+
+A second run used a non-compact file of 6,000 lines with clusters B, H, N, O, T and
+c, three traps and three controls each:
+
+| Model | Precision | Resilience | Overall | Traps alone (B, H, N, O, T, c) |
+| ----- | --------- | ---------- | ------- | ------------------------------ |
+| Terra | 69.4%     | 88.0%      | 61.1%   | 0, 1, 0, 0, 3, 3 of 3          |
+| Luna  | 94.4%     | 88.2%      | 83.3%   | 3, 3, 3, 3, 3, 1 of 3          |
+
+Terra failed the B, H, N and O traps as in the earlier rounds; in the two traces
+checked, a single script took the first match of the signature and counted braces
+without reading the file first. Luna lost two of the three c traps alone. No tool result of any task was
+truncated: no agent printed the large file in whole, only searches and line ranges,
+so a partial read and write of the whole file did not occur. Both
+shared files of the large run failed to build at the end. The compact run cost
+$0.31 for Terra and $0.06 for Luna, the large run $0.43 and $0.07, both modes
+included.
