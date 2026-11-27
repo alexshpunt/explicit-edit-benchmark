@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
  * agents edit neighbouring lines of one function at the same moment.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v9";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v10";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
@@ -44,6 +44,11 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   b: "Unicode look-alike",
   c: "large reordering",
   d: "recipe tabs",
+  e: "class method target",
+  f: "out-of-class definition",
+  g: "nested branch",
+  h: "class end",
+  i: "lambda and init list",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -207,6 +212,16 @@ export function definitionText(text, name) {
   return end < 0 ? undefined : text.slice(first, end + 2);
 }
 
+/** The definition of a class in a main.cpp, from its first line through the next
+ * line that starts with "};", or undefined.
+ */
+export function classText(text, name) {
+  const open = text.startsWith(`class ${name} {\n`) ? 0 : text.indexOf(`\nclass ${name} {\n`) + 1;
+  if (open === 0 && !text.startsWith(`class ${name} {\n`)) return undefined;
+  const close = text.indexOf("\n};", open);
+  return close < 0 ? undefined : text.slice(open, close + 3);
+}
+
 /** Whole-identifier occurrences of a name: a longer identifier is another name. */
 export const identifierCount = (text, name) =>
   text.match(new RegExp(`\\b${name}\\b`, "g"))?.length ?? 0;
@@ -273,7 +288,15 @@ function instruction(edit) {
     return `In main.cpp, move the complete definition of the function ${q(signature(edit.name))} to the placeholder line ${q(edit.marker)}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in its old place. Keep the text of the definition unchanged.`;
   if (edit.kind === "insert")
     return `In main.cpp, replace the placeholder line ${q(edit.marker)} with the following ${edit.lines} lines: ${q(edit.text)}.`;
+  if (edit.kind === "member-delete")
+    return `In main.cpp, delete the complete definition of the member function ${q(`${signature(edit.name)} const`)} in the class ${q(edit.cls)}. Also delete the empty line that directly followed the definition.`;
+  if (edit.kind === "block-delete")
+    return `In main.cpp, delete the complete definition that starts with the line ${q(edit.firstLine)}. Also delete the empty line that directly followed the definition.`;
+  if (edit.kind === "branch-replace")
+    return `In main.cpp, in the definition of the function ${q(signature(edit.host))}, in the block of the branch ${q(edit.branch)}, replace ${q(edit.before)} with ${q(edit.after)}. That block holds it once.`;
   const replacement = `replace ${q(edit.before)} with ${q(edit.after)}. The definition holds it once.`;
+  if (edit.kind === "member-replace")
+    return `In main.cpp, in the definition of the member function ${q(`${signature(edit.name)} const`)} of the class ${q(edit.cls)}, ${replacement}`;
   if (edit.cluster === "P")
     return `In main.cpp, main passes the argument ${edit.argument} to exactly one function. In the definition of that function, ${replacement}`;
   if (edit.cluster === "Q")
@@ -346,7 +369,17 @@ const KIND = {
   c: "reorder",
   // d inserts a rule into a makefile beside main.cpp.
   d: "file-insert",
+  // e deletes a member function of a class, f replaces an expression in one, g in one
+  // branch of an if chain, h deletes a definition named by its first line, and i
+  // moves a function with a lambda.
+  e: "member-delete",
+  f: "member-replace",
+  g: "branch-replace",
+  h: "block-delete",
+  i: "move",
 };
+// The branch whose block a g edit changes.
+const BRANCH = "else if ((a + j) % 3 == 1)";
 // The step a Z edit adds to each factor.
 const FACTOR_STEP = 1000;
 // The UTF-8 byte order mark of an X trap's file. Files beside main.cpp are byte
@@ -675,7 +708,12 @@ export function generateChecksumProject(seed, options = {}) {
     ofCluster("a").length +
     ofCluster("Z").length +
     ofCluster("b").length +
-    ofCluster("c").length;
+    ofCluster("c").length +
+    // An e pair of classes, an f class, a g function and an h definition too.
+    ofCluster("e").length +
+    ofCluster("f").length +
+    ofCluster("g").length +
+    ofCluster("h").length;
   // A compact file has only the fillers that something needs: the library, room for
   // the constant uses, and two F decoys per F trap. They are longer, so there are
   // fewer of them, and their first declarations, where F sites stand, hold no
@@ -1255,6 +1293,198 @@ export function generateChecksumProject(seed, options = {}) {
       `${edit.prefix}rm -f ${edit.target} ${edit.target}.checked`,
     ].join("\n") + "\n";
 
+  // e, f and h: classes that define their member functions inside, indented, and
+  // end with "};". Every member function is const, and nothing calls it. A class
+  // name is a function name in PascalCase, so it is unique.
+  const className = () =>
+    take(functionNames)
+      .split("_")
+      .map((word) => word[0].toUpperCase() + word.slice(1))
+      .join("");
+  const method = (cls, name, plan = plain(random.integer(2, 4)), inline = true) => {
+    const entry = build(`${cls}::${name}`, plan, { prototyped: false });
+    Object.assign(entry, {
+      display: inline ? name : `${cls}::${name}`,
+      suffix: " const",
+      uncalled: true,
+    });
+    return entry;
+  };
+  const classOf = (name, members) => ({ cls: { name, members } });
+
+  // e: a member function to delete in the second of two classes with two member
+  // functions each, the named one first. In a trap the first class starts with a
+  // member function of the same signature, so the first match of the signature is
+  // in the wrong class, and deleting it still builds; in a control that member
+  // function has another name.
+  for (const edit of ofCluster("e")) {
+    edit.decoy = className();
+    edit.cls = className();
+    edit.name = take(functionNames);
+    edit.key = `${edit.cls}::${edit.name}`;
+    const pair = (cls, first) =>
+      classOf(cls, [
+        { function: method(cls, first).name },
+        { function: method(cls, take(functionNames)).name },
+      ]);
+    const decoyName = edit.variant === "trap" ? edit.name : take(functionNames);
+    pairs.push([pair(edit.decoy, decoyName), pair(edit.cls, edit.name)]);
+  }
+
+  // f: an expression to replace in a member function. Another member function of the
+  // class, the lead, holds the same expression at the same position. In a trap the
+  // class only declares the function, right above the lead, and defines it after the
+  // class, so the first brace after the first match of the signature opens the lead;
+  // in a control the class defines the function itself, above the lead.
+  for (const edit of ofCluster("f")) {
+    const trap = edit.variant === "trap";
+    edit.cls = className();
+    edit.name = take(functionNames);
+    const length = random.integer(3, 4);
+    const target = method(edit.cls, edit.name, plain(length), !trap);
+    const lead = method(edit.cls, take(functionNames), plain(length));
+    edit.lead = lead.name;
+    const position = random.integer(1, length - 1);
+    const statement = Object.assign(target.body[position], {
+      kind: "linear",
+      factor: number(),
+      offset: number(),
+    });
+    Object.assign(lead.body[position], {
+      kind: "linear",
+      factor: statement.factor,
+      offset: statement.offset,
+    });
+    // The function is not called, so the new factor does not change the answer.
+    Object.assign(edit, {
+      member: statement.id,
+      factor: statement.factor,
+      newFactor: number(),
+      before: expressionText(statement, { factors: new Map() }),
+    });
+    edit.after = edit.before.replace(` * ${edit.factor} + `, ` * ${edit.newFactor} + `);
+    const declared = { declaration: `  ${signature(edit.name)} const;` };
+    pairs.push(
+      trap
+        ? [classOf(edit.cls, [declared, { function: lead.name }]), { function: target.name }]
+        : [classOf(edit.cls, [{ function: target.name }, { function: lead.name }])],
+    );
+  }
+
+  // g: an expression to replace in one branch of an if chain inside two nested
+  // loops. In a trap the first branch holds the same expression, so the first match
+  // in the function is in the wrong branch; in a control it holds another one.
+  // Nothing calls the function.
+  for (const edit of ofCluster("g")) {
+    const name = take(functionNames);
+    const step = (expression) => `        a = (${expression}) % kModulus;`;
+    const factor = number(),
+      offset = number();
+    edit.before = `a * ${factor} + ${offset}`;
+    edit.after = `a * ${number()} + ${offset}`;
+    const first = edit.variant === "trap" ? edit.before : `a * ${number()} + ${number()}`;
+    Object.assign(edit, {
+      host: name,
+      branch: BRANCH,
+      site: `      } ${BRANCH} {\n${step(edit.before)}`,
+      siteAfter: `      } ${BRANCH} {\n${step(edit.after)}`,
+    });
+    functions.push({
+      name,
+      uncalled: true,
+      body: [
+        {
+          type: "let",
+          id: `${name}:a`,
+          variable: "a",
+          kind: "linear",
+          left: "value",
+          factor: number(),
+          offset: number(),
+        },
+        {
+          type: "raw",
+          lines: [
+            "  for (int i = 0; i < 3; ++i) {",
+            "    for (int j = 0; j < 2; ++j) {",
+            "      if ((a + j) % 3 == 0) {",
+            step(first),
+            `      } ${BRANCH} {`,
+            step(edit.before),
+            "      } else {",
+            step(`a * ${number()} + ${number()}`),
+            "      }",
+            "    }",
+            "  }",
+          ],
+        },
+      ],
+      result: ["a", "value"],
+      prototyped: false,
+    });
+    pairs.push([{ function: name }]);
+  }
+
+  // h: a definition to delete, named by its first line. A trap's is a class, whose
+  // definition ends with "};", so a cut at the brace that closes it leaves the
+  // semicolon behind; a control's is a function. Nothing calls them.
+  for (const edit of ofCluster("h")) {
+    if (edit.variant === "trap") {
+      edit.block = className();
+      edit.firstLine = `class ${edit.block} {`;
+      const members = [0, 1].map(() => ({
+        function: method(edit.block, take(functionNames)).name,
+      }));
+      pairs.push([classOf(edit.block, members)]);
+    } else {
+      const entry = build(take(functionNames), plain(random.integer(3, 5)), {
+        prototyped: false,
+      });
+      entry.uncalled = true;
+      edit.block = entry.name;
+      edit.firstLine = header(entry.name);
+      pairs.push([{ function: entry.name }]);
+    }
+  }
+
+  // i: moved functions with a list of weights and a lambda, whose closing lines
+  // "};" stand inside the definition. A trap has an empty line after the lambda, so
+  // the definition's first paragraph ends there; a control has none. Nothing calls
+  // them.
+  for (const edit of ofCluster("i")) {
+    const name = take(functionNames);
+    const weights = [0, 1, 2].map(() => random.integer(2, 99)).join(", ");
+    functions.push({
+      name,
+      uncalled: true,
+      body: [
+        {
+          type: "raw",
+          lines: [
+            `  const long long weights[] = {${weights}};`,
+            "  auto mix = [&](long long x) {",
+            `    return (x * ${number()} + ${number()}) % kModulus;`,
+            "  };",
+            ...(edit.variant === "trap" ? [""] : []),
+          ],
+        },
+        {
+          type: "let",
+          id: `${name}:a`,
+          variable: "a",
+          kind: "linear",
+          left: "value",
+          factor: number(),
+          offset: number(),
+        },
+        { type: "raw", lines: ["  for (long long w : weights) a = mix(a + w);"] },
+      ],
+      result: ["a", "value"],
+      prototyped: false,
+    });
+    edit.name = name;
+  }
+
   // H: functions to delete; a trap has a prototype. Nothing calls them, so the
   // file builds without them.
   for (const edit of ofCluster("H")) {
@@ -1328,7 +1558,7 @@ export function generateChecksumProject(seed, options = {}) {
       random.shuffle([
         { function: hosts[index].name },
         ...zone
-          .filter(({ cluster }) => "BCGHIO".includes(cluster))
+          .filter(({ cluster }) => "BCGHIOi".includes(cluster))
           .map((edit) => ({ function: edit.name ?? edit.host })),
         ...zone.filter(({ cluster }) => cluster === "D").map(({ marker }) => ({ marker })),
       ]),
@@ -1486,6 +1716,7 @@ export function generateChecksumProject(seed, options = {}) {
       silenced = new Set(),
       calls = new Map(),
       labels = new Map(),
+      branches = new Map(),
       filled = new Set();
     let order = layout;
     for (const edit of done.flatMap((task) => task.parts ?? [task])) {
@@ -1497,6 +1728,23 @@ export function generateChecksumProject(seed, options = {}) {
         for (const { statement, newFactor } of edit.shifts) factors.set(statement, newFactor);
       if (edit.kind === "literal-replace") labels.set(edit.host, edit);
       if (edit.kind === "file-insert") filled.add(edit.file);
+      if (edit.kind === "member-replace") factors.set(edit.member, edit.newFactor);
+      if (edit.kind === "branch-replace") branches.set(edit.host, edit);
+      if (edit.kind === "member-delete")
+        order = order.map((block) =>
+          block.cls?.name === edit.cls
+            ? {
+                cls: {
+                  ...block.cls,
+                  members: block.cls.members.filter((member) => member.function !== edit.key),
+                },
+              }
+            : block,
+        );
+      if (edit.kind === "block-delete")
+        order = order.filter(
+          (block) => block.function !== edit.block && block.cls?.name !== edit.block,
+        );
       if (edit.kind === "reorder") {
         const sorted = [...edit.members].sort();
         let next = 0;
@@ -1522,7 +1770,7 @@ export function generateChecksumProject(seed, options = {}) {
     const definition = (entry) => {
       const text = [
         ...(entry.comment ?? []),
-        header(entry.display ?? call(entry.name)),
+        `${signature(entry.display ?? call(entry.name))}${entry.suffix ?? ""} {`,
         ...entry.body
           .filter((item) => !silenced.has(item.trace))
           .flatMap((item) => itemLines(item, 1, context)),
@@ -1531,9 +1779,28 @@ export function generateChecksumProject(seed, options = {}) {
       ].join("\n");
       const local = locals.get(entry.name);
       const label = labels.get(entry.name);
+      const branch = branches.get(entry.name);
+      if (branch) return text.replace(branch.site, branch.siteAfter);
       if (label) return text.replace(label.before, label.after);
       return local ? text.replace(new RegExp(`\\b${local.local}\\b`, "g"), local.newName) : text;
     };
+    // A class defines its member functions indented by one more level.
+    const classDefinition = ({ name, members }) =>
+      [
+        `class ${name} {`,
+        " public:",
+        members
+          .map(
+            (member) =>
+              member.declaration ??
+              definition(byName.get(member.function))
+                .split("\n")
+                .map((line) => (line ? `  ${line}` : line))
+                .join("\n"),
+          )
+          .join("\n\n"),
+        "};",
+      ].join("\n");
     const sections = [
       [`// Checksum program generated from seed ${seed}.`, "#include <iostream>"].join("\n"),
       [
@@ -1552,6 +1819,7 @@ export function generateChecksumProject(seed, options = {}) {
           block.marker ??
           block.text ??
           block.raw ??
+          (block.cls ? classDefinition(block.cls) : undefined) ??
           (block.include ? `#include "${block.include}"` : definition(byName.get(block.function))),
       ),
       [
@@ -1661,6 +1929,63 @@ export function generateChecksumProject(seed, options = {}) {
         expected.indexOf("\n}\n", expected.indexOf(')";', first)) + 2,
       );
       assert.equal(occurrences(edit.full), 1, `${edit.id} definition`);
+    }
+    if (edit.cluster === "i") {
+      // An i definition, from its first line through its own closing line.
+      assert.equal(occurrences(header(edit.name)), 1, `${edit.id} header is not unique`);
+      assert.equal(occurrences(`${signature(edit.name)};`), 0, `${edit.id} prototype`);
+      edit.full = definitionText(start, edit.name);
+      assert.ok(edit.full.endsWith("  return (a + value) % kModulus;\n}"), edit.id);
+      assert.equal(occurrences(edit.full), 1, `${edit.id} definition`);
+    }
+    // Member functions: their first lines, indented, as the classes hold them.
+    const member = (name) => `  ${signature(name)} const {`;
+    if (edit.kind === "member-delete") {
+      // Only a trap's other class starts with the same signature.
+      assert.equal(occurrences(member(edit.name)), trap ? 2 : 1, `${edit.id} member`);
+      for (const cls of [edit.decoy, edit.cls]) {
+        assert.equal(occurrences(`class ${cls} {`), 1, `${edit.id} class`);
+        assert.ok(classText(start, cls).startsWith(`class ${cls} {\n public:\n  long long `));
+      }
+      assert.ok(classText(start, edit.cls).includes(`public:\n${member(edit.name)}\n`), edit.id);
+      assert.ok(!classText(expected, edit.cls).includes(member(edit.name)), edit.id);
+    }
+    if (edit.kind === "member-replace") {
+      // The lead holds the text too. Only a trap's class declares the function and
+      // defines it after the class.
+      assert.equal(occurrences(edit.before), 2, `${edit.id} copies`);
+      assert.equal(expected.split(edit.after).length, 2, `${edit.id} result is not unique`);
+      assert.equal(occurrences(`  ${signature(edit.name)} const;`), trap ? 1 : 0, edit.id);
+      const outside = `${signature(`${edit.cls}::${edit.name}`)} const {`;
+      assert.equal(occurrences(outside), trap ? 1 : 0, `${edit.id} outside`);
+      assert.equal(occurrences(member(edit.name)), trap ? 0 : 1, `${edit.id} inside`);
+      // The lead's definition, which the edit keeps.
+      const lead = start.indexOf(member(edit.lead.split("::")[1]));
+      edit.leadText = start.slice(lead, start.indexOf("\n  }", lead) + 4);
+      assert.ok(edit.leadText.includes(edit.before), `${edit.id} lead`);
+      assert.equal(expected.split(edit.leadText).length, 2, `${edit.id} lead kept`);
+    }
+    if (edit.kind === "branch-replace") {
+      // Only a trap's first branch holds the text too.
+      const own = definitionText(start, edit.host);
+      assert.equal(occurrences(edit.before), trap ? 2 : 1, `${edit.id} copies`);
+      assert.equal(own.split(edit.before).length - 1, trap ? 2 : 1, `${edit.id} own`);
+      assert.equal(occurrences(edit.site), 1, `${edit.id} site`);
+      assert.equal(occurrences(edit.after), 0, `${edit.id} replacement exists`);
+      assert.equal(expected.split(edit.siteAfter).length, 2, `${edit.id} result`);
+    }
+    if (edit.kind === "block-delete") {
+      // The first line stands once; the lines of the definition that stand nowhere
+      // else show whether it is gone.
+      assert.equal(start.split(`\n${edit.firstLine}\n`).length, 2, `${edit.id} first line`);
+      const own = trap ? classText(start, edit.block) : definitionText(start, edit.block);
+      assert.ok(own.startsWith(edit.firstLine) && own.endsWith(trap ? "\n};" : "\n}"));
+      edit.unique = own.split("\n").filter((line) => line.trim() && occurrences(line) === 1);
+      assert.ok(edit.unique.includes(edit.firstLine), `${edit.id} unique`);
+      assert.ok(
+        edit.unique.every((line) => !expected.includes(line)),
+        `${edit.id} kept`,
+      );
     }
     if (edit.cluster === "K") {
       // Only a trap's signature stands in the other namespace too.

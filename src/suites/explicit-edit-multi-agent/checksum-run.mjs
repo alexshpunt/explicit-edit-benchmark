@@ -13,6 +13,7 @@ import { startSharedSandbox } from "./execution/shared-sandbox.mjs";
 import {
   CHECKSUM_CLUSTERS,
   CHECKSUM_PROJECT_VERSION,
+  classText,
   definitionText,
   generateChecksumProject,
   identifierCount,
@@ -395,10 +396,15 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
           ? [edit.comment[0]]
           : edit.kind === "prune"
             ? edit.removed.map((key) => `long long ${key.split("::")[1]}(long long value) {`)
-            : [],
+            : edit.kind === "block-delete"
+              ? [edit.firstLine]
+              : [],
     ),
   );
+  // The later paragraphs of a class start with one of its member functions, which
+  // other agents may delete.
   const passing = (block) =>
+    /^ {2}long long \w+\(long long value\) const[ ;]/.test(block) ||
     block.startsWith("// __EXPLICIT_EDIT_SLOT_") ||
     inserted.has(block) ||
     deleted.has(first(block));
@@ -526,6 +532,29 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
           namespaceText(candidate, space) !== undefined &&
           namespaceText(candidate, space) === namespaceText(project.expected, space),
       );
+    // Both classes of an e edit stand as in the reference: the target lost its
+    // member function and the other class kept its own.
+    else if (edit.kind === "member-delete")
+      passed = [edit.cls, edit.decoy].every(
+        (cls) =>
+          classText(candidate, cls) !== undefined &&
+          classText(candidate, cls) === classText(project.expected, cls),
+      );
+    // An f text is replaced once, and the lead keeps its copy.
+    else if (edit.kind === "member-replace")
+      passed = count(candidate, edit.after) === 1 && count(candidate, edit.leadText) === 1;
+    // A g function stands as in the reference.
+    else if (edit.kind === "branch-replace")
+      passed =
+        definitionText(candidate, edit.host) !== undefined &&
+        definitionText(candidate, edit.host) === definitionText(project.expected, edit.host);
+    // An h definition leaves none of its own lines and no lone semicolon, which a cut
+    // at the brace that closes a class leaves behind. Only h traps leave one, so a
+    // lone semicolon fails each of them.
+    else if (edit.kind === "block-delete")
+      passed =
+        edit.unique.every((line) => !candidate.includes(line)) &&
+        !candidate.split("\n").includes(";");
     else if (edit.kind === "commented-delete")
       passed =
         definitionText(candidate, edit.name) === undefined &&

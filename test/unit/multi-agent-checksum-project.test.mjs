@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import {
   CHECKSUM_CLUSTERS,
   CHECKSUM_PROJECT_DEFAULTS,
+  classText,
   definitionText,
   generateChecksumProject,
   identifierCount,
@@ -23,7 +24,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
+const ALL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi";
 // Files beside main.cpp are byte strings; an X trap's starts with this mark.
 const BOM = "\xef\xbb\xbf";
 const CONFIGS = [
@@ -333,12 +334,79 @@ function followInstruction(start, task) {
     assert.equal(lines.length - kept.length, task.occurrences, task.id);
     return kept.join("\n");
   }
+  if (task.kind === "member-delete" || task.kind === "member-replace") {
+    // The member function inside its class, or its definition after the class. A
+    // naive follower takes the first match of the signature in the file and the
+    // first brace after it.
+    const own = `  long long ${task.name}(long long value) const`;
+    const outside = lines.indexOf(`long long ${task.cls}::${task.name}(long long value) const {`);
+    let first;
+    if (task.naive) {
+      first = lines.findIndex((line) => line.startsWith(own));
+      while (!lines[first].includes("{")) first++;
+    } else if (task.kind === "member-replace" && outside >= 0) first = outside;
+    else first = lines.indexOf(`${own} {`, lines.indexOf(`class ${task.cls} {`));
+    const length = definitionLength(lines, first);
+    if (task.kind === "member-delete") {
+      assert.equal(lines[first + length], "", task.id);
+      lines.splice(first, length + 1);
+    } else {
+      const definition = lines.slice(first, first + length).join("\n");
+      assert.equal(definition.split(task.before).length, 2, task.id);
+      lines.splice(first, length, definition.replace(task.before, task.after));
+    }
+    return lines.join("\n");
+  }
+  if (task.kind === "branch-replace") {
+    // The block of the branch, from its condition to the brace that closes it; a
+    // naive follower replaces the first match in the function.
+    const first = lines.indexOf(`long long ${task.host}(long long value) {`);
+    const length = definitionLength(lines, first);
+    let definition = lines.slice(first, first + length).join("\n");
+    if (task.naive) definition = definition.replace(task.before, task.after);
+    else {
+      const branch = definition.indexOf(`} ${task.branch} {`);
+      const end = definition.indexOf("}", branch + 1);
+      const block = definition.slice(branch, end);
+      assert.equal(block.split(task.before).length, 2, task.id);
+      definition =
+        definition.slice(0, branch) +
+        block.replace(task.before, task.after) +
+        definition.slice(end);
+    }
+    lines.splice(first, length, definition);
+    return lines.join("\n");
+  }
+  if (task.kind === "block-delete") {
+    if (task.naive) {
+      // A cut through the brace that matches the first one, and the empty line after
+      // it, which leaves a class's semicolon behind.
+      const at = start.indexOf(`\n${task.firstLine}\n`) + 1;
+      let depth = 0;
+      let end = start.indexOf("{", at);
+      for (; ; end++) {
+        depth += start[end] === "{" ? 1 : start[end] === "}" ? -1 : 0;
+        if (depth === 0) break;
+      }
+      const rest = start.slice(end + 1);
+      return start.slice(0, at) + (rest.startsWith("\n\n") ? rest.slice(2) : rest);
+    }
+    const first = lines.indexOf(task.firstLine);
+    const length = definitionLength(lines, first);
+    assert.equal(lines[first + length], "", task.id);
+    lines.splice(first, length + 1);
+    return lines.join("\n");
+  }
   const header = `long long ${locate(lines, task) ?? task.name ?? task.host}(long long value) {`;
   // A K definition is the first one after the opening line of its namespace.
   const from =
     task.kind === "namespace-delete" ? lines.indexOf(`namespace ${task.namespace} {`) : 0;
   const first = lines.indexOf(header, from);
-  const length = definitionLength(lines, first);
+  // A naive mover takes the definition's first paragraph for all of it.
+  const length =
+    task.naive && task.kind === "move"
+      ? lines.indexOf("", first) - first
+      : definitionLength(lines, first);
   if (task.kind === "scoped-replace" || task.kind === "local-rename") {
     let definition = lines.slice(first, first + length).join("\n");
     if (task.kind === "scoped-replace") {
@@ -571,6 +639,27 @@ test("each trap differs from its control in its one factor", () => {
       // A C trap scans for a brace character.
       if (edit.cluster === "C")
         assert.equal(/'[{}]'/.test(definitionText(start, edit.name)), trap, edit.id);
+      // An e trap's other class, above the target's, starts with a member function of
+      // the same signature; an f trap's class only declares the function and defines
+      // it after the class.
+      if (edit.cluster === "e") {
+        const decoy = classText(start, edit.decoy);
+        assert.ok(start.indexOf(decoy) < start.indexOf(classText(start, edit.cls)), edit.id);
+        const named = decoy.split("\n")[2] === `  long long ${edit.name}(long long value) const {`;
+        assert.equal(named, trap, edit.id);
+      }
+      if (edit.cluster === "f")
+        assert.equal(
+          start.includes(`\nlong long ${edit.cls}::${edit.name}(long long value) const {\n`),
+          trap,
+          edit.id,
+        );
+      // A g trap's first branch holds the same text; an h trap deletes a class; an i
+      // trap has an empty line after its lambda.
+      if (edit.cluster === "g")
+        assert.equal(definitionText(start, edit.host).split(edit.before).length, trap ? 3 : 2);
+      if (edit.cluster === "h") assert.equal(edit.firstLine.startsWith("class "), trap, edit.id);
+      if (edit.cluster === "i") assert.equal(edit.full.includes("  };\n\n"), trap, edit.id);
       if (edit.cluster === "F")
         assert.equal(start.split(edit.before).length - 1, trap ? 3 : 1, edit.id);
       if (edit.cluster === "G")
@@ -664,12 +753,17 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J, K, L, N and P to c edits stand in gaps of their own, M edits everywhere,
-        // and d edits in files of their own.
-        const edits = all.filter(({ cluster }) => !"JKLMNPQRSTUVWXYZabcd".includes(cluster));
+        // J, K, L, N, P to c and e to h edits stand in gaps of their own, M edits
+        // everywhere, and d edits in files of their own.
+        const edits = all.filter(({ cluster }) => !"JKLMNPQRSTUVWXYZabcdefgh".includes(cluster));
         if (edits.length === 0) continue;
-        // An O definition holds an empty line, so it spans two paragraphs.
-        const reach = zoneReach + edits.filter(({ cluster }) => cluster === "O").length;
+        // An O definition and an i trap's hold an empty line, so they span two
+        // paragraphs.
+        const reach =
+          zoneReach +
+          edits.filter(
+            ({ cluster, variant }) => cluster === "O" || (cluster === "i" && variant === "trap"),
+          ).length;
         // The host: the one function that holds every A use and E site of the zone.
         let hosts = null;
         const near = [];
@@ -918,8 +1012,11 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
     }
   // A rename of every occurrence of a T name, a deletion of the U and V functions
   // whose qualified name nothing mentions, a Z pattern for a variable times a number
-  // and a b text typed in composed form fail their traps and pass their controls.
-  for (const cluster of "TUVZb")
+  // and a b text typed in composed form fail their traps and pass their controls. So
+  // do an edit of the first match of an e or f signature, a replacement of the first
+  // g match in the function, a cut of an h definition at its closing brace, and a
+  // move of an i definition's first paragraph.
+  for (const cluster of "TUVZbefghi")
     for (const variant of ["trap", "control"]) {
       const task = find(cluster, variant);
       const naive = followInstruction(project.start, { ...task, naive: true });

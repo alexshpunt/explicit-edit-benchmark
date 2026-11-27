@@ -49,7 +49,7 @@ comparison runs.
 | D. Supplied text    | Changing supplied text on the way into the file                      | Insert a supplied 13-line function whose five string literals hold backslash escapes, quotes, `$HOME`, `$(date)`, backticks and `%`                   | Insert a supplied 13-line function of the same shape whose literals hold plain words                   | Neither by design: a heredoc needs a quoted delimiter, a JSON argument needs exact escaping |
 | E. Byte exactness   | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space                             | Replace an expression on an ordinary line                                                              | Neither by design                                                                           |
 
-Later rounds added clusters F to Z and then a to d. Each targets a failure seen in
+Later rounds added clusters F to Z and then a to i. Each targets a failure seen in
 a trace or a mechanism a harness could plausibly have. Cluster letters are case
 sensitive: `--clusters XYZab` picks X, Y, Z, a and b.
 
@@ -80,6 +80,15 @@ sensitive: `--clusters XYZab` picks X, Y, Z, a and b.
 | b. Unicode look-alike | Replace a string literal's text written in decomposed form; a decoy above it holds the composed form of the same text                                             | The decoy holds other composed text                |
 | c. Large reordering   | Put the 12 functions of a namespace in alphabetical order                                                                                                         | Three functions                                    |
 | d. Recipe tabs        | Insert a supplied make rule into a makefile beside main.cpp; its recipe lines start with a tab                                                                    | The makefile sets `.RECIPEPREFIX = >`              |
+| e. Class method       | Delete a member function of the class `Slow`, while the class `Fast` above it starts with a member function of the same signature                                 | The member function in `Fast` has another name     |
+| f. Out-of-class       | Replace an expression in a member function that the class only declares, right above another member function, the lead, that holds the same expression            | The class defines the function itself              |
+| g. Nested branch      | Replace an expression in the `else if` block of an if chain inside two nested loops; the first branch holds the same expression                                   | The first branch holds another expression          |
+| h. Class end          | Delete a definition named by its first line; it is a class, which ends with `};`                                                                                  | It is a function                                   |
+| i. Lambda             | Move a function with a list of weights and a lambda, both closed by `};`, and an empty line after the lambda                                                      | No empty line                                      |
+
+Clusters e to i are the only places with classes, nested blocks with braces and
+lambdas. Every other function is a straight run of declarations, with at most a
+one-line loop over the characters of a string.
 
 Each trap differs from its control in one factor. Within a cluster, both variants use
 the same wording, so the prompt does not reveal which one is the trap.
@@ -105,6 +114,11 @@ edits unchanged…". The cluster instructions are:
 - b: the E wording, with the decomposed text as it stands in the file, not as `\u` escapes.
 - c: `In main.cpp, reorder the function definitions in the namespace "atlas" so that they stand in alphabetical order of their names. Keep each definition unchanged, with one empty line between definitions.`
 - d: the D wording for `In rules.mk`; a trap's supplied lines hold `\t`.
+- e: `In main.cpp, delete the complete definition of the member function "long long f(long long value) const" in the class "Slow". Also delete the empty line that directly followed the definition.`
+- f: `In main.cpp, in the definition of the member function "long long f(long long value) const" of the class "Slow", replace "a * 37 + 11" with "a * 41 + 11". The definition holds it once.`
+- g: `In main.cpp, in the definition of the function "long long f(long long value)", in the block of the branch "else if ((a + j) % 3 == 1)", replace "a * 37 + 11" with "a * 41 + 11". That block holds it once.`
+- h: `In main.cpp, delete the complete definition that starts with the line "class Slow {". Also delete the empty line that directly followed the definition.` A control names a function's first line.
+- i: the B wording.
 
 The A wording is the same for traps and controls; for a control, the last sentence
 has nothing to apply to. Task ids are neutral (`edit-07`), because an agent can see
@@ -118,9 +132,9 @@ Constants use snake case, so a trap `gain_rate` has the look-alikes
 
 - Functions without a prototype are called only from `main`, so moving them anywhere
   above `main` still compiles. Functions with a prototype can be moved freely.
-- Nested blocks in C traps are deterministic integer code, such as
-  `if (a % 2 == 0) { a = (a * 3 + 1) % kModulus; }` and `for (int i = 0; i < 3; ++i) { … }`.
-  The generator evaluates them to predict the checksum.
+- The checksum comes only from straight runs of declarations. Functions with loops,
+  branches, lambdas or string literals (C, O, S, T, b, g, i) and member functions
+  (e, f, h) are not called, so the generator does not evaluate them.
 - E traps put the only tabs, trailing spaces and no-break spaces of the file on their
   own lines and comments, so a tool that normalizes them elsewhere fails integrity, and
   a tool that normalizes the edited line fails the task.
