@@ -191,11 +191,13 @@ if (command === "show") {
       `${name}: ${percent(score.score.all[key])}; traps ${percent(score.score.traps[key])}, ` +
         `controls ${percent(score.score.controls[key])}`,
     );
-  if (score.shared.integrity)
+  if (score.shared.integrity) {
     console.log(
       `Integrity (paragraphs no edit touches, intact in the crowd): ` +
         percent(score.shared.integrity),
     );
+    console.log(`Final (overall times integrity): ${(100 * score.score.final).toFixed(1)}%`);
+  }
   console.log(line("Alone (isolated)", score.isolated));
   console.log(
     `${line(`Crowd (pool of ${score.shared.agents})`, score.shared)}; the file ` +

@@ -1452,6 +1452,18 @@ test("an observation's two scores grade the same edits alone and in the crowd", 
     overall: { passed: 0, total: 3 },
   });
   assert.deepEqual(score.score.traps.overall, { passed: 0, total: 2 });
+  // The final score is the overall share times integrity.
+  const rescued = compareChecksumRuns(isolated, {
+    ...shared,
+    tasks: shared.tasks.map((own) => ({ ...own, failedEdits: [] })),
+  });
+  assert.deepEqual(rescued.score.all.overall, { passed: 1, total: 3 });
+  assert.ok(Math.abs(rescued.score.final - 0.3) < 1e-12);
+  assert.equal(score.score.final, 0);
+  assert.equal(
+    compareChecksumRuns(isolated, { ...shared, integrity: undefined }).score.final,
+    null,
+  );
   assert.deepEqual(score.score.controls.precision, { passed: 1, total: 1 });
   assert.deepEqual(score.byCluster.T, {
     isolated: { trap: { passed: 0, total: 0 }, control: { passed: 1, total: 1 } },
