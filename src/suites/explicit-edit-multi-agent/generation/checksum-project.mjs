@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
  * agents edit neighbouring lines of one function at the same moment.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v12";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v13";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
@@ -53,6 +53,9 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   k: "constructor overload",
   l: "template overload",
   m: "override",
+  n: "disabled copy",
+  o: "friend declaration",
+  p: "signature in a comment",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -317,7 +320,7 @@ function instruction(edit) {
     return `In main.cpp, exactly one function uses the constant ${q(edit.constant)}. In the definition of that function, ${replacement}`;
   if (edit.kind === "scoped-replace")
     return `In main.cpp, in the definition of the function ${q(signature(edit.host))}, ${replacement}`;
-  if (edit.kind === "delete")
+  if (edit.kind === "delete" || edit.kind === "disabled-delete")
     return `In main.cpp, delete the complete definition of the function ${q(signature(edit.name))}. Also delete the empty line that directly followed the definition.`;
   if (edit.kind === "local-rename")
     return `In main.cpp, in the definition of the function ${q(signature(edit.name))}, rename the local variable ${q(edit.local)} to ${q(edit.newName)}: replace each of its ${edit.occurrences} occurrences in that definition.`;
@@ -393,6 +396,11 @@ const KIND = {
   k: "constructor-delete",
   l: "template-delete",
   m: "override-replace",
+  // n deletes a function below a disabled copy; o and p replace an expression in a
+  // function whose signature a friend declaration or a comment repeats above.
+  n: "disabled-delete",
+  o: "scoped-replace",
+  p: "scoped-replace",
 };
 // The branch whose block a g edit changes.
 const BRANCH = "else if ((a + j) % 3 == 1)";
@@ -734,7 +742,11 @@ export function generateChecksumProject(seed, options = {}) {
     ofCluster("j").length +
     ofCluster("k").length +
     ofCluster("l").length +
-    ofCluster("m").length;
+    ofCluster("m").length +
+    // An n function with its copy, an o class with its function and a p pair too.
+    ofCluster("n").length +
+    ofCluster("o").length +
+    ofCluster("p").length;
   // A compact file has only the fillers that something needs: the library, room for
   // the constant uses, and two F decoys per F trap. They are longer, so there are
   // fewer of them, and their first declarations, where F sites stand, hold no
@@ -1595,6 +1607,64 @@ export function generateChecksumProject(seed, options = {}) {
     ]);
   }
 
+  // n: functions to delete, each below an earlier version that "#if 0" disables. A
+  // trap's earlier version has the same signature, so the first match of the
+  // signature is the disabled copy, and deleting it still builds; a control's had
+  // another name. Nothing calls these functions.
+  for (const edit of ofCluster("n")) {
+    const entry = build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false });
+    entry.uncalled = true;
+    edit.name = entry.name;
+    const old = edit.variant === "trap" ? entry.name : take(functionNames);
+    edit.copy = [
+      "#if 0",
+      header(old),
+      `  long long a = (value * ${number()} + ${number()}) % kModulus;`,
+      "  return a;",
+      "}",
+      "#endif",
+    ].join("\n");
+    pairs.push([{ raw: edit.copy }, { function: entry.name }]);
+  }
+
+  // o: an expression to replace in a function that a class above it declares as a
+  // friend in a trap, right above a member function, the lead, that holds the same
+  // expression at the same place. The first brace after the first match of the
+  // signature opens the lead. A control's friend declaration names another function.
+  for (const edit of ofCluster("o")) {
+    const host = build(take(functionNames), ["plain", { scoped: edit }, "plain"], {
+      prototyped: false,
+    });
+    const cls = className();
+    const lead = method(cls, take(functionNames), plain(3));
+    Object.assign(lead.body[edit.position], {
+      kind: "linear",
+      factor: edit.factor,
+      offset: Number(edit.before.split(" + ")[1]),
+    });
+    const friend = edit.variant === "trap" ? host.name : take(functionNames);
+    edit.friend = `  friend ${signature(friend)};`;
+    pairs.push([
+      classOf(cls, [{ declaration: edit.friend }, { function: lead.name }]),
+      { function: host.name },
+    ]);
+  }
+
+  // p: an expression to replace in a function below a decoy that holds the same
+  // expression. A comment right above the decoy quotes the target's signature in a
+  // trap, so the first brace after the first match of the signature opens the decoy;
+  // a control's comment quotes another signature.
+  for (const edit of ofCluster("p")) {
+    const { target, copy } = located(
+      edit,
+      ["plain", { scoped: edit }, "plain"],
+      ["plain", "plain", "plain"],
+    );
+    const quoted = edit.variant === "trap" ? target.name : take(functionNames);
+    edit.mention = `// Mirrors ${signature(quoted)} below; keep the two in step.`;
+    copy.comment = [edit.mention];
+  }
+
   // i: moved functions with a list of weights and a lambda, whose closing lines
   // "};" stand inside the definition. A trap has an empty line after the lambda, so
   // the definition's first paragraph ends there; a control has none. Nothing calls
@@ -1902,7 +1972,7 @@ export function generateChecksumProject(seed, options = {}) {
         );
       }
       if (edit.kind === "local-rename") locals.set(edit.name, edit);
-      if (["delete", "namespace-delete", "commented-delete"].includes(edit.kind))
+      if (["delete", "disabled-delete", "namespace-delete", "commented-delete"].includes(edit.kind))
         order = order.filter((block) => block.function !== (edit.key ?? edit.name));
       if (edit.kind === "prune")
         order = order.filter((block) => !edit.removed.includes(block.function));
@@ -2128,6 +2198,27 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(expected.split(edit.targetText).length, 2, `${edit.id} result`);
       assert.equal(expected.split(edit.decoyText).length, 2, `${edit.id} decoy kept`);
     }
+    if (edit.kind === "disabled-delete") {
+      // Only a trap's disabled copy has the same signature. The lines of the
+      // definition that stand nowhere else show whether it is gone.
+      assert.equal(occurrences(edit.copy), 1, `${edit.id} copy`);
+      assert.equal(occurrences(`\n${header(edit.name)}\n`), trap ? 2 : 1, `${edit.id} header`);
+      const at = start.indexOf(`\n${header(edit.name)}`, start.indexOf(edit.copy) + 6) + 1;
+      const own = start.slice(at, start.indexOf("\n}", at) + 2);
+      assert.ok(start.includes(`${edit.copy}\n\n${own}\n`), `${edit.id} order`);
+      edit.unique = own.split("\n").filter((line) => line.trim() && occurrences(line) === 1);
+      assert.ok(edit.unique.length >= 2, `${edit.id} unique`);
+      assert.ok(
+        edit.unique.every((line) => !expected.includes(line)),
+        `${edit.id} kept`,
+      );
+      assert.equal(expected.split(edit.copy).length, 2, `${edit.id} copy kept`);
+    }
+    // An o trap's friend declaration and a p trap's comment quote the signature.
+    if (edit.cluster === "o")
+      assert.equal(occurrences(`friend ${signature(edit.host)};`), trap ? 1 : 0, edit.id);
+    if (edit.cluster === "p")
+      assert.equal(occurrences(`// Mirrors ${signature(edit.host)} `), trap ? 1 : 0, edit.id);
     if (edit.kind === "constructor-delete") {
       // Only a trap's class has another constructor, above this one.
       const own = classText(start, edit.cls);
@@ -2330,7 +2421,7 @@ export function generateChecksumProject(seed, options = {}) {
     if (edit.kind === "scoped-replace") {
       // An F trap's text also stands in two fillers; an I or R text also in the lead,
       // and a P, Q or S text in a decoy.
-      const copies = "IPQRS".includes(edit.cluster) ? 2 : edit.variant === "trap" ? 3 : 1;
+      const copies = "IPQRSop".includes(edit.cluster) ? 2 : edit.variant === "trap" ? 3 : 1;
       assert.equal(occurrences(edit.before), copies, `${edit.id} copies`);
       assert.equal(expected.split(edit.after).length, 2, `${edit.id} result is not unique`);
     }

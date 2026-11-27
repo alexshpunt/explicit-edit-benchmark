@@ -49,7 +49,7 @@ comparison runs.
 | D. Supplied text    | Changing supplied text on the way into the file                      | Insert a supplied 13-line function whose five string literals hold backslash escapes, quotes, `$HOME`, `$(date)`, backticks and `%`                   | Insert a supplied 13-line function of the same shape whose literals hold plain words                   | Neither by design: a heredoc needs a quoted delimiter, a JSON argument needs exact escaping |
 | E. Byte exactness   | Normalizing what must stay unchanged                                 | Replace an expression on a line indented with a tab that ends in trailing spaces, next to a comment with a no-break space                             | Replace an expression on an ordinary line                                                              | Neither by design                                                                           |
 
-Later rounds added clusters F to Z and then a to m. Each targets a failure seen in
+Later rounds added clusters F to Z and then a to p. Each targets a failure seen in
 a trace or a mechanism a harness could plausibly have. Cluster letters are case
 sensitive: `--clusters XYZab` picks X, Y, Z, a and b.
 
@@ -89,8 +89,11 @@ sensitive: `--clusters XYZab` picks X, Y, Z, a and b.
 | k. Constructor        | Delete the constructor `Slow(long long, long long, long long)`; a two-parameter constructor stands above it                                                       | The class has only that constructor                |
 | l. Template overload  | Delete the function template `f`; a function `long long f(long long value)` that is no template stands right above it                                             | That function has another name                     |
 | m. Override           | Replace an expression in `f` of `class Derived : public Base`; `Base` declares `virtual` `f` with the same signature and expression above it                      | Base's `f` holds another one                       |
+| n. Disabled copy      | Delete a function named by its signature; an earlier version with the same signature stands right above it inside `#if 0` and `#endif`                            | The earlier version has another name               |
+| o. Friend declaration | Replace an expression in a function; a class above it declares the function as a `friend` right above a member function that holds the same expression            | The friend declaration names another function      |
+| p. Quoted signature   | Replace an expression in a function; a comment above a decoy with the same expression quotes the function's signature                                             | The comment quotes another signature               |
 
-Clusters e to m are the only places with classes, nested blocks with braces,
+Clusters e to m and o are the only places with classes, nested blocks with braces,
 lambdas and templates. A class has a public section with a constructor and its
 member functions, a protected helper that reads its fields, and a private section
 with the fields. Every other function is a straight run of declarations, with at

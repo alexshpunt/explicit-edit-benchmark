@@ -25,7 +25,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm";
+const ALL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop";
 // Files beside main.cpp are byte strings; an X trap's starts with this mark.
 const BOM = "\xef\xbb\xbf";
 const CONFIGS = [
@@ -398,6 +398,15 @@ function followInstruction(start, task) {
     lines.splice(first, length + 1);
     return lines.join("\n");
   }
+  if (task.kind === "disabled-delete") {
+    // The definition after the disabled copy; a naive follower takes the first match
+    // of the signature, and the line after it only when it is empty.
+    const own = `long long ${task.name}(long long value) {`;
+    const first = task.naive ? lines.indexOf(own) : lines.lastIndexOf(own);
+    const length = definitionLength(lines, first);
+    lines.splice(first, length + (lines[first + length] === "" ? 1 : 0));
+    return lines.join("\n");
+  }
   if (task.kind === "template-delete") {
     // A naive follower takes the first definition of the name, with a template
     // parameter list right above it if there is one.
@@ -455,7 +464,13 @@ function followInstruction(start, task) {
   // A K definition is the first one after the opening line of its namespace.
   const from =
     task.kind === "namespace-delete" ? lines.indexOf(`namespace ${task.namespace} {`) : 0;
-  const first = lines.indexOf(header, from);
+  let first = lines.indexOf(header, from);
+  // A naive follower of an o or p edit takes the first match of the signature and
+  // the first brace after it.
+  if (task.naive && "op".includes(task.cluster)) {
+    first = lines.findIndex((line) => line.includes(header.slice(0, -2)));
+    while (!lines[first].includes("{")) first++;
+  }
   // A naive mover takes the definition's first paragraph for all of it.
   const length =
     task.naive && task.kind === "move"
@@ -730,6 +745,12 @@ test("each trap differs from its control in its one factor", () => {
       if (edit.cluster === "l")
         assert.equal(start.includes(`\nlong long ${edit.name}(long long value) {\n`), trap);
       if (edit.cluster === "m") assert.ok(start.includes(`\nclass ${edit.cls} : public `), edit.id);
+      // An n trap's disabled copy, an o trap's friend declaration and a p trap's
+      // comment hold the signature.
+      const quoted = `long long ${edit.name ?? edit.host}(long long value)`;
+      if (edit.cluster === "n") assert.equal(edit.copy.includes(quoted), trap, edit.id);
+      if (edit.cluster === "o") assert.equal(edit.friend.includes(quoted), trap, edit.id);
+      if (edit.cluster === "p") assert.equal(edit.mention.includes(quoted), trap, edit.id);
       if (edit.cluster === "F")
         assert.equal(start.split(edit.before).length - 1, trap ? 3 : 1, edit.id);
       if (edit.cluster === "G")
@@ -823,10 +844,10 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J, K, L, N, P to c, e to h and j to m edits stand in gaps of their own, M edits
+        // J, K, L, N, P to c, e to h and j to p edits stand in gaps of their own, M edits
         // everywhere, and d edits in files of their own.
         const edits = all.filter(
-          ({ cluster }) => !"JKLMNPQRSTUVWXYZabcdefghjklm".includes(cluster),
+          ({ cluster }) => !"JKLMNPQRSTUVWXYZabcdefghjklmnop".includes(cluster),
         );
         if (edits.length === 0) continue;
         // An O definition and an i trap's hold an empty line, so they span two
@@ -1089,8 +1110,10 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   // g match in the function, a cut of an h definition at its closing brace, and a
   // move of an i definition's first paragraph. So do a replacement of the first j or
   // m match in the file, a cut of a k constructor at the brace that closes the first
-  // one, and a cut of an l template from the line with its name.
-  for (const cluster of "TUVZbefghijklm")
+  // one, and a cut of an l template from the line with its name. So do a deletion of
+  // the first n definition of the signature, and an o or p replacement after the
+  // first brace that follows the first match of the signature.
+  for (const cluster of "TUVZbefghijklmnop")
     for (const variant of ["trap", "control"]) {
       const task = find(cluster, variant);
       const naive = followInstruction(project.start, { ...task, naive: true });

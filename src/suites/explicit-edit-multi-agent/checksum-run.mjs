@@ -408,7 +408,7 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
   const inserted = new Set(edits.filter(({ kind }) => kind === "insert").map(({ text }) => text));
   const deleted = new Set(
     edits.flatMap((edit) =>
-      edit.kind === "delete"
+      edit.kind === "delete" || edit.kind === "disabled-delete"
         ? [`long long ${edit.name}(long long value) {`]
         : edit.kind === "commented-delete"
           ? [edit.comment[0]]
@@ -567,6 +567,10 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
       passed =
         classText(candidate, edit.cls) !== undefined &&
         classText(candidate, edit.cls) === classText(project.expected, edit.cls);
+    // An n function leaves none of its own lines, and its disabled copy stays.
+    else if (edit.kind === "disabled-delete")
+      passed =
+        edit.unique.every((line) => !candidate.includes(line)) && count(candidate, edit.copy) === 1;
     // An l template leaves none of its own lines, its parameter list included.
     else if (edit.kind === "template-delete")
       passed = edit.unique.every((line) => !candidate.includes(line));
