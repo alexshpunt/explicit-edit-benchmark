@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * next to it. With density 1 every edit has a zone of its own; with density 3 three
  * agents edit neighbouring lines of one function at the same moment.
  */
-export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v14";
+export const CHECKSUM_PROJECT_VERSION = "multi-agent-checksum-project-v15";
 export const CHECKSUM_CLUSTERS = Object.freeze({
   A: "completeness",
   B: "target selection",
@@ -61,6 +61,14 @@ export const CHECKSUM_CLUSTERS = Object.freeze({
   s: "preprocessor twin",
   t: "batch move order",
   u: "rename by owner",
+  v: "overload rename",
+  w: "parameter swap",
+  x: "field rename",
+  y: "brace in a comment",
+  z: "include guard",
+  // Clusters after z are digits.
+  0: "copy",
+  1: "move between files",
 });
 export const CHECKSUM_PROJECT_DEFAULTS = Object.freeze({
   // Clusters to generate, by letter.
@@ -210,6 +218,9 @@ const signature = (name) => `long long ${name}(long long value)`;
 /** The first line of a function definition. */
 const header = (name) => `${signature(name)} {`;
 
+/** The signature of a v or w function, which takes two parameters. */
+const scaledSignature = (name) => `long long ${name}(long long value, long long scale)`;
+
 /** Exact text in a prompt, as the original suite writes it: JSON string notation. */
 const q = (value) => JSON.stringify(value);
 
@@ -300,6 +311,18 @@ function instruction(edit) {
     return `In main.cpp, reorder the function definitions in the namespace ${q(edit.namespace)} so that they stand in alphabetical order of their names. Keep each definition unchanged, with one empty line between definitions.`;
   if (edit.kind === "region-extract")
     return `In main.cpp, move the region that starts with the line ${q(edit.open)} into a new file ${edit.file}. The region ends with the line ${q(REGION_END)} that closes it. The new file holds the lines between those two lines, unchanged, each line ending with a newline. In main.cpp, replace the region, its first and last lines included, with the line ${q(`#include "${edit.file}"`)}.`;
+  if (edit.kind === "guard-extract")
+    return `In main.cpp, move the block that starts with the lines ${q(edit.open)} and ${q(edit.define)} into a new file ${edit.file}. The block ends with the line ${q(GUARD_END)} that closes ${q(edit.open)}. The new file holds the line ${q("#pragma once")}, an empty line and then the lines between ${q(edit.define)} and that closing line, unchanged, each line ending with a newline. In main.cpp, replace the block, its first two lines and its last line included, with the line ${q(`#include "${edit.file}"`)}.`;
+  if (edit.kind === "overload-rename")
+    return `In main.cpp, rename the function ${q(scaledSignature(edit.name))} to ${q(edit.newName)}: change its definition and every call of it. Other functions and the calls of them stay unchanged.`;
+  if (edit.kind === "parameter-swap")
+    return `In main.cpp, swap the two parameters of the function ${q(scaledSignature(edit.name))}, so that its first line becomes ${q(edit.header)}, and swap the two arguments of every call of it. The body of the function stays unchanged.`;
+  if (edit.kind === "field-rename")
+    return `In main.cpp, rename the field ${q(edit.field)} of the class ${q(edit.cls)} to ${q(edit.newField)}: change its declaration and every use of it. The fields of other classes stay unchanged.`;
+  if (edit.kind === "copy")
+    return `In main.cpp, copy the complete definition of the function ${q(signature(edit.name))} to the placeholder line ${q(edit.marker)}: the copy replaces that placeholder line. Keep the definition itself where it is, unchanged.`;
+  if (edit.kind === "file-move")
+    return `In ${edit.file}, move the complete definition of the function ${q(signature(edit.name))} to the placeholder line ${q(edit.marker)} in ${edit.target}: the definition replaces that placeholder line. Also delete the empty line that directly followed the definition in ${edit.file}. Keep the text of the definition unchanged, and end each of its lines as the other lines of ${edit.target} end.`;
   if (edit.kind === "batch-move") {
     // The prompt lists the functions in alphabetical order, not in file order.
     const listed = [...edit.names].sort().map((name) => q(signature(name)));
@@ -427,7 +450,53 @@ const KIND = {
   s: "move",
   t: "batch-move",
   u: "function-rename",
+  // v renames one of two overloads, w swaps the parameters of a function and the
+  // arguments of its calls, x renames a field of one of two classes, y moves a
+  // function with a brace in a comment, z moves an include-guarded block into a
+  // header, 0 copies a function into an "#if 0" archive, and 1 moves a function
+  // from one included file to another.
+  v: "overload-rename",
+  w: "parameter-swap",
+  x: "field-rename",
+  y: "move",
+  z: "guard-extract",
+  0: "copy",
+  1: "file-move",
 };
+// The line that closes a z block.
+const GUARD_END = "#endif";
+// The second line of a 0 archive, which "#if 0" disables.
+const ARCHIVE_NOTE = "// Archived definitions, kept for reference.";
+// The comment line in a y function's body; a trap's holds a closing brace.
+const BRACE_NOTES = {
+  trap: "  // The closing } of an earlier loop stood here.",
+  control: "  // The closing ] of an earlier list stood here.",
+};
+// Field names of x classes and their new names; no other identifier uses them.
+const FIELDS = [
+  "weight_",
+  "level_",
+  "width_",
+  "margin_",
+  "ratio_",
+  "window_",
+  "height_",
+  "radius_",
+  "length_",
+  "volume_",
+  "quota_",
+  "period_",
+];
+const NEW_FIELDS = [
+  "heft_",
+  "tier_",
+  "breadth_",
+  "border_",
+  "share_",
+  "ceiling_",
+  "stature_",
+  "girth_",
+];
 // The line that closes a region.
 const REGION_END = "#pragma endregion";
 // The first line of the region nested in an r trap's region.
@@ -799,7 +868,15 @@ export function generateChecksumProject(seed, options = {}) {
     ofCluster("r").length +
     ofCluster("s").length +
     5 * ofCluster("t").length +
-    2 * ofCluster("u").length;
+    2 * ofCluster("u").length +
+    // A v, w or x unit and a z block too; a 0 function and its archive stand in two,
+    // and so do a 1 edit's include lines.
+    ofCluster("v").length +
+    ofCluster("w").length +
+    ofCluster("x").length +
+    ofCluster("z").length +
+    2 * ofCluster("0").length +
+    2 * ofCluster("1").length;
   // A compact file has only the fillers that something needs: the library, room for
   // the constant uses, and two F decoys per F trap. They are longer, so there are
   // fewer of them, and their first declarations, where F sites stand, hold no
@@ -1316,6 +1393,134 @@ export function generateChecksumProject(seed, options = {}) {
     ]);
   }
 
+  // v: a function of two parameters to rename, with its two calls in a caller. In a
+  // trap a function of one parameter right above it has the same name, an overload,
+  // and the caller calls it twice too, so a rename of every match of the name
+  // renames the overload and its calls as well, and still builds; a control's
+  // function of one parameter has another name. Nothing calls them.
+  for (const edit of ofCluster("v")) {
+    edit.name = take(functionNames);
+    edit.newName = take(functionNames);
+    const sibling = edit.variant === "trap" ? edit.name : take(functionNames);
+    const caller = take(functionNames);
+    const [factor, offset, own, scale, first, second] = [0, 1, 2, 3, 4, 5].map(() => number());
+    const text = (target) =>
+      [
+        header(sibling),
+        `  return (value * ${factor} + ${offset}) % kModulus;`,
+        "}",
+        "",
+        `${scaledSignature(target)} {`,
+        `  return (value * scale + ${own}) % kModulus;`,
+        "}",
+        "",
+        header(caller),
+        `  long long a = (${target}(value, ${scale}) + ${first}) % kModulus;`,
+        `  long long b = (${sibling}(a) + ${second}) % kModulus;`,
+        `  return (${target}(b, a) + ${sibling}(value)) % kModulus;`,
+        "}",
+      ].join("\n");
+    edit.site = text(edit.name);
+    edit.siteAfter = text(edit.newName);
+    pairs.push([{ raw: edit.site }]);
+  }
+
+  // w: the two parameters of a function to swap, with the arguments of its three
+  // calls in a caller. In a trap the first argument of one call is another call of
+  // the function, whose arguments hold a comma, so a pattern for a call of two
+  // plain arguments swaps only the inner call, and the file still builds; a
+  // control's calls have plain arguments. Nothing calls them.
+  for (const edit of ofCluster("w")) {
+    edit.name = take(functionNames);
+    edit.header = `long long ${edit.name}(long long scale, long long value) {`;
+    const caller = take(functionNames);
+    const [offset, scale, first, step, second, third] = [0, 1, 2, 3, 4, 5].map(() => number());
+    const text = (swapped) => {
+      const call = (left, right) =>
+        swapped ? `${edit.name}(${right}, ${left})` : `${edit.name}(${left}, ${right})`;
+      return [
+        swapped ? edit.header : `${scaledSignature(edit.name)} {`,
+        `  return (value * scale + ${offset}) % kModulus;`,
+        "}",
+        "",
+        header(caller),
+        `  long long a = (${call("value", scale)} + ${first}) % kModulus;`,
+        ...(edit.variant === "trap"
+          ? [`  long long b = (${call(call("a", step), "value")} + ${second}) % kModulus;`]
+          : [
+              `  long long c = (${call("a", step)} + ${third}) % kModulus;`,
+              `  long long b = (${call("c", "value")} + ${second}) % kModulus;`,
+            ]),
+        "  return (b + a) % kModulus;",
+        "}",
+      ].join("\n");
+    };
+    edit.site = text(false);
+    edit.siteAfter = text(true);
+    pairs.push([{ raw: edit.site }]);
+  }
+
+  // y: moved functions with a comment line in their body. A trap's comment holds a
+  // closing brace, so counting braces without reading comments ends the definition
+  // at that line; a control's holds a closing bracket. Main calls them.
+  for (const edit of ofCluster("y")) {
+    const entry = build(take(functionNames), plain(random.integer(3, 4)), { prototyped: false });
+    entry.body.splice(random.integer(1, entry.body.length - 1), 0, {
+      type: "raw",
+      lines: [BRACE_NOTES[edit.variant]],
+    });
+    edit.name = entry.name;
+  }
+
+  // z: a block of two functions in an include guard to move into a header of its
+  // own, which main.cpp includes in its place. In a trap an "#if" block between the
+  // functions sets a default, so the first "#endif" after the guard's first line
+  // closes that block; a control sets the default without an "#if" block. Main
+  // calls both functions.
+  for (const edit of ofCluster("z")) {
+    const base = take(functionNames);
+    edit.file = `${base}.h`;
+    edit.open = `#ifndef ${base.toUpperCase()}_H`;
+    edit.define = `#define ${base.toUpperCase()}_H`;
+    edit.setting = `#define ${base.toUpperCase()}_SCALE ${random.integer(2, 97)}`;
+    edit.members = [0, 1].map(
+      () => build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false }).name,
+    );
+    pairs.push([{ guard: edit }]);
+  }
+
+  // 0: a function to copy into an archive that "#if 0" disables, keeping the
+  // original. A trap's function holds an empty line, so its first paragraph is not
+  // all of it, and an archive of that paragraph still builds; a control's holds
+  // none. Main calls the function.
+  for (const edit of ofCluster("0")) {
+    const entry = build(take(functionNames), plain(random.integer(3, 4)), { prototyped: false });
+    if (edit.variant === "trap")
+      entry.body.splice(random.integer(1, entry.body.length - 1), 0, {
+        type: "raw",
+        lines: [""],
+      });
+    edit.name = entry.name;
+    pairs.push([{ function: entry.name }], [{ archive: edit }]);
+  }
+
+  // 1: a function to move from the middle of one included file of three definitions
+  // to a slot between the two definitions of another. A trap's first file ends its
+  // lines with CRLF and the second with LF, so lines copied as they are keep their
+  // carriage returns in the second file, and a script that writes the first file in
+  // text mode drops its own; a control's files both end their lines with LF. Main
+  // calls every function.
+  for (const edit of ofCluster("1")) {
+    const member = () =>
+      build(take(functionNames), plain(random.integer(2, 4)), { prototyped: false }).name;
+    edit.sources = [member(), member(), member()];
+    edit.name = edit.sources[1];
+    edit.targets = [member(), member()];
+    edit.file = `${take(functionNames)}.inc`;
+    edit.target = `${take(functionNames)}.inc`;
+    pairs.push([{ include: edit.file }], [{ include: edit.target }]);
+  }
+
   // W, X, Y and a: a function to delete from a file of three definitions, which
   // main.cpp includes in their place. A W trap's file ends its lines with CRLF, and
   // the function is the second one; a script that reads and writes the file in text
@@ -1488,6 +1693,38 @@ export function generateChecksumProject(seed, options = {}) {
   const classOf = (name, members, options = {}) => ({
     cls: { name, members, fields: ["scale_", "offset_"], constructor: true, ...options },
   });
+
+  // x: a field to rename in the second of two classes, with its four uses. In a trap
+  // the first class has a field of the same name, so a rename of every match of the
+  // name renames that field too, and still builds; a control's first class names
+  // its field otherwise. Nothing constructs the classes.
+  const fields = ofCluster("x").length > 0 ? random.shuffle(FIELDS) : [];
+  const newFields = ofCluster("x").length > 0 ? random.shuffle(NEW_FIELDS) : [];
+  const holder = (cls, field) => {
+    const factor = number();
+    return [
+      `class ${cls} {`,
+      " public:",
+      `  explicit ${cls}(long long seed) : ${field}(seed % kModulus) {}`,
+      `  long long apply(long long value) const { return (value * ${field} + ${factor}) % kModulus; }`,
+      `  long long twice(long long value) const { return (apply(value) + ${field}) % kModulus; }`,
+      "",
+      " private:",
+      `  long long ${field};`,
+      "};",
+    ].join("\n");
+  };
+  for (const edit of ofCluster("x")) {
+    edit.decoy = className();
+    edit.cls = className();
+    edit.field = take(fields);
+    edit.newField = take(newFields);
+    const decoy = holder(edit.decoy, edit.variant === "trap" ? edit.field : take(fields));
+    const own = holder(edit.cls, edit.field);
+    edit.site = `${decoy}\n\n${own}`;
+    edit.siteAfter = `${decoy}\n\n${own.replace(new RegExp(`\\b${edit.field}\\b`, "g"), edit.newField)}`;
+    pairs.push([{ raw: edit.site }]);
+  }
 
   // e: a member function to delete in the second of two classes with two member
   // functions each, the named one first. In a trap the first class starts with a
@@ -1904,7 +2141,7 @@ export function generateChecksumProject(seed, options = {}) {
   // Placeholders, numbered in zone order.
   let slot = 0;
   for (const edit of ordered)
-    if (edit.kind === "move" || edit.kind === "insert" || edit.kind === "batch-move")
+    if (["move", "insert", "batch-move", "copy", "file-move"].includes(edit.kind))
       edit.marker = `// __EXPLICIT_EDIT_SLOT_${++slot}_1__`;
     else if (edit.kind === "file-insert") edit.marker = `# __EXPLICIT_EDIT_SLOT_${++slot}_1__`;
 
@@ -1915,7 +2152,7 @@ export function generateChecksumProject(seed, options = {}) {
       random.shuffle([
         { function: hosts[index].name },
         ...zone
-          .filter(({ cluster }) => "BCGHIOiq".includes(cluster))
+          .filter(({ cluster }) => "BCGHIOiqy".includes(cluster))
           .map((edit) => ({ function: edit.name ?? edit.host })),
         ...zone.filter(({ cluster }) => cluster === "D").map(({ marker }) => ({ marker })),
       ]),
@@ -2095,7 +2332,9 @@ export function generateChecksumProject(seed, options = {}) {
       labels = new Map(),
       branches = new Map(),
       filled = new Set(),
-      extracted = new Set();
+      extracted = new Set(),
+      copied = new Set(),
+      carried = new Set();
     let order = layout;
     for (const edit of done.flatMap((task) => task.parts ?? [task])) {
       if (edit.kind === "rename") names.set(edit.name, edit.newName);
@@ -2153,6 +2392,12 @@ export function generateChecksumProject(seed, options = {}) {
         extracted.add(edit.id);
         order = order.map((block) => (block.region === edit ? { include: edit.file } : block));
       }
+      if (edit.kind === "guard-extract") {
+        extracted.add(edit.id);
+        order = order.map((block) => (block.guard === edit ? { include: edit.file } : block));
+      }
+      if (edit.kind === "copy") copied.add(edit.id);
+      if (edit.kind === "file-move") carried.add(edit.id);
     }
     const call = (name) => calls.get(name) ?? name;
     const context = { factors, name: (name) => names.get(name) ?? name, call };
@@ -2210,6 +2455,25 @@ export function generateChecksumProject(seed, options = {}) {
         ? [first, "", NESTED_REGION, second, REGION_END].join("\n")
         : `${first}\n\n${second}`;
     };
+    // The lines between a z block's "#define" line and the line that closes it; a
+    // trap sets its default in an "#if" block.
+    const guardInner = (edit) => {
+      const [first, second] = edit.members.map((name) => definition(byName.get(name)));
+      const name = edit.setting.split(" ")[1];
+      const setting =
+        edit.variant === "trap"
+          ? [`#if !defined(${name})`, edit.setting, GUARD_END].join("\n")
+          : edit.setting;
+      return [first, setting, second].join("\n\n");
+    };
+    // A 0 archive holds its slot until the function's copy replaces it.
+    const archiveText = (edit) =>
+      [
+        "#if 0",
+        ARCHIVE_NOTE,
+        copied.has(edit.id) ? definition(byName.get(edit.name)) : edit.marker,
+        "#endif",
+      ].join("\n");
     const sections = [
       [`// Checksum program generated from seed ${seed}.`, "#include <iostream>"].join("\n"),
       [
@@ -2232,6 +2496,10 @@ export function generateChecksumProject(seed, options = {}) {
           (block.region
             ? [block.region.open, regionInner(block.region), REGION_END].join("\n")
             : undefined) ??
+          (block.guard
+            ? [block.guard.open, block.guard.define, guardInner(block.guard), GUARD_END].join("\n")
+            : undefined) ??
+          (block.archive ? archiveText(block.archive) : undefined) ??
           (block.include ? `#include "${block.include}"` : definition(byName.get(block.function))),
       ),
       [
@@ -2275,12 +2543,42 @@ export function generateChecksumProject(seed, options = {}) {
         edit.file,
         extracted.has(edit.id) ? `${regionInner(edit)}\n` : null,
       ]),
+      // A z header exists only once its block has moved there.
+      ...ofCluster("z").map((edit) => [
+        edit.file,
+        extracted.has(edit.id) ? `#pragma once\n\n${guardInner(edit)}\n` : null,
+      ]),
+      // A 1 trap's first file ends its lines with CRLF, the second always with LF.
+      ...ofCluster("1").flatMap((edit) => {
+        const moved = carried.has(edit.id);
+        const own = (name) => definition(byName.get(name));
+        const source =
+          edit.sources
+            .filter((name) => !moved || name !== edit.name)
+            .map(own)
+            .join("\n\n") + "\n";
+        const [first, last] = edit.targets.map(own);
+        const target = [first, moved ? own(edit.name) : edit.marker, last].join("\n\n") + "\n";
+        return [
+          [edit.file, edit.variant === "trap" ? source.replaceAll("\n", "\r\n") : source],
+          [edit.target, target],
+        ];
+      }),
     ]);
-    // j and m edits replace a member function's text, and k edits delete one with the
-    // empty line after it; each text stands once.
+    // j and m edits replace a member function's text, v, w and x edits the text of
+    // their unit, and k edits delete a constructor with the empty line after it; each
+    // text stands once.
     let source = sections.join("\n\n") + "\n";
     for (const edit of done.flatMap((task) => task.parts ?? [task])) {
-      if (edit.kind === "overload-replace" || edit.kind === "override-replace")
+      if (
+        [
+          "overload-replace",
+          "override-replace",
+          "overload-rename",
+          "parameter-swap",
+          "field-rename",
+        ].includes(edit.kind)
+      )
         source = source.replace(edit.site, edit.siteAfter);
       if (edit.kind === "constructor-delete") source = source.replace(`${edit.site}\n\n`, "");
     }
@@ -2613,7 +2911,7 @@ export function generateChecksumProject(seed, options = {}) {
       assert.equal(occurrences(edit.name), edit.occurrences + 1, `${edit.id} other uses`);
     }
     // A slot stands once; only a q trap's note repeats its text, above it.
-    if (edit.kind === "move" || edit.kind === "insert" || edit.kind === "batch-move") {
+    if (["move", "insert", "batch-move", "copy"].includes(edit.kind)) {
       const noted = edit.cluster === "q" && trap;
       assert.equal(occurrences(edit.marker), noted ? 2 : 1, `${edit.id} marker is not unique`);
       assert.equal(start.split(`\n${edit.marker}\n`).length, 2, `${edit.id} slot line`);
@@ -2706,6 +3004,104 @@ export function generateChecksumProject(seed, options = {}) {
         const at = lines.findIndex((line) => line.includes(edit.after));
         edit.context = `${lines[at - 1]}\n${lines[at]}`;
       }
+    }
+    if (edit.kind === "overload-rename") {
+      // Code names a v function three times: its definition and two calls. Only a
+      // trap's function of one parameter and its two calls have the name too.
+      assert.equal(occurrences(edit.site), 1, `${edit.id} site`);
+      assert.equal(occurrences(`${scaledSignature(edit.name)} {`), 1, `${edit.id} definition`);
+      assert.equal(occurrences(header(edit.name)), trap ? 1 : 0, `${edit.id} overload`);
+      assert.equal(identifierCount(start, edit.name), trap ? 6 : 3, `${edit.id} uses`);
+      assert.equal(identifierCount(start, edit.newName), 0, `${edit.id} new name exists`);
+      assert.equal(identifierCount(expected, edit.newName), 3, `${edit.id} new uses`);
+      assert.equal(expected.split(edit.siteAfter).length, 2, `${edit.id} result`);
+    }
+    if (edit.kind === "parameter-swap") {
+      // A w function has three calls; only a trap's nests one in another.
+      assert.equal(occurrences(edit.site), 1, `${edit.id} site`);
+      assert.equal(identifierCount(start, edit.name), 4, `${edit.id} uses`);
+      assert.equal(occurrences(`${edit.name}(${edit.name}(`), trap ? 1 : 0, `${edit.id} nested`);
+      assert.equal(occurrences(edit.header), 0, `${edit.id} header exists`);
+      assert.equal(expected.split(edit.siteAfter).length, 2, `${edit.id} result`);
+    }
+    if (edit.kind === "field-rename") {
+      // The field has four uses in its class; only a trap's other class, above it,
+      // has a field of the same name.
+      const own = classText(start, edit.cls),
+        other = classText(start, edit.decoy);
+      assert.ok(start.indexOf(other) < start.indexOf(own), `${edit.id} order`);
+      assert.equal(identifierCount(own, edit.field), 4, `${edit.id} uses`);
+      assert.equal(identifierCount(other, edit.field), trap ? 4 : 0, `${edit.id} other`);
+      assert.equal(identifierCount(start, edit.field), trap ? 8 : 4, `${edit.id} all uses`);
+      assert.equal(identifierCount(start, edit.newField), 0, `${edit.id} new name exists`);
+      assert.equal(identifierCount(classText(expected, edit.cls), edit.newField), 4, edit.id);
+      assert.equal(classText(expected, edit.decoy), other, `${edit.id} other kept`);
+    }
+    if (edit.cluster === "y") {
+      // A y definition is one paragraph; only a trap's comment holds a brace.
+      const own = definitionText(start, edit.name);
+      assert.equal(occurrences(header(edit.name)), 1, `${edit.id} header is not unique`);
+      assert.equal(occurrences(`${signature(edit.name)};`), 0, `${edit.id} prototype`);
+      assert.ok(!own.includes("\n\n"), `${edit.id} paragraph`);
+      assert.equal(own.includes(BRACE_NOTES.trap), trap, `${edit.id} brace`);
+      assert.equal(own.includes(BRACE_NOTES.control), !trap, `${edit.id} bracket`);
+    }
+    if (edit.kind === "guard-extract") {
+      // The block stands once and leaves main.cpp for its header. Only a trap's block
+      // holds an "#if" block, so an "#endif" stands before its own.
+      const at = start.indexOf(`\n${edit.open}\n${edit.define}\n`) + 1;
+      assert.ok(at > 0 && occurrences(edit.open) === 1, `${edit.id} block`);
+      assert.equal(occurrences(edit.define), 1, `${edit.id} define`);
+      assert.equal(startFiles[edit.file], null, `${edit.id} file exists`);
+      const prefix = "#pragma once\n\n";
+      assert.ok(expectedFiles[edit.file].startsWith(prefix), `${edit.id} pragma`);
+      const inner = expectedFiles[edit.file].slice(prefix.length);
+      assert.ok(
+        start.startsWith(`${edit.open}\n${edit.define}\n${inner}${GUARD_END}\n`, at),
+        `${edit.id} file`,
+      );
+      assert.equal(inner.includes(`\n${GUARD_END}\n`), trap, `${edit.id} nested`);
+      assert.equal(occurrences(`#include "${edit.file}"`), 0, `${edit.id} include`);
+      assert.equal(expected.split(`\n#include "${edit.file}"\n`).length, 2, `${edit.id} result`);
+      edit.unique = [edit.open, edit.define, edit.setting, ...inner.split("\n")].filter(
+        (line, index, all) => line.trim() && occurrences(line) === 1 && all.indexOf(line) === index,
+      );
+      assert.ok(
+        [edit.open, edit.define, edit.setting, ...edit.members.map(header)].every((line) =>
+          edit.unique.includes(line),
+        ),
+        `${edit.id} unique`,
+      );
+    }
+    if (edit.kind === "copy") {
+      // The definition stands once, and its copy fills the archive. Only a trap's
+      // definition holds an empty line.
+      assert.equal(occurrences(header(edit.name)), 1, `${edit.id} header is not unique`);
+      edit.full = definitionText(start, edit.name);
+      assert.equal(edit.full.includes("\n\n"), trap, `${edit.id} empty line`);
+      edit.archived = ["#if 0", ARCHIVE_NOTE, edit.full, "#endif"].join("\n");
+      assert.equal(expected.split(edit.archived).length, 2, `${edit.id} archive`);
+      assert.equal(expected.split(edit.full).length, 3, `${edit.id} copies`);
+    }
+    if (edit.kind === "file-move") {
+      // The function stands once, in the middle of its first file, and moves to the
+      // slot of the second. Only a trap's first file holds carriage returns.
+      const own = startFiles[edit.file],
+        other = startFiles[edit.target];
+      const lf = own.replaceAll("\r\n", "\n");
+      assert.equal(own.includes("\r"), trap, `${edit.id} line endings`);
+      assert.ok(!own.includes("\r") || !/[^\r]\n/.test(own), `${edit.id} mixed line endings`);
+      assert.ok(!other.includes("\r"), `${edit.id} target line endings`);
+      assert.equal(lf.split(header(edit.name)).length, 2, `${edit.id} header is not unique`);
+      assert.ok(!lf.startsWith(header(edit.name)), `${edit.id} first`);
+      assert.equal(other.split(edit.marker).length, 2, `${edit.id} marker is not unique`);
+      assert.ok(other.includes(`\n\n${edit.marker}\n\n`), `${edit.id} slot line`);
+      for (const file of [edit.file, edit.target])
+        assert.equal(occurrences(`#include "${file}"`), 1, `${edit.id} include`);
+      const text = definitionText(lf, edit.name);
+      const cut = `${text}\n\n`.replaceAll("\n", trap ? "\r\n" : "\n");
+      assert.equal(expectedFiles[edit.file], own.replace(cut, ""), `${edit.id} source`);
+      assert.equal(expectedFiles[edit.target], other.replace(edit.marker, text), edit.id);
     }
     edit.prompt = mechanicalPrompt(instruction(edit));
   }

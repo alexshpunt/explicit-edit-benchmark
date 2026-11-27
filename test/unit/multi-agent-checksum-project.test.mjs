@@ -25,7 +25,7 @@ import {
 } from "../../src/suites/explicit-edit-multi-agent/checksum-run.mjs";
 
 const exec = promisify(execFile);
-const ALL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstu";
+const ALL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01";
 // Files beside main.cpp are byte strings; an X trap's starts with this mark.
 const BOM = "\xef\xbb\xbf";
 const CONFIGS = [
@@ -155,7 +155,8 @@ test("the size option reaches a file of 50,000 lines that builds", async (t) => 
 });
 
 /** The lines of the definition that starts at `first`, found by counting braces
- * outside character, string and raw string literals, or inside them too when `naive`.
+ * outside comments and character, string and raw string literals, or inside them too
+ * when `naive`.
  */
 function definitionLength(lines, first, naive = false) {
   let depth = 0;
@@ -176,7 +177,7 @@ function definitionLength(lines, first, naive = false) {
         code = code.slice(0, open);
         raw = true;
       }
-      code = code.replace(/'(?:\\.|[^'])'|"(?:\\.|[^"])*"/g, "");
+      code = code.replace(/'(?:\\.|[^'])'|"(?:\\.|[^"])*"/g, "").replace(/\/\/.*$/, "");
     }
     // A signature can span lines before the first brace.
     for (const character of code) {
@@ -234,18 +235,41 @@ function locate(lines, task) {
   return undefined;
 }
 
-/** The line numbers of an r region's first line and of the line that closes it,
- * counting nested regions; a naive follower takes the first closing line.
+/** The line numbers of an r region's or a z block's first line and of the line that
+ * closes it, counting nested regions or "#if" blocks; a naive follower takes the
+ * first closing line.
  */
 function regionSpan(lines, task) {
+  const [opening, closing] =
+    task.kind === "guard-extract" ? ["#if", "#endif"] : ["#pragma region ", "#pragma endregion"];
   const open = lines.indexOf(task.open);
   let depth = 0;
   for (let at = open; at < lines.length; at++) {
-    if (lines[at].startsWith("#pragma region ")) depth++;
-    if (lines[at] === "#pragma endregion" && (--depth === 0 || task.naive))
-      return { open, close: at };
+    if (lines[at].startsWith(opening)) depth++;
+    if (lines[at] === closing && (--depth === 0 || task.naive)) return { open, close: at };
   }
   throw new Error(`Unclosed region in ${task.id}`);
+}
+
+/** The calls of a function in a text, the last one first, each with its start, its
+ * end after the closing parenthesis and its arguments; a definition counts as one.
+ */
+function callsOf(text, name) {
+  const found = [];
+  for (const match of text.matchAll(new RegExp(`\\b${name}\\(`, "g"))) {
+    const cuts = [match.index + name.length + 1];
+    let depth = 1;
+    let at = cuts[0];
+    for (; depth > 0; at++) {
+      if (text[at] === "(") depth++;
+      if (text[at] === ")") depth--;
+      if (text[at] === "," && depth === 1) cuts.push(at + 1);
+    }
+    cuts.push(at);
+    const args = cuts.slice(0, -1).map((from, index) => text.slice(from, cuts[index + 1] - 1));
+    found.push({ start: match.index, end: at, args: args.map((arg) => arg.trim()) });
+  }
+  return found.reverse();
 }
 
 /** Follow one task's instruction literally, as plain text operations. */
@@ -259,7 +283,45 @@ function followInstruction(start, task) {
   if (task.kind === "expression") return start.replace(task.before, task.after);
   if (task.kind === "insert") return start.replace(task.marker, task.text);
   // An edit of a file beside main.cpp changes that file only; see followFiles.
-  if (task.kind === "file-delete" || task.kind === "file-insert") return start;
+  if (["file-delete", "file-insert", "file-move"].includes(task.kind)) return start;
+  // A v rename changes the definition and calls with two arguments; a naive
+  // follower renames every match of the name.
+  if (task.kind === "overload-rename") {
+    if (task.naive) return start.replace(new RegExp(`\\b${task.name}\\b`, "g"), task.newName);
+    let text = start;
+    for (const call of callsOf(start, task.name))
+      if (call.args.length === 2)
+        text = text.slice(0, call.start) + task.newName + text.slice(call.start + task.name.length);
+    return text;
+  }
+  // A w swap reverses the arguments of every call and the parameters of the
+  // definition, an inner call before the one around it; a naive follower swaps
+  // calls of two plain arguments.
+  if (task.kind === "parameter-swap") {
+    if (task.naive)
+      return start
+        .replace(
+          `long long ${task.name}(long long value, long long scale)`,
+          task.header.slice(0, -2),
+        )
+        .replace(new RegExp(`\\b${task.name}\\((\\w+), (\\w+)\\)`, "g"), `${task.name}($2, $1)`);
+    let text = start;
+    const total = callsOf(start, task.name).length;
+    for (let index = 0; index < total; index++) {
+      const call = callsOf(text, task.name)[index];
+      const swapped = `${task.name}(${[...call.args].reverse().join(", ")})`;
+      text = text.slice(0, call.start) + swapped + text.slice(call.end);
+    }
+    return text;
+  }
+  // An x rename changes the field in its class; a naive follower renames every
+  // match.
+  if (task.kind === "field-rename") {
+    const pattern = new RegExp(`\\b${task.field}\\b`, "g");
+    if (task.naive) return start.replace(pattern, task.newField);
+    const own = classText(start, task.cls);
+    return start.replace(own, own.replace(pattern, task.newField));
+  }
   if (task.kind === "literal-replace") {
     // A naive follower types the text in composed form and takes its one match.
     const typed = task.before.normalize("NFC");
@@ -290,9 +352,16 @@ function followInstruction(start, task) {
       .join("\n");
   }
   const lines = start.split("\n");
-  if (task.kind === "region-extract") {
+  if (task.kind === "region-extract" || task.kind === "guard-extract") {
     const { open, close } = regionSpan(lines, task);
     lines.splice(open, close - open + 1, `#include "${task.file}"`);
+    return lines.join("\n");
+  }
+  if (task.kind === "copy") {
+    // A naive copier takes the definition's first paragraph for all of it.
+    const first = lines.indexOf(`long long ${task.name}(long long value) {`);
+    const length = task.naive ? lines.indexOf("", first) - first : definitionLength(lines, first);
+    lines.splice(lines.indexOf(task.marker), 1, ...lines.slice(first, first + length));
     return lines.join("\n");
   }
   if (task.kind === "batch-move") {
@@ -520,10 +589,13 @@ function followInstruction(start, task) {
     first = lines.findIndex((line) => line.includes(header.slice(0, -2)));
     while (!lines[first].includes("{")) first++;
   }
-  // A naive mover takes the definition's first paragraph for all of it.
+  // A naive mover takes the definition's first paragraph for all of it, or for a y
+  // edit counts the braces in comments too.
   const length =
     task.naive && task.kind === "move"
-      ? lines.indexOf("", first) - first
+      ? task.cluster === "y"
+        ? definitionLength(lines, first, true)
+        : lines.indexOf("", first) - first
       : definitionLength(lines, first);
   if (task.kind === "scoped-replace" || task.kind === "local-rename") {
     let definition = lines.slice(first, first + length).join("\n");
@@ -542,7 +614,8 @@ function followInstruction(start, task) {
   let top = first;
   if (task.kind === "commented-delete") while (lines[top - 1].startsWith("//")) top--;
   const moved = lines.splice(top, first - top + length);
-  assert.equal(lines.splice(top, 1)[0], "", task.id);
+  // A cut in the middle of a y definition leaves its rest behind.
+  if (!task.naive || task.cluster !== "y") assert.equal(lines.splice(top, 1)[0], "", task.id);
   // A naive mover of a q edit puts the definition at the first line that contains
   // the slot's text, before the rest of that line.
   if (task.kind === "move" && task.naive && task.cluster === "q") {
@@ -569,6 +642,29 @@ function followFiles(files, task, textMode = false, main = undefined) {
       const lines = main.split("\n");
       const { open, close } = regionSpan(lines, edit);
       result[edit.file] = `${lines.slice(open + 1, close).join("\n")}\n`;
+    }
+    // A z header holds "#pragma once", an empty line and the lines between its
+    // block's "#define" line and the line that closes the block.
+    if (edit.kind === "guard-extract") {
+      assert.equal(text, null, edit.id);
+      const lines = main.split("\n");
+      const { open, close } = regionSpan(lines, edit);
+      assert.equal(lines[open + 1], edit.define, edit.id);
+      result[edit.file] = `#pragma once\n\n${lines.slice(open + 2, close).join("\n")}\n`;
+    }
+    // A 1 definition leaves its first file with the empty line after it and takes
+    // the line endings of the second; a naive mover keeps its own.
+    if (edit.kind === "file-move") {
+      const eol = text.includes("\r\n") ? "\r\n" : "\n";
+      const lines = text.split(eol);
+      const first = lines.indexOf(`long long ${edit.name}(long long value) {`);
+      const length = definitionLength(lines, first);
+      assert.equal(lines[first + length], "", edit.id);
+      const moved = lines.splice(first, length + 1).slice(0, -1);
+      result[edit.file] = lines.join(textMode ? "\n" : eol);
+      const target = result[edit.target];
+      assert.equal(target.split(edit.marker).length, 2, edit.id);
+      result[edit.target] = target.replace(edit.marker, moved.join(edit.naive ? eol : "\n"));
     }
     if (edit.kind === "file-insert") {
       assert.equal(text.split(edit.marker).length, 2, edit.id);
@@ -662,8 +758,7 @@ test("a trap and its control share their wording", () => {
       .replace(/"(?:[^"\\]|\\.)*"/g, "Q")
       .replace(/\d+ (occurrences|lines)/, "N $1")
       .replace(/argument \d+/, "argument N")
-      .replace(/In \w+\.(inc|mk),/, "In F,")
-      .replace(/new file \w+\.inc\./, "new file F.");
+      .replace(/\b\w+\.(inc|mk|h)\b/g, "F");
   for (const cluster of Object.keys(CHECKSUM_CLUSTERS)) {
     const prompts = new Set(
       atoms(project)
@@ -835,6 +930,22 @@ test("each trap differs from its control in its one factor", () => {
         const space = start.slice(open, start.indexOf(`}  // namespace ${edit.namespace}`));
         assert.equal(space.includes(`\n${quoted} {\n`), trap, edit.id);
       }
+      // A v trap's function has an overload of one parameter, one of a w trap's calls
+      // is the first argument of another, an x trap's other class has a field of the
+      // same name, a y trap's comment holds a closing brace, a z trap's block an "#if"
+      // block, a 0 trap's definition an empty line, and a 1 trap's first file ends its
+      // lines with CRLF.
+      if (edit.cluster === "v")
+        assert.equal(start.includes(`\nlong long ${edit.name}(long long value) {\n`), trap);
+      if (edit.cluster === "w") assert.equal(start.includes(`${edit.name}(${edit.name}(`), trap);
+      if (edit.cluster === "x")
+        assert.equal(identifierCount(classText(start, edit.decoy), edit.field) > 0, trap);
+      if (edit.cluster === "y")
+        assert.equal(definitionText(start, edit.name).includes("// The closing } "), trap);
+      if (edit.cluster === "z")
+        assert.equal(project.expectedFiles[edit.file].includes("#if "), trap);
+      if (edit.cluster === "0") assert.equal(edit.full.includes("\n\n"), trap, edit.id);
+      if (edit.cluster === "1") assert.equal(own.includes("\r\n"), trap, edit.id);
       if (edit.cluster === "F")
         assert.equal(start.split(edit.before).length - 1, trap ? 3 : 1, edit.id);
       if (edit.cluster === "G")
@@ -928,10 +1039,10 @@ test("density puts the edits of one zone next to each other", () => {
           all.every((edit) => edit.zone === zone),
           label,
         );
-        // J, K, L, N, P to c, e to h, j to p and r to u edits stand in gaps of their
-        // own, M edits everywhere, and d edits in files of their own.
+        // J, K, L, N, P to c, e to h, j to p, r to x, z, 0 and 1 edits stand in gaps
+        // of their own, M edits everywhere, and d edits in files of their own.
         const edits = all.filter(
-          ({ cluster }) => !"JKLMNPQRSTUVWXYZabcdefghjklmnoprstu".includes(cluster),
+          ({ cluster }) => !"JKLMNPQRSTUVWXYZabcdefghjklmnoprstuvwxz01".includes(cluster),
         );
         if (edits.length === 0) continue;
         // An O definition and an i trap's hold an empty line, so they span two
@@ -1018,8 +1129,13 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
     stripped[mark.file] = stripped[mark.file].replace(BOM, "");
     assert.equal(failed(project.start, mark, stripped), variant === "trap");
     // A naive writer adds a final newline to a Y file, replaces an a file's Latin-1
-    // byte and writes a d recipe's tab as spaces: each fails its trap only.
-    for (const cluster of "Yad") {
+    // byte, writes a d recipe's tab as spaces and keeps a 1 definition's CRLF line
+    // endings in an LF file: each fails its trap only. So does a 1 move that writes
+    // the first file in text mode.
+    const carried = find("1", variant);
+    const plain = followFiles(project.startFiles, carried, true);
+    assert.equal(failed(project.start, carried, plain), variant === "trap");
+    for (const cluster of "Yad1") {
       const task = find(cluster, variant);
       const naive = followFiles(project.startFiles, { ...task, naive: true });
       assert.equal(failed(project.start, task, naive), variant === "trap", task.id);
@@ -1199,8 +1315,11 @@ test("the shared grade credits finished tasks and names damaged definitions", ()
   // first brace that follows the first match of the signature. So do a q move to the
   // first line that holds the slot's text, an r cut at the first closing line, an s
   // move of the first definition of the signature, a t move in the prompt's order and
-  // a u rename of every match of the name.
-  for (const cluster of "TUVZbefghijklmnopqrstu")
+  // a u rename of every match of the name. So do a v rename of every match of the
+  // name, a w swap of calls with plain arguments, an x rename of every match of the
+  // field, a y move that counts the braces in comments, a z cut at the first "#endif"
+  // and a 0 copy of the definition's first paragraph.
+  for (const cluster of "TUVZbefghijklmnopqrstuvwxyz0")
     for (const variant of ["trap", "control"]) {
       const task = find(cluster, variant);
       const naive = followInstruction(project.start, { ...task, naive: true });

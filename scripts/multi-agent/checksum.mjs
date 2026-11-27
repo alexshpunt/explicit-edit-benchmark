@@ -15,8 +15,9 @@ and grades each result byte for byte against that task's reference.
 shared-run starts a pool of N agents (25 by default) on one main.cpp; each agent
 takes the next task from one queue as soon as it has finished its last one and
 keeps its session, and the final file is graded against the reference.
---clusters LETTERS picks the clusters, such as BCFG or XYZab: letters are case
-sensitive, and the clusters after Z are lowercase; --per-variant N sets the trap
+--clusters LETTERS picks the clusters, such as BCFG or XYZab01: letters are case
+sensitive, the clusters after Z are lowercase, and those after z are the digits 0
+and 1; --per-variant N sets the trap
 and control edits per cluster; --density N puts N edits
 in each zone of neighbouring lines; --edits N groups N edits into one composite task;
 --lines N adds functions until main.cpp has at least N lines; --compact leaves out

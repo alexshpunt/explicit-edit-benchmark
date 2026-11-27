@@ -486,9 +486,9 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
         identifierCount(candidate, edit.name) <= identifierCount(project.expected, edit.name) &&
         identifierCount(candidate, edit.newName) <= identifierCount(project.expected, edit.newName);
     }
-    // An r file equals its reference, and main.cpp includes it in place of the
-    // region, which leaves none of its own lines.
-    else if (edit.kind === "region-extract")
+    // An r file or a z header equals its reference, and main.cpp includes it in place
+    // of the region or block, which leaves none of its own lines.
+    else if (edit.kind === "region-extract" || edit.kind === "guard-extract")
       passed =
         files[edit.file] === project.expectedFiles[edit.file] &&
         count(candidate, edit.open) === 0 &&
@@ -502,8 +502,20 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
         count(candidate, edit.batch) === 1 &&
         edit.definitions.every((text) => count(candidate, text) === 1);
     // A file beside main.cpp equals its reference byte for byte; nobody else edits it.
-    else if (edit.kind === "file-delete" || edit.kind === "file-insert")
-      passed = files[edit.file] === project.expectedFiles[edit.file];
+    // A 1 edit changes two such files.
+    else if (["file-delete", "file-insert", "file-move"].includes(edit.kind))
+      passed = [edit.file, edit.target ?? edit.file].every(
+        (file) => files[file] === project.expectedFiles[file],
+      );
+    // A v rename and a w swap leave their unit as in the reference.
+    else if (edit.kind === "overload-rename" || edit.kind === "parameter-swap")
+      passed = count(candidate, edit.siteAfter) === 1;
+    // A 0 archive holds the whole definition, which also stays in its place.
+    else if (edit.kind === "copy")
+      passed =
+        count(candidate, edit.archived) === 1 &&
+        count(candidate, edit.full) === 2 &&
+        count(candidate, edit.marker) === 0;
     // A Z function and a c namespace stand as in the reference.
     else if (edit.kind === "factor-shift")
       passed =
@@ -568,9 +580,9 @@ export function gradeSharedChecksum(project, candidate, files = {}, { ownOnly = 
           namespaceText(candidate, space) !== undefined &&
           namespaceText(candidate, space) === namespaceText(project.expected, space),
       );
-    // Both classes of an e edit stand as in the reference: the target lost its
-    // member function and the other class kept its own.
-    else if (edit.kind === "member-delete")
+    // Both classes of an e or x edit stand as in the reference: the target lost its
+    // member function or renamed its field, and the other class kept its own.
+    else if (edit.kind === "member-delete" || edit.kind === "field-rename")
       passed = [edit.cls, edit.decoy].every(
         (cls) =>
           classText(candidate, cls) !== undefined &&
