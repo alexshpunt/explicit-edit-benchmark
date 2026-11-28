@@ -38,6 +38,13 @@ export function chunkModelDrivers(
   return {
     observesEvents: !isOmpParticipant(config) && !isDiracParticipant(config),
     usage: (driver) => finalizedUsage(driver.events),
+    /** Forget a closed participant, so that its event trace can be freed; cleanup
+     * still clears its retained credentials.
+     */
+    release(driver) {
+      assert.equal(driver?.closed, true, "Release of an open participant");
+      for (const [state, own] of states) if (own === driver) states.set(state, { closed: true });
+    },
     async createDriver(_agent, session, { signal }) {
       await mkdir(output, { recursive: true, mode: 0o700 });
       const state = path.join(output, `session-${session}`);

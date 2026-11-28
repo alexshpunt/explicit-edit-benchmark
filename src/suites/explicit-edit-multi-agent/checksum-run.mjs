@@ -197,7 +197,11 @@ export async function runChecksumIsolated(
         }
       },
       async onClosed(driver, task) {
-        rows.get(task.id).usage = pools.get(task.id).drivers.usage(driver);
+        const { drivers } = pools.get(task.id);
+        rows.get(task.id).usage = drivers.usage(driver);
+        // Every task has its own agent: free its event trace once its usage is read,
+        // so a run of hundreds of tasks does not keep every trace in memory.
+        drivers.release(driver);
       },
     });
     pending.forEach((task, index) => results.set(task.id, queued.results[index]));
